@@ -8,11 +8,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from services.layout import generate_layout, LayoutInput, ApartmentSpec
-from services.apartment_validation import (
-    validate_full_layout,
-    FullLayoutValidationResult,
-    ApartmentValidationResult,
-)
+from services.apartment_validation import validate_full_layout
+from services.wt_validation import validate_communication
 
 router = APIRouter()
 
@@ -37,6 +34,7 @@ class FullLayoutValidateRequest(BaseModel):
     circulation: CirculationSpec = Field(default_factory=CirculationSpec)
     apartments: List[ApartmentProgram] = Field(default_factory=list)
     local_law: str | None = Field(default=None)
+    max_corridor_distance_m: float | None = Field(default=None, gt=0)
 
 
 class ApartmentValidationItem(BaseModel):
@@ -49,10 +47,20 @@ class ApartmentValidationItem(BaseModel):
     warnings: List[str]
 
 
+class WTRuleItem(BaseModel):
+    code: str
+    description: str
+    passed: bool
+    detail: str
+
+
 class FullLayoutValidateResponse(BaseModel):
     passed: bool
     score: int
     apartments: List[ApartmentValidationItem]
+    wt_rules: List[WTRuleItem]
+    communication_all_connected: bool
+    communication_issues: List[str]
     errors: List[str]
     warnings: List[str]
 
@@ -92,7 +100,12 @@ def validate_full_layout_endpoint(request: FullLayoutValidateRequest):
         raise HTTPException(status_code=500, detail=f"Layout generation failed: {exc}")
 
     spec_by_type = {a.type: a.min_area_m2 for a in request.apartments}
-    result = validate_full_layout(layout, spec_by_type)
+    result = validate_full_layout(
+        layout,
+        spec_by_type,
+        local_law=request.local_law,
+        max_corridor_distance_m=request.max_corridor_distance_m,
+    )
 
     return FullLayoutValidateResponse(
         passed=result.passed,
@@ -109,8 +122,81 @@ def validate_full_layout_endpoint(request: FullLayoutValidateRequest):
             )
             for a in result.apartment_results
         ],
+        wt_rules=[
+            WTRuleItem(code=r.code, description=r.description, passed=r.passed, detail=r.detail)
+            for r in result.wt_rules
+        ],
+        communication_all_connected=result.communication_all_connected,
+        communication_issues=result.communication_issues,
         errors=result.aggregated_errors,
         warnings=result.aggregated_warnings,
+    )
+
+
+class CommunicationValidateRequest(BaseModel):
+    footprint: List[List[float]] = Field(..., min_length=3)
+    circulation: CirculationSpec = Field(default_factory=CirculationSpec)
+    apartments: List[ApartmentProgram] = Field(default_factory=list)
+    min_contact_length_m: float = Field(default=1.2, gt=0)
+    max_corridor_distance_m: float = Field(default=30.0, gt=0)
+    min_cage_spacing_m: float = Field(default=12.0, gt=0)
+
+
+class CommunicationIssueItem(BaseModel):
+    apartment_id: str | None
+    error: str
+
+
+class CommunicationValidateResponse(BaseModel):
+    all_connected: bool
+    issues: List[CommunicationIssueItem]
+
+
+@router.post("/communication", response_model=CommunicationValidateResponse)
+def validate_communication_endpoint(request: CommunicationValidateRequest):
+    try:
+        footprint = _points_to_polygon(request.footprint)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    circulation = request.circulation
+    specs = [
+        ApartmentSpec(
+            type=a.type,
+            min_area_m2=a.min_area_m2,
+            target_count=a.target_count,
+            width_m=a.width_m,
+            depth_m=a.depth_m,
+        )
+        for a in request.apartments
+    ]
+
+    layout_input = LayoutInput(
+        footprint=footprint,
+        corridor_width_m=circulation.corridor_width_m,
+        stair_width_m=circulation.stair_width_m,
+        place_cage=circulation.place_cage,
+        cage_size_m=circulation.cage_size_m,
+        apartments=specs,
+    )
+
+    try:
+        layout = generate_layout(layout_input)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Layout generation failed: {exc}")
+
+    result = validate_communication(
+        layout,
+        min_contact_length_m=request.min_contact_length_m,
+        max_corridor_distance_m=request.max_corridor_distance_m,
+        min_cage_spacing_m=request.min_cage_spacing_m,
+    )
+
+    return CommunicationValidateResponse(
+        all_connected=result.all_connected,
+        issues=[
+            CommunicationIssueItem(apartment_id=i.apartment_id, error=i.error) for i in result.issues
+        ],
     )
 
 

@@ -49,6 +49,8 @@ class MetricsModel(BaseModel):
     facades_meeting_wt: int
     wt_rules_passed: int
     wt_rules_total: int
+    communication_ok: bool
+    communication_issues: List[str]
 
 
 class VariantModel(BaseModel):
@@ -139,6 +141,8 @@ def _variant_to_model(variant: OptimizerVariant) -> VariantModel:
             facades_meeting_wt=variant.metrics.facades_meeting_wt,
             wt_rules_passed=variant.metrics.wt_rules_passed,
             wt_rules_total=variant.metrics.wt_rules_total,
+            communication_ok=variant.metrics.communication_ok,
+            communication_issues=variant.metrics.communication_issues,
         ),
         building_azimuth_deg=solar.building_azimuth_deg,
         building_orientation=solar.building_orientation,

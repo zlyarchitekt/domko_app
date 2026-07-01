@@ -4,7 +4,11 @@ from api.v1.endpoints import (
     footprint,
     jobs,
     layout,
+    optimizer,
     parcels,
     projects,
+    solar,
+    typology,
+    validate,
     variants,
 )

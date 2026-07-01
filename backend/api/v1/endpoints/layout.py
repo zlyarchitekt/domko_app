@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from shapely.geometry import Polygon
 
-from services.layout import ApartmentSpec, LayoutInput, generate_layout
+from services.layout import CAGE_POSITION_MODES, ApartmentSpec, LayoutInput, generate_layout
 from services.wt_validation import validate_layout_wt
 
 router = APIRouter()
@@ -23,6 +23,10 @@ class CirculationSpec(BaseModel):
     stair_width_m: float = Field(default=1.2, gt=0)
     place_cage: bool = Field(default=True)
     cage_size_m: float = Field(default=2.5, gt=0)
+    cage_position: str = Field(
+        default="auto",
+        description=f"Tryb pozycji klatki wg plan.md §4.3: {CAGE_POSITION_MODES}",
+    )
 
 
 class LayoutGenerateRequest(BaseModel):
@@ -39,10 +43,17 @@ class ApartmentResult(BaseModel):
     geometry: dict
 
 
+class WTRuleResult(BaseModel):
+    code: str
+    description: str
+    passed: bool
+    detail: str
+
+
 class WTResult(BaseModel):
     passed: bool
-    daylight_min_hours: float | None = None
-    noise_max_db: float | None = None
+    score: int
+    rules: list[WTRuleResult]
     issues: list[str]
 
 
@@ -64,6 +75,12 @@ def generate_layout_endpoint(request: LayoutGenerateRequest):
         raise HTTPException(status_code=400, detail=str(exc))
 
     circulation = request.circulation
+    if circulation.cage_position not in CAGE_POSITION_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid cage_position '{circulation.cage_position}'. Valid: {CAGE_POSITION_MODES}",
+        )
+
     specs = [
         ApartmentSpec(
             type=a.type,
@@ -81,6 +98,7 @@ def generate_layout_endpoint(request: LayoutGenerateRequest):
         stair_width_m=circulation.stair_width_m,
         place_cage=circulation.place_cage,
         cage_size_m=circulation.cage_size_m,
+        cage_position=circulation.cage_position,
         apartments=specs,
         local_law=request.local_law,
     )
@@ -110,8 +128,11 @@ def generate_layout_endpoint(request: LayoutGenerateRequest):
         leftover=json.loads(json.dumps(layout.leftover.__geo_interface__)) if layout.leftover else None,
         wt_validation=WTResult(
             passed=wt.passed,
-            daylight_min_hours=wt.daylight_min_hours,
-            noise_max_db=wt.noise_max_db,
+            score=wt.score,
+            rules=[
+                WTRuleResult(code=r.code, description=r.description, passed=r.passed, detail=r.detail)
+                for r in wt.rules
+            ],
             issues=wt.issues,
         ),
         zones=[
@@ -128,3 +149,46 @@ def _points_to_polygon(points: list[list[float]]) -> Polygon:
     if coords[0] != coords[-1]:
         coords.append(coords[0])
     return Polygon(coords)
+
+
+class SplitRequest(BaseModel):
+    footprint: list[list[float]] = Field(..., min_length=3)
+    split_line: list[list[float]] = Field(..., min_length=2, max_length=2)
+
+
+class SplitResponse(BaseModel):
+    polygons: list[dict]
+    areas: list[float]
+
+
+@router.post("/split", response_model=SplitResponse)
+def split_polygon_endpoint(request: SplitRequest):
+    """Dzieli obrys linią na dwa poligony (plan.md §3.7, F2-06).
+
+    Cienka warstwa HTTP nad `services.bsp.split_polygon_by_edge` — logika
+    dzielenia i przypadki brzegowe (linia nie przecina obrysu w dwóch
+    punktach) są już przetestowane w `test_bsp.py`.
+    """
+    from services.bsp import split_polygon_by_edge
+
+    try:
+        footprint = _points_to_polygon(request.footprint)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    p1 = (float(request.split_line[0][0]), float(request.split_line[0][1]))
+    p2 = (float(request.split_line[1][0]), float(request.split_line[1][1]))
+
+    try:
+        part_a, part_b = split_polygon_by_edge(footprint, p1, p2)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    parts = [p for p in (part_a, part_b) if p is not None and not p.is_empty and p.area > 1e-6]
+    if not parts:
+        raise HTTPException(status_code=400, detail="Split produced no valid polygons.")
+
+    return SplitResponse(
+        polygons=[json.loads(json.dumps(p.__geo_interface__)) for p in parts],
+        areas=[round(p.area, 6) for p in parts],
+    )

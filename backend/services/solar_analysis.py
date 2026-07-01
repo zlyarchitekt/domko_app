@@ -92,6 +92,7 @@ def analyze_solar_access(
     analysis_date: date | str | None = None,
     timezone: str = "Europe/Warsaw",
     required_hours: float = 3.0,
+    solar_position_df: pd.DataFrame | None = None,
 ) -> SolarAnalysisResult:
     """Analyze solar access for every exterior facade of every apartment.
 
@@ -103,6 +104,11 @@ def analyze_solar_access(
             (spring equinox) as required by WT §13.
         timezone: Timezone for local timestamps.
         required_hours: Minimum required hours of direct sun (WT §13 default 3.0).
+        solar_position_df: Pre-computed sun-position table (see
+            `compute_sun_position_timeseries`), for callers that evaluate many
+            layouts for the same lat/lon/date/timezone (e.g. services/optimizer.py)
+            and don't want to re-run pvlib's solar-position calculation per
+            candidate — F5-08. When omitted, computed fresh as before.
 
     Returns:
         SolarAnalysisResult with per-facade hourly status and totals.
@@ -112,12 +118,16 @@ def analyze_solar_access(
     elif isinstance(analysis_date, str):
         analysis_date = date.fromisoformat(analysis_date)
 
-    footprint = layout.footprint_polygon
+    footprint = layout.footprint
     if footprint is None or footprint.is_empty:
         raise ValueError("Layout is missing footprint polygon")
 
     facades = _extract_facade_segments(layout)
-    solar_df = _sun_position_timeseries(latitude, longitude, analysis_date, timezone)
+    solar_df = (
+        solar_position_df
+        if solar_position_df is not None
+        else compute_sun_position_timeseries(latitude, longitude, analysis_date, timezone)
+    )
 
     analyzed: List[FacadeAnalysis] = []
     for facade in facades:
@@ -168,7 +178,7 @@ def _extract_facade_segments(layout: LayoutResult) -> List[FacadeSegment]:
     overlaps with an edge of the building footprint. We group overlapping
     fragments per apartment so a long shared wall is treated as one segment.
     """
-    footprint = layout.footprint_polygon
+    footprint = layout.footprint
     if footprint is None or footprint.is_empty:
         return []
 
@@ -296,13 +306,18 @@ def _merge_two_edges(
     return (pts_sorted[0], pts_sorted[-1])
 
 
-def _sun_position_timeseries(
+def compute_sun_position_timeseries(
     latitude: float,
     longitude: float,
     analysis_date: date,
     timezone: str,
 ) -> pd.DataFrame:
-    """Build a 15-minute sun-position DataFrame from sunrise to sunset."""
+    """Build a 15-minute sun-position DataFrame from sunrise to sunset.
+
+    Public so callers evaluating many layouts for the same lat/lon/date/timezone
+    (services/optimizer.py) can compute it once and reuse it via
+    `analyze_solar_access(..., solar_position_df=...)` — F5-08.
+    """
     loc = Location(latitude, longitude, tz=timezone)
     # Use a full day range; pvlib returns sensible values even below horizon.
     start = f"{analysis_date.isoformat()} 04:00"

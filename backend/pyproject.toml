@@ -6,6 +6,12 @@ line-length = 120
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
 ignore = ["E501", "F401", "B904"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection markers are meant to be called as argument
+# defaults (e.g. `file: UploadFile = File(...)`) — this is idiomatic, not a
+# mutable-default bug, so exempt them from B008.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.File", "fastapi.Query", "fastapi.Body", "fastapi.Path", "fastapi.Header", "fastapi.Cookie", "fastapi.Form"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

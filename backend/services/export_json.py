@@ -259,8 +259,11 @@ def export_project_json(payload: ExportJsonInput) -> dict[str, Any]:
         "solar_analysis": solar,
         "wt_validation": {
             "passed": wt.passed,
-            "daylight_min_hours": wt.daylight_min_hours,
-            "noise_max_db": wt.noise_max_db,
+            "score": wt.score,
+            "rules": [
+                {"code": r.code, "description": r.description, "passed": r.passed, "detail": r.detail}
+                for r in wt.rules
+            ],
             "issues": wt.issues,
             "local_law": payload.local_law,
         },

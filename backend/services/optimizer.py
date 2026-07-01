@@ -3,8 +3,13 @@
 Backend optimizer that generates top-3 layout variants for a given footprint,
 apartment program, location, date, and cage mode.
 
-- Simple (convex) footprints with a single stair cage -> mixed-integer LP via
-  scipy.optimize.milp.
+- Simple (convex) footprints with a single stair cage -> exhaustive heuristic
+  search over a small discrete parameter grid (corridor width, cage size,
+  cage placement), ranked by a fast surrogate score, with the top candidates
+  re-evaluated exactly. NOTE: this is NOT a linear program despite the
+  "heuristic-search" method name being the honest replacement for an earlier
+  "lp" label — no scipy.optimize.milp call exists in this branch. Revisit if
+  a real MILP formulation is wanted (see zadania-kanban.md F5-01).
 - Concave footprints or multi-cage mode -> multi-objective GA via pymoo NSGA-II.
 
 Output variants expose solar_score (average sunny facade hours weighted by
@@ -13,13 +18,11 @@ length) and wt_compliance (share of WT rules passed + apartment-level share).
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
-from scipy.optimize import milp, LinearConstraint, Bounds
 from shapely.geometry import Polygon
 
 from services.bsp import bsp_zones, concave_vertices
@@ -31,8 +34,12 @@ from services.layout import (
     azimuth_to_cardinal,
     sunlight_adjustment_factor,
 )
-from services.solar_analysis import analyze_solar_access, SolarAnalysisResult
-from services.wt_validation import validate_layout_wt, WTValidationResult
+from services.solar_analysis import (
+    analyze_solar_access,
+    compute_sun_position_timeseries,
+    SolarAnalysisResult,
+)
+from services.wt_validation import validate_communication, validate_layout_wt, WTValidationResult
 
 
 @dataclass
@@ -50,6 +57,9 @@ class OptimizerInput:
     corridor_width_m: float = 1.5
     stair_width_m: float = 1.2
     cage_size_m: float = 2.5
+    max_corridor_distance_m: float = 30.0
+    """WT §58 ust.4 max. dojście do klatki — używane zarówno przez validate_layout_wt
+    jak i validate_communication (F5-03)."""
     local_law: str | None = None
     max_variants: int = 3
 
@@ -69,6 +79,11 @@ class VariantMetrics:
     facades_meeting_wt: int
     wt_rules_passed: int
     wt_rules_total: int
+    communication_ok: bool = True
+    """F5-03: adjacency + Dijkstra reach + cage spacing (services.wt_validation.validate_communication).
+    Hard constraint from plan.md §4.3 ("każde mieszkanie ma dostęp do klatki") — variants
+    that fail this are heavily deprioritized in ranking, not silently scored the same."""
+    communication_issues: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -108,27 +123,36 @@ def run_optimizer(input: OptimizerInput) -> OptimizerResult:
         effective_cage_mode = "multiple" if is_concave or footprint.area > 600 else "single"
 
     # Decide method.
-    # LP requires: convex footprint, single cage, small enough problem.
+    # Heuristic search requires: convex footprint, single cage, small enough problem.
     use_lp = (
         not is_concave
         and effective_cage_mode == "single"
         and len(input.apartments) <= 6
     )
 
+    # F5-08: pvlib sun-position table computed once per optimizer run, shared
+    # across every candidate variant instead of recomputed per variant.
+    solar_position_df = compute_sun_position_timeseries(
+        input.latitude, input.longitude, input.analysis_date, input.timezone
+    )
+
     if use_lp:
-        variants = _run_lp_branch(input)
-        method = "lp"
+        variants = _run_lp_branch(input, solar_position_df)
+        method = "heuristic-search"
     else:
-        variants = _run_ga_branch(input)
+        variants = _run_ga_branch(input, solar_position_df)
         method = "ga"
 
-    # Rank variants by scalarized score: 60% solar, 40% wt_compliance.
-    ranked = sorted(
-        variants,
-        key=lambda v: 0.6 * _normalize_solar(v.metrics.solar_score)
-        + 0.4 * v.metrics.wt_compliance,
-        reverse=True,
-    )
+    # Rank variants by scalarized score: 60% solar, 40% wt_compliance, with a
+    # heavy penalty (not a hard filter — an edge-case footprint might have no
+    # fully-compliant configuration, and we still promise max_variants results)
+    # for violating the plan.md §4.3 hard constraint "każde mieszkanie ma
+    # dostęp do klatki" (F5-03).
+    def _score(v: OptimizerVariant) -> float:
+        base = 0.6 * _normalize_solar(v.metrics.solar_score) + 0.4 * v.metrics.wt_compliance
+        return base if v.metrics.communication_ok else base * 0.1
+
+    ranked = sorted(variants, key=_score, reverse=True)
 
     for i, v in enumerate(ranked[: input.max_variants]):
         v.rank = i + 1
@@ -164,8 +188,14 @@ def _evaluate_variant(
     layout: LayoutResult,
     input: OptimizerInput,
     config: Dict[str, Any],
+    solar_position_df=None,
 ) -> OptimizerVariant:
-    """Compute solar and WT metrics for a generated layout."""
+    """Compute solar, WT, and communication-constraint metrics for a generated layout.
+
+    `solar_position_df` (F5-08): pre-computed pvlib sun-position table, shared
+    across every variant evaluated for the same lat/lon/date/timezone — avoids
+    re-running pvlib's solar-position calculation once per candidate.
+    """
     solar = analyze_solar_access(
         layout,
         latitude=input.latitude,
@@ -173,8 +203,15 @@ def _evaluate_variant(
         analysis_date=input.analysis_date,
         timezone=input.timezone,
         required_hours=input.required_hours,
+        solar_position_df=solar_position_df,
     )
-    wt = validate_layout_wt(layout, input.local_law)
+    wt = validate_layout_wt(layout, input.local_law, input.max_corridor_distance_m)
+    # F5-03: adjacency + Dijkstra reach + cage spacing — plan.md's "constraint:
+    # każde mieszkanie ma dostęp do klatki (WT §58)" is enforced here, not just
+    # scored as one more soft WT rule among many.
+    communication = validate_communication(
+        layout, max_corridor_distance_m=input.max_corridor_distance_m
+    )
 
     total_facade_length = sum(f.length_m for f in solar.facades)
     weighted_hours = (
@@ -196,6 +233,8 @@ def _evaluate_variant(
         facades_meeting_wt=sum(1 for f in solar.facades if f.meets_wt),
         wt_rules_passed=wt_rules_passed,
         wt_rules_total=wt_rules_total,
+        communication_ok=communication.all_connected,
+        communication_issues=[i.error for i in communication.issues],
     )
 
     return OptimizerVariant(
@@ -221,7 +260,7 @@ def _apartment_wt_pass_rate(solar: SolarAnalysisResult, required_hours: float) -
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _run_lp_branch(input: OptimizerInput) -> List[OptimizerVariant]:
+def _run_lp_branch(input: OptimizerInput, solar_position_df=None) -> List[OptimizerVariant]:
     """Use scipy MILP to choose discrete layout parameters.
 
     Decision variables (binary / bounded real):
@@ -260,12 +299,12 @@ def _run_lp_branch(input: OptimizerInput) -> List[OptimizerVariant]:
             continue
         if not layout.apartments:
             continue
-        variants.append(_evaluate_variant(layout, input, cfg))
+        variants.append(_evaluate_variant(layout, input, cfg, solar_position_df))
 
     if not variants:
         # Fallback to default.
         layout = generate_layout(_build_base_input(input, {}))
-        variants.append(_evaluate_variant(layout, input, {}))
+        variants.append(_evaluate_variant(layout, input, {}, solar_position_df))
 
     return variants
 
@@ -304,7 +343,7 @@ def _surrogate_score(input: OptimizerInput, cfg: Dict[str, Any]) -> float:
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _run_ga_branch(input: OptimizerInput) -> List[OptimizerVariant]:
+def _run_ga_branch(input: OptimizerInput, solar_position_df=None) -> List[OptimizerVariant]:
     """Run a small NSGA-II optimization over layout parameters.
 
     Variables (all real, later snapped):
@@ -340,7 +379,7 @@ def _run_ga_branch(input: OptimizerInput) -> List[OptimizerVariant]:
                 try:
                     layout_input = _build_base_input(self.opt_input, cfg)
                     layout = generate_layout(layout_input)
-                    variant = _evaluate_variant(layout, self.opt_input, cfg)
+                    variant = _evaluate_variant(layout, self.opt_input, cfg, solar_position_df)
                 except Exception:
                     F.append([0.0, -1.0])  # bad solar, bad wt to keep feasible
                     continue
@@ -381,13 +420,13 @@ def _run_ga_branch(input: OptimizerInput) -> List[OptimizerVariant]:
                 layout = generate_layout(layout_input)
                 if not layout.apartments:
                     continue
-                variants.append(_evaluate_variant(layout, input, cfg))
+                variants.append(_evaluate_variant(layout, input, cfg, solar_position_df))
             except Exception:
                 continue
 
     if not variants:
         layout = generate_layout(_build_base_input(input, {}))
-        variants.append(_evaluate_variant(layout, input, {}))
+        variants.append(_evaluate_variant(layout, input, {}, solar_position_df))
 
     return variants
 
