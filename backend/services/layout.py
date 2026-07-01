@@ -40,6 +40,7 @@ class ApartmentCell:
 
 @dataclass
 class LayoutResult:
+    footprint: Polygon
     footprint_area_m2: float
     circulation_area_m2: float
     usable_area_m2: float
@@ -91,6 +92,7 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
     circulation_area = circulation_geom.area if circulation_geom.is_valid else 0.0
 
     return LayoutResult(
+        footprint=footprint,
         footprint_area_m2=footprint_area,
         circulation_area_m2=circulation_area,
         usable_area_m2=usable_area,
