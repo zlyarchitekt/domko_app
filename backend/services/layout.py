@@ -193,44 +193,6 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
     )
 
 
-def _build_corridor(polygon: Polygon, width: float, cage_polygon: Polygon | None = None) -> Polygon:
-    """Buduje korytarz wzdłuż osi dłuższego boku prostokątnego poligonu,
-    uwzględniając wyrównanie do pozycji klatki schodowej (F2-04)."""
-    bounds = polygon.bounds
-    if len(bounds) != 4:
-        return Polygon()
-    minx, miny, maxx, maxy = bounds
-    w = maxx - minx
-    h = maxy - miny
-
-    if w >= h:
-        # korytarz poziomy wzdłuż osi X
-        half = width / 2.0
-        if cage_polygon:
-            cage_y = cage_polygon.centroid.y
-            mid_y = max(miny + half, min(maxy - half, cage_y))
-        else:
-            mid_y = (miny + maxy) / 2.0
-
-        corridor = Polygon(
-            [(minx, mid_y - half), (maxx, mid_y - half), (maxx, mid_y + half), (minx, mid_y + half)]
-        )
-    else:
-        # korytarz pionowy wzdłuż osi Y
-        half = width / 2.0
-        if cage_polygon:
-            cage_x = cage_polygon.centroid.x
-            mid_x = max(minx + half, min(maxx - half, cage_x))
-        else:
-            mid_x = (minx + maxx) / 2.0
-
-        corridor = Polygon(
-            [(mid_x - half, miny), (mid_x + half, miny), (mid_x + half, maxy), (mid_x - half, maxy)]
-        )
-
-    return corridor.intersection(polygon)
-
-
 MIN_CELL_DIMENSION_M = 2.0
 
 

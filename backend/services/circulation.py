@@ -10,6 +10,9 @@ import math
 from dataclasses import dataclass, field
 
 from shapely.geometry import Polygon
+from shapely.ops import unary_union
+
+from services.bsp import Zone, rectangle_decompose
 
 CAGE_POSITION_MODES = ("1a", "1b", "2", "3", "auto")
 """plan.md §4.3: 1a=elewacja front, 1b=elewacja dziedziniec/tył, 2=środek traktu,
@@ -130,3 +133,106 @@ def _edge_cage(polygon: Polygon, size: float, longest: bool) -> Polygon | None:
     candidate = Polygon([p_a, p_b, p_c, p_d])
     clipped = candidate.intersection(polygon)
     return clipped if not clipped.is_empty and clipped.area > 1e-6 else None
+
+
+def _build_corridor(polygon: Polygon, width: float, cage_polygon: Polygon | None = None) -> Polygon:
+    """Buduje korytarz wzdłuż osi dłuższego boku prostokątnej (po
+    rectangle_decompose) strefy, uwzględniając wyrównanie do pozycji klatki
+    schodowej (F2-04). Przeniesiona bez zmian logiki z layout.py — działa
+    poprawnie teraz, bo strefa jest już prawie-prostokątna (patrz spec §1a:
+    to nigdy nie było zepsute, tylko strefy, które dostawała na wejściu)."""
+    bounds = polygon.bounds
+    if len(bounds) != 4:
+        return Polygon()
+    minx, miny, maxx, maxy = bounds
+    w = maxx - minx
+    h = maxy - miny
+
+    if w >= h:
+        half = width / 2.0
+        if cage_polygon:
+            cage_y = cage_polygon.centroid.y
+            mid_y = max(miny + half, min(maxy - half, cage_y))
+        else:
+            mid_y = (miny + maxy) / 2.0
+        corridor = Polygon(
+            [(minx, mid_y - half), (maxx, mid_y - half), (maxx, mid_y + half), (minx, mid_y + half)]
+        )
+    else:
+        half = width / 2.0
+        if cage_polygon:
+            cage_x = cage_polygon.centroid.x
+            mid_x = max(minx + half, min(maxx - half, cage_x))
+        else:
+            mid_x = (minx + maxx) / 2.0
+        corridor = Polygon(
+            [(mid_x - half, miny), (mid_x + half, miny), (mid_x + half, maxy), (mid_x - half, maxy)]
+        )
+
+    return corridor.intersection(polygon)
+
+
+@dataclass
+class CirculationResult:
+    """Wynik Etapu 1: strefy (po rectangle_decompose), zunifikowana
+    geometria komunikacji, klatki, i pozostałość na mieszkania (Etap 2)."""
+
+    zones: list[Zone]
+    circulation_geometry: Polygon | None
+    cage_polygons: list[Polygon] = field(default_factory=list)
+    remainder: Polygon = field(default_factory=Polygon)
+    """Może być MultiPolygon w praktyce mimo adnotacji typu (patrz spec §9) —
+    konsumenci muszą sprawdzać hasattr(geom, "geoms")."""
+
+
+def place_circulation(
+    footprint: Polygon,
+    corridor_width_m: float,
+    stair_width_m: float,
+    place_cage: bool,
+    cage_size_m: float,
+    cage_position: str,
+) -> CirculationResult:
+    """Etap 1: dzieli obrys na prawie-prostokątne strefy (rectangle_decompose),
+    umieszcza klatkę i korytarz w każdej, zwraca zunifikowany wynik."""
+    zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
+
+    circulation_geom = Polygon()
+    cage_polygons: list[Polygon] = []
+    remainder_parts: list[Polygon] = []
+
+    for zone in zones:
+        if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
+            continue
+
+        local_cage: Polygon | None = None
+        if place_cage:
+            cage_polygon = _place_cage_by_mode(zone.polygon, cage_position, cage_size_m)
+            if cage_polygon is not None and cage_polygon.area > zone.polygon.area * 0.9:
+                cage_polygon = None
+            if cage_polygon is not None and cage_polygon.area > 0:
+                circulation_geom = unary_union([circulation_geom, cage_polygon])
+                cage_polygons.append(cage_polygon)
+                zone_remaining = zone.polygon.difference(cage_polygon)
+                local_cage = cage_polygon
+            else:
+                zone_remaining = zone.polygon
+        else:
+            zone_remaining = zone.polygon
+
+        corridor = _build_corridor(zone_remaining, corridor_width_m, local_cage)
+        if corridor.area > 0:
+            circulation_geom = unary_union([circulation_geom, corridor])
+            zone_remaining = zone_remaining.difference(corridor)
+
+        if not zone_remaining.is_empty and zone_remaining.area > 1e-6:
+            remainder_parts.append(zone_remaining)
+
+    remainder = unary_union(remainder_parts) if remainder_parts else Polygon()
+
+    return CirculationResult(
+        zones=zones,
+        circulation_geometry=circulation_geom if not circulation_geom.is_empty else None,
+        cage_polygons=cage_polygons,
+        remainder=remainder,
+    )
