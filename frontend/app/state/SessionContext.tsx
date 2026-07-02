@@ -20,6 +20,7 @@ interface SessionState {
   mode: EditorMode;
   program: ProgramRow[];
   circulation: api.CirculationSpecInput;
+  circulationResult: api.CirculationResponse | null;
   layoutResult: api.LayoutGenerateResponse | null;
   validation: api.FullLayoutValidateResponse | null;
   typologySuggestion: api.TypologySuggestResponse | null;
@@ -50,6 +51,7 @@ const initialState: SessionState = {
   mode: "idle",
   program: [{ id: crypto.randomUUID(), type: "M2", min_area_m2: 45, target_count: 2 }],
   circulation: initialCirculation,
+  circulationResult: null,
   layoutResult: null,
   validation: null,
   typologySuggestion: null,
@@ -78,6 +80,7 @@ type Action =
   | { type: "UPDATE_PROGRAM_ROW"; id: string; patch: Partial<ProgramRow> }
   | { type: "REMOVE_PROGRAM_ROW"; id: string }
   | { type: "SET_CIRCULATION"; patch: Partial<api.CirculationSpecInput> }
+  | { type: "SET_CIRCULATION_RESULT"; result: api.CirculationResponse | null }
   | { type: "SET_LAYOUT_RESULT"; result: api.LayoutGenerateResponse | null }
   | { type: "SET_VALIDATION"; validation: api.FullLayoutValidateResponse | null }
   | { type: "SET_TYPOLOGY_SUGGESTION"; suggestion: api.TypologySuggestResponse | null }
@@ -122,6 +125,7 @@ function reducer(state: SessionState, action: Action): SessionState {
         mode: "idle",
         layoutResult: null,
         validation: null,
+        circulationResult: null,
       };
     case "UPDATE_VERTEX": {
       if (!state.footprint) return state;
@@ -134,7 +138,7 @@ function reducer(state: SessionState, action: Action): SessionState {
       // footprint alongside apartment geometry that no longer matches it —
       // the backend can't line facades up with apartments and returns empty
       // results with no error, which looks like "re-analysis doesn't work".
-      return { ...state, footprint: next, layoutResult: null, validation: null };
+      return { ...state, footprint: next, layoutResult: null, validation: null, circulationResult: null };
     }
     case "SET_PROGRAM":
       return { ...state, program: action.program };
@@ -155,6 +159,8 @@ function reducer(state: SessionState, action: Action): SessionState {
       return { ...state, program: state.program.filter((row) => row.id !== action.id) };
     case "SET_CIRCULATION":
       return { ...state, circulation: { ...state.circulation, ...action.patch } };
+    case "SET_CIRCULATION_RESULT":
+      return { ...state, circulationResult: action.result };
     case "SET_LAYOUT_RESULT":
       return { ...state, layoutResult: action.result };
     case "SET_VALIDATION":
@@ -195,6 +201,16 @@ function footprintToPoints(footprint: Point2D[]): api.Point[] {
   return footprint.map((p) => [p.x, p.y] as api.Point);
 }
 
+function polygonAreaFromPoints(points: Point2D[]): number {
+  let sum = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    sum += a.x * b.y - b.x * a.y;
+  }
+  return Math.abs(sum) / 2;
+}
+
 function polygonFromGeoJson(geom: api.GeoJsonPolygon): Point2D[] {
   const ring = geom.coordinates[0] ?? [];
   return ring.slice(0, -1).map(([x, y]) => ({ x, y }));
@@ -215,6 +231,8 @@ interface SessionContextValue {
   setCirculation: (patch: Partial<api.CirculationSpecInput>) => void;
   selectApartment: (id: string | null) => void;
   regenerate: () => Promise<void>;
+  runPlaceCirculation: () => Promise<void>;
+  runSubdivideUnits: () => Promise<void>;
   refreshTypologySuggestion: () => Promise<void>;
   applyTypologyPreset: (key: string) => Promise<void>;
   updateApartmentsAndValidate: (apartments: api.ApartmentResult[]) => Promise<void>;
@@ -348,6 +366,65 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_LOADING", loading: false });
     }
   }, [state.footprint, buildRequest]);
+
+  const runPlaceCirculation = useCallback(async () => {
+    if (!state.footprint || state.footprint.length < 3) return;
+    dispatch({ type: "SET_LOADING", loading: true });
+    try {
+      const result = await api.placeCirculation(footprintToPoints(state.footprint), state.circulation);
+      dispatch({ type: "SET_CIRCULATION_RESULT", result });
+      dispatch({ type: "SET_LAYOUT_RESULT", result: null });
+      dispatch({ type: "SET_VALIDATION", validation: null });
+      dispatch({ type: "SET_ERROR", error: null });
+    } catch (err) {
+      dispatch({ type: "SET_ERROR", error: err instanceof api.ApiError ? err.message : String(err) });
+    } finally {
+      dispatch({ type: "SET_LOADING", loading: false });
+    }
+  }, [state.footprint, state.circulation]);
+
+  const runSubdivideUnits = useCallback(async () => {
+    if (!state.circulationResult) return;
+    dispatch({ type: "SET_LOADING", loading: true });
+    try {
+      const unitsReq = state.program.map((row) => ({
+        type: row.type,
+        min_area_m2: row.min_area_m2,
+        target_count: row.target_count,
+      }));
+      const unitsRes = await api.subdivideUnits(state.circulationResult.remainder, unitsReq);
+      const layoutResult: api.LayoutGenerateResponse = {
+        footprint_area_m2: state.footprint ? polygonAreaFromPoints(state.footprint) : 0,
+        circulation_area_m2: 0,
+        usable_area_m2: unitsRes.apartments.reduce((sum, a) => sum + a.area_m2, 0),
+        apartments: unitsRes.apartments,
+        leftover: unitsRes.leftover,
+        wt_validation: { passed: true, score: 0, rules: [], issues: [] },
+        zones: [],
+        circulation_parts: state.circulationResult.circulation_geometry
+          ? [state.circulationResult.circulation_geometry]
+          : [],
+        cage_geometries: state.circulationResult.cage_geometries,
+      };
+      dispatch({ type: "SET_LAYOUT_RESULT", result: layoutResult });
+      dispatch({ type: "SET_ERROR", error: null });
+      // Fetch real WT validation for the combined result (score/rules were
+      // left as placeholders above since /layout/units doesn't compute WT).
+      if (state.footprint) {
+        const req = {
+          footprint: footprintToPoints(state.footprint),
+          circulation: state.circulation,
+          apartments: unitsReq,
+        };
+        const validation = await api.validateFullLayout(req);
+        dispatch({ type: "SET_VALIDATION", validation });
+      }
+    } catch (err) {
+      dispatch({ type: "SET_ERROR", error: err instanceof api.ApiError ? err.message : String(err) });
+    } finally {
+      dispatch({ type: "SET_LOADING", loading: false });
+    }
+  }, [state.circulationResult, state.program, state.footprint, state.circulation]);
 
   const refreshTypologySuggestion = useCallback(async () => {
     if (!state.footprint || state.footprint.length < 3) return;
@@ -491,6 +568,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (!variant) return;
     dispatch({ type: "SET_ACTIVE_VARIANT", id });
     dispatch({ type: "SET_LAYOUT_RESULT", result: variant.layout });
+    // A staged circulationResult (from an earlier runPlaceCirculation call)
+    // no longer corresponds to this freshly-applied variant's layout —
+    // stale state, same class of bug as the UPDATE_VERTEX/SET_FOOTPRINT fix.
+    dispatch({ type: "SET_CIRCULATION_RESULT", result: null });
   }, [state.optimizerVariants]);
 
   const value = useMemo<SessionContextValue>(
@@ -509,6 +590,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setCirculation,
       selectApartment,
       regenerate,
+      runPlaceCirculation,
+      runSubdivideUnits,
       refreshTypologySuggestion,
       applyTypologyPreset,
       updateApartmentsAndValidate,
@@ -534,6 +617,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setCirculation,
       selectApartment,
       regenerate,
+      runPlaceCirculation,
+      runSubdivideUnits,
       refreshTypologySuggestion,
       applyTypologyPreset,
       updateApartmentsAndValidate,
