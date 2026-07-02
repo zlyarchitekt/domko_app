@@ -48,6 +48,13 @@ def _estimate_building_azimuth(footprint: Polygon) -> float | None:
     n = len(coords)
     if n < 2:
         return None
+    # Bug fixed 2026-07-02: always adding +90 only gives the OUTWARD normal for
+    # a counter-clockwise ring. Footprints from hand-drawn points, DXF import,
+    # etc. are never normalized to a fixed winding, and the natural top-left ->
+    # top-right -> bottom-right -> bottom-left click order most people use is
+    # clockwise in this app's Y-up world space — that silently flipped every
+    # azimuth/orientation by 180° (see services/solar_analysis.py's matching fix).
+    normal_offset = 90.0 if footprint.exterior.is_ccw else -90.0
     best_len = -1.0
     best_azimuth: float | None = None
     for i in range(n):
@@ -59,7 +66,7 @@ def _estimate_building_azimuth(footprint: Polygon) -> float | None:
         if length > best_len:
             best_len = length
             edge_az = (math.degrees(math.atan2(dx, dy)) + 360.0) % 360.0
-            best_azimuth = (edge_az + 90.0) % 360.0
+            best_azimuth = (edge_az + normal_offset) % 360.0
     return best_azimuth
 
 

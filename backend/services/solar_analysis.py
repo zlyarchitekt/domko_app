@@ -519,11 +519,24 @@ def _polygon_edges(polygon: Polygon) -> list[tuple[tuple[float, float], tuple[fl
 def _edge_normal_azimuth(
     p1: tuple[float, float], p2: tuple[float, float], parent: Polygon
 ) -> float:
-    """Return the outward-pointing normal azimuth for a polygon edge."""
+    """Return the outward-pointing normal azimuth for a polygon edge.
+
+    Bug fixed 2026-07-02: this used to always add +90°, which only gives the
+    OUTWARD normal when the exterior ring winds counter-clockwise. Nothing
+    upstream (hand-drawn points via /footprint/from-points, DXF import, or
+    any of the per-endpoint `Polygon(coords)` reconstructions) normalizes
+    winding, and the natural way most people draw a rectangle on screen
+    (top-left -> top-right -> bottom-right -> bottom-left) is clockwise in
+    the app's Y-up world coordinates — verified: for that click order every
+    facade's azimuth/orientation came out rotated 180° (a "S" building
+    reported as "N", etc.), silently, with no error. Checking the ring's
+    actual winding (this is what `parent` is for) and flipping the sign for
+    CW rings fixes it regardless of how the footprint was authored.
+    """
     x1, y1 = p1
     x2, y2 = p2
     dx = x2 - x1
     dy = y2 - y1
     edge_az = (math.degrees(math.atan2(dx, dy)) + 360.0) % 360.0
-    # Exterior ring is CCW; outward normal is +90° from edge direction.
-    return (edge_az + 90.0) % 360.0
+    normal_offset = 90.0 if parent.exterior.is_ccw else -90.0
+    return (edge_az + normal_offset) % 360.0
