@@ -428,7 +428,7 @@ def _slice_apartments(
         fitted_size = spec.min_area_m2 / available_depth
         cut_size = max(fitted_size, MIN_CELL_DIMENSION_M)
 
-        cell_poly, rest = _cut_cell(part, cut_size, available_depth, horizontal)
+        cell_poly, rest = _cut_cell(part, cut_size, horizontal)
         if cell_poly is None or cell_poly.area < 1e-6:
             # Ta część nie mieści już kolejnej komórki — wycofaj z rotacji.
             retired.append(remaining_parts.pop(idx))
@@ -451,7 +451,7 @@ def _slice_apartments(
 
 
 def _cut_cell(
-    polygon: Polygon, width: float, depth: float, horizontal: bool
+    polygon: Polygon, width: float, horizontal: bool
 ) -> tuple[Polygon | None, Polygon]:
     """Wycina jedno mieszkanie z poligonu wzdłuż wybranej osi."""
     bounds = polygon.bounds
@@ -465,7 +465,15 @@ def _cut_cell(
             return None, polygon
         cutter = LineString([(cut_x, miny - 1), (cut_x, maxy + 1)])
     else:
-        cut_y = miny + depth
+        # Bug fixed 2026-07-02: this used `depth` (the perpendicular span, i.e.
+        # the zone's own width) instead of `width` (the computed slice
+        # thickness `cut_size`) for the vertical-cut position. Every apartment
+        # sliced from a taller-than-wide zone came out as a `w x w` square
+        # instead of `w x cut_size`, silently ignoring min_area_m2 — verified:
+        # a 6x30m zone with a 50m2 spec produced 36.0m2 (=6x6) cells, while the
+        # horizontal (w>=h) branch, which already used `width` correctly, gave
+        # the correct 50.0m2 for the same spec on a 30x6m zone.
+        cut_y = miny + width
         if cut_y >= maxy:
             return None, polygon
         cutter = LineString([(minx - 1, cut_y), (maxx + 1, cut_y)])
