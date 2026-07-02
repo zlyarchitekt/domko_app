@@ -351,12 +351,15 @@ interface FacadeResult {
 > inspiracja: analiza Finch 3D w `ANALIZA_FINCH3D/`). Zastąpione poniższym
 > pipeline'em.
 
-**Etap 1 — `place_circulation()` (`services/circulation.py`):** klatka wg
-trybu 1a/1b/2/3/auto (bez zmian logiki względem poprzedniej wersji, patrz
-§4.3) + korytarz jako pas wzdłuż wnętrza obrysu liczony przez
-`footprint.buffer(-width).difference(...)` (dojrzałe operacje GEOS, celowo
-NIE straight-skeleton — niestabilny dla wierzchołków wklęsłych, czyli
-dokładnie tam gdzie zależy nam na poprawności). Wynik: `circulation_geometry`,
+**Etap 1 — `place_circulation()` (`services/circulation.py`):** obrys
+dzielony najpierw przez `rectangle_decompose()` (`services/bsp.py`) na
+prawie-prostokątne strefy (tnie rekurencyjnie przez każdy wierzchołek
+wklęsły), potem w KAŻDEJ strefie: klatka wg trybu 1a/1b/2/3/auto (bez zmian
+logiki względem poprzedniej wersji, patrz §4.3, ale tylko jedna klatka na
+budynek — jak dawne `generate_layout()`) + korytarz liczony przez
+`_build_corridor()` (oś dłuższego boku strefy, bbox-midline, bez zmian
+logiki — to nigdy nie było zepsute, zepsute były strefy jakie dostawało na
+wejściu, patrz historia niżej i spec §1a). Wynik: `circulation_geometry`,
 `cage_geometries`, `remainder` (przestrzeń na mieszkania — może być
 wklęsła/wieloczęściowa, to oczekiwane).
 
@@ -376,6 +379,19 @@ za jednym wywołaniem. Frontend dostaje też oba etapy osobno
 Ręczny podział linią (dawny §4.1) zostaje bez zmian jako `/layout/split`,
 naprawiony tą samą techniką dekompozycji co Etap 2a (dziś gubi powierzchnię
 dla obrysów wklęsłych z >2 przecięciami linii).
+
+> **Status (2026-07-02):** zaimplementowane w pełni — plan
+> `docs/superpowers/plans/2026-07-02-layout-engine-redesign.md`, wszystkie
+> 18 tasków, 126/126 testów backendowych, `tsc --noEmit` czysty, ręczna
+> weryfikacja w przeglądarce (Playwright): wklęsły obrys L-kształt →
+> "1. Umieść korytarz i klatkę" (klatka poprawnie w narożniku wewnętrznym,
+> regresja z audytu 2026-07-02 potwierdzona jako naprawiona) →
+> "2. Podziel na mieszkania" (realne wymiary, zgodne z programem) → analiza
+> solarna (fasady niepuste, orientacje poprawne — potwierdza że redesign nie
+> cofnął fixu z solar_analysis.py z tej samej sesji). Jeden drobny bug
+> znaleziony i naprawiony podczas weryfikacji: duplikat klucza React w
+> `ValidationSection.tsx` (dwie reguły WT z `code="heurystyka"` po dodaniu
+> opcjonalnej reguły styku klatki z elewacją, patrz Task 9).
 
 ### 4.2 Walidacja styku z komunikacją
 
