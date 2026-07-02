@@ -214,6 +214,18 @@ POST /api/footprint/from-points
 
 #### Layout
 ```
+POST /api/layout/circulation  (NOWY, redesign 2026-07-02 — patrz §4.1)
+  Request:  { footprint: GeoJSON, circulation: CirculationSpec }
+  Response: { circulation_geometry: GeoJSON, cage_geometries: [GeoJSON, ...],
+              remainder: GeoJSON }  # Polygon lub MultiPolygon
+
+POST /api/layout/units  (NOWY, redesign 2026-07-02 — patrz §4.1)
+  Request:  { remainder: GeoJSON, apartments: [ApartmentProgram, ...] }
+  Response: { apartments: [ApartmentResult, ...], leftover: GeoJSON | null }
+
+POST /api/layout/generate  (wrapper: circulation + units za jednym wywołaniem —
+                             używany przez optymalizator i "szybką ścieżkę")
+
 POST /api/layout/split
   Request:  { footprint: GeoJSON, split_line: [[x1,y1],[x2,y2]] }
   Response: { polygons: [GeoJSON, ...], areas: [float, ...] }
@@ -322,23 +334,43 @@ interface FacadeResult {
 
 ## 4. Logika Biznesowa
 
-### 4.1 Algorytm podziału polygonu
+### 4.1 Algorytm generowania układu — dwa jawne etapy (redesign 2026-07-02)
 
-1. Użytkownik rysuje linię podziałową na canvasie (dwa punkty)
-2. Frontend wysyła do backendu: aktualny polygon + linia
-3. Backend (Shapely):
-   ```python
-   from shapely.ops import split
-   from shapely.geometry import LineString, Polygon
-   
-   def split_polygon(polygon: Polygon, split_line: LineString) -> list[Polygon]:
-       # Wydłużenie linii poza obrys polygonu (gwarancja przecięcia)
-       extended = extend_line(split_line, polygon.bounds)
-       result = split(polygon, extended)
-       return list(result.geoms)
-   ```
-4. Zwrócone subpolygony wyświetlane na canvasie
-5. Użytkownik przypisuje typ mieszkania do każdego segmentu
+> **Historia:** pierwotna wersja tej sekcji opisywała tylko ręczny podział linią
+> (`split_polygon`, zostaje jako `/layout/split`, patrz niżej). Automatyczny
+> generator (dawne `bsp_zones()` w `services/bsp.py`) traktował umieszczenie
+> klatki, korytarza i podział na mieszkania jako jedną rekurencyjną funkcję z
+> ukrytym założeniem, że każda "strefa" jest prostokątem — audyt z 2026-07-02
+> wykazał, że to założenie cicho zawodzi dla realnych obrysów wklęsłych
+> (dokładny opis: `docs/superpowers/specs/2026-07-02-layout-engine-redesign-design.md`,
+> inspiracja: analiza Finch 3D w `ANALIZA_FINCH3D/`). Zastąpione poniższym
+> pipeline'em.
+
+**Etap 1 — `place_circulation()` (`services/circulation.py`):** klatka wg
+trybu 1a/1b/2/3/auto (bez zmian logiki względem poprzedniej wersji, patrz
+§4.3) + korytarz jako pas wzdłuż wnętrza obrysu liczony przez
+`footprint.buffer(-width).difference(...)` (dojrzałe operacje GEOS, celowo
+NIE straight-skeleton — niestabilny dla wierzchołków wklęsłych, czyli
+dokładnie tam gdzie zależy nam na poprawności). Wynik: `circulation_geometry`,
+`cage_geometries`, `remainder` (przestrzeń na mieszkania — może być
+wklęsła/wieloczęściowa, to oczekiwane).
+
+**Etap 2 — `subdivide_units()` (`services/unit_mix.py`):** (a) realna
+dekompozycja `remainder` na prostokąty przez cięcie przez wierzchołki
+wklęsłe (nie fikcyjny stały nibble jak poprzednio), (b) dopasowanie programu
+mieszkań do prostokątów zachłanną heurystyką najlepszego dopasowania
+(zamiast sztywnego FIFO), z tolerancją powierzchni ±3% (inspiracja: Finch
+§B.2).
+
+`generate_layout()`/`POST /layout/generate` **zostaje** jako wrapper wołający
+oba etapy po kolei — potrzebny m.in. optymalizatorowi, który przeszukuje
+warianty pozycji klatki (patrz §4.3, ostatni akapit) i wymaga pełnego wyniku
+za jednym wywołaniem. Frontend dostaje też oba etapy osobno
+(`/layout/circulation`, `/layout/units`) do jawnych kroków UX — patrz spec.
+
+Ręczny podział linią (dawny §4.1) zostaje bez zmian jako `/layout/split`,
+naprawiony tą samą techniką dekompozycji co Etap 2a (dziś gubi powierzchnię
+dla obrysów wklęsłych z >2 przecięciami linii).
 
 ### 4.2 Walidacja styku z komunikacją
 
