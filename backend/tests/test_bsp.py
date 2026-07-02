@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPolygon, Polygon
 
 from main import app
 from services.bsp import (
@@ -8,6 +8,7 @@ from services.bsp import (
     concave_vertices,
     corner_cage,
     is_concave,
+    rectangle_decompose,
     split_polygon_by_edge,
 )
 from services.polygon_input import points_to_polygon
@@ -109,3 +110,45 @@ def test_split_polygon_by_edge_collinear_with_existing_edge():
     # and no exception other than ValueError propagates.
     total = part_a.area + part_b.area
     assert abs(total - square.area) < 1e-6 or total == 0.0
+
+
+def test_rectangle_decompose_convex_returns_single_part():
+    rect = Polygon([(0, 0), (10, 0), (10, 6), (0, 6)])
+    parts = rectangle_decompose(rect)
+    assert len(parts) == 1
+    assert abs(parts[0].area - 60.0) < 1e-6
+
+
+def test_rectangle_decompose_l_shape_no_area_lost_no_overlap():
+    l_shape = Polygon([(0, 0), (10, 0), (10, 4), (4, 4), (4, 10), (0, 10)])
+    total_area = l_shape.area  # 76.0
+    parts = rectangle_decompose(l_shape)
+    assert len(parts) >= 2
+    assert abs(sum(p.area for p in parts) - total_area) < 1e-6
+    # No two parts overlap by more than a sliver.
+    for i in range(len(parts)):
+        for j in range(i + 1, len(parts)):
+            assert parts[i].intersection(parts[j]).area < 1e-6
+    # Every part is (close to) rectangular: 4 vertices after simplification.
+    for p in parts:
+        assert not concave_vertices(p), f"part still concave: {list(p.exterior.coords)}"
+
+
+def test_rectangle_decompose_u_shape_no_area_lost():
+    u_shape = Polygon([
+        (0, 0), (2, 0), (2, 6), (10, 6), (10, 0), (12, 0),
+        (12, 8), (0, 8),
+    ])
+    total_area = u_shape.area  # 48.0 (notch cut from the bottom, see Task 1's fixture)
+    parts = rectangle_decompose(u_shape)
+    assert abs(sum(p.area for p in parts) - total_area) < 1e-6
+    for p in parts:
+        assert not concave_vertices(p)
+
+
+def test_rectangle_decompose_multipolygon_handles_each_part():
+    a = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
+    b = Polygon([(10, 0), (15, 0), (15, 5), (10, 5)])
+    parts = rectangle_decompose(MultiPolygon([a, b]))
+    assert len(parts) == 2
+    assert abs(sum(p.area for p in parts) - 50.0) < 1e-6

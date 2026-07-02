@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import LineString, MultiPolygon, Polygon
 from shapely.ops import split as shapely_split
 from shapely.ops import unary_union
 
@@ -131,6 +131,69 @@ def split_polygon_by_edge(
     part_a = unary_union(left) if len(left) > 1 else left[0]
     part_b = unary_union(right) if len(right) > 1 else right[0]
     return part_a, part_b
+
+
+def rectangle_decompose(poly: Polygon | MultiPolygon) -> list[Polygon]:
+    """Dzieli (możliwie wklęsły) poligon na listę prawie-prostokątnych części.
+
+    Rekurencyjnie tnie przez każdy wierzchołek wklęsły — przedłużając jedną
+    z dwóch sąsiadujących krawędzi przez ten wierzchołek w głąb poligonu —
+    aż nie zostaną żadne wierzchołki wklęsłe. Zastępuje `bsp_zones()`'s
+    fikcyjną obsługę wklęsłości (stały nibble 1x1m w narożniku, który
+    często zostawiał resztę wciąż wklęsłą — patrz audyt 2026-07-02).
+
+    Poligony wypukłe, ale nie ściśle prostokątne (np. skośny czworobok po
+    ekstremalnej edycji wierzchołka), zostają jedną nie-prostokątną częścią
+    — udokumentowane ograniczenie, patrz spec §10.
+    """
+    if hasattr(poly, "geoms"):
+        result: list[Polygon] = []
+        for part in poly.geoms:
+            if part.geom_type == "Polygon" and part.area > 1e-9:
+                result.extend(rectangle_decompose(part))
+        return result
+
+    if poly.is_empty or poly.area < 1e-9:
+        return []
+
+    cv = concave_vertices(poly)
+    if not cv:
+        return [poly]
+
+    idx, x, y = cv[0]
+    coords = list(poly.exterior.coords)[:-1]
+    n = len(coords)
+    prev_pt = coords[(idx - 1) % n]
+    curr_pt = (x, y)
+    next_pt = coords[(idx + 1) % n]
+
+    minx, miny, maxx, maxy = poly.bounds
+    diag = math.hypot(maxx - minx, maxy - miny) * 2 + 1.0
+
+    candidates: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    for anchor in (prev_pt, next_pt):
+        edx, edy = curr_pt[0] - anchor[0], curr_pt[1] - anchor[1]
+        elen = math.hypot(edx, edy)
+        if elen < 1e-9:
+            continue
+        ux, uy = edx / elen, edy / elen
+        far = (curr_pt[0] + ux * diag, curr_pt[1] + uy * diag)
+        candidates.append((curr_pt, far))
+
+    for p1, p2 in candidates:
+        try:
+            part_a, part_b = split_polygon_by_edge(poly, p1, p2)
+        except ValueError:
+            continue
+        if part_a.area < 1e-9 or part_b.area < 1e-9:
+            continue
+        return rectangle_decompose(part_a) + rectangle_decompose(part_b)
+
+    # Neither candidate cut produced a valid two-way split (degenerate
+    # geometry) — return as a single (still-concave) zone rather than loop
+    # forever. Downstream code (fit_program_to_rectangles) falls back to
+    # bounding-box sizing for non-rectangular parts, same as today.
+    return [poly]
 
 
 def corner_cage(polygon: Polygon, corner: tuple[float, float], size: float = 1.0) -> Polygon:
