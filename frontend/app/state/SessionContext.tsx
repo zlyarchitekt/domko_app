@@ -208,6 +208,7 @@ interface SessionContextValue {
   setIsDowntown: (isDowntown: boolean) => void;
   runOptimizer: () => Promise<void>;
   setActiveVariant: (id: string | null) => void;
+  applyVariant: (id: string) => void;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -443,14 +444,18 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     try {
       const req: api.OptimizerRunRequest = {
         footprint: footprintToPoints(state.footprint),
-        circulation: state.circulation,
         apartments: state.program.map(row => ({
           type: row.type,
           min_area_m2: row.min_area_m2,
           target_count: row.target_count,
         })),
-        num_generations: 30,
-        population_size: 20,
+        latitude: state.gps.lat,
+        longitude: state.gps.lng,
+        analysis_date: state.analysisDate,
+        required_hours: state.isDowntown ? 1.5 : 3.0,
+        corridor_width_m: state.circulation.corridor_width_m,
+        stair_width_m: state.circulation.stair_width_m,
+        cage_size_m: state.circulation.cage_size_m,
       };
       const res = await api.runOptimizer(req);
       dispatch({ type: "SET_OPTIMIZER_VARIANTS", variants: res.variants });
@@ -463,7 +468,14 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     } finally {
       dispatch({ type: "SET_IS_OPTIMIZING", isOptimizing: false });
     }
-  }, [state.footprint, state.circulation, state.program]);
+  }, [state.footprint, state.circulation, state.program, state.gps, state.analysisDate, state.isDowntown]);
+
+  const applyVariant = useCallback((id: string) => {
+    const variant = state.optimizerVariants.find((v) => v.id === id);
+    if (!variant) return;
+    dispatch({ type: "SET_ACTIVE_VARIANT", id });
+    dispatch({ type: "SET_LAYOUT_RESULT", result: variant.layout });
+  }, [state.optimizerVariants]);
 
   const value = useMemo<SessionContextValue>(
     () => ({
@@ -490,6 +502,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setIsDowntown,
       runOptimizer,
       setActiveVariant,
+      applyVariant,
     }),
     [
       state,
@@ -514,6 +527,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setIsDowntown,
       runOptimizer,
       setActiveVariant,
+      applyVariant,
     ]
   );
 

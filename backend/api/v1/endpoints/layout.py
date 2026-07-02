@@ -4,8 +4,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from shapely.geometry import Polygon
 
-from services.layout import CAGE_POSITION_MODES, ApartmentSpec, LayoutInput, generate_layout
-from services.wt_validation import validate_layout_wt
+from services.layout import CAGE_POSITION_MODES, ApartmentSpec, LayoutInput, LayoutResult, generate_layout
+from services.wt_validation import WTValidationResult, validate_layout_wt
 
 router = APIRouter()
 
@@ -116,6 +116,17 @@ def generate_layout_endpoint(request: LayoutGenerateRequest):
 
     wt = validate_layout_wt(layout, request.local_law)
 
+    return layout_result_to_response(layout, wt)
+
+
+def layout_result_to_response(layout: LayoutResult, wt: WTValidationResult) -> LayoutGenerateResponse:
+    """Serialize a `LayoutResult` (+ its WT validation) into the API response shape.
+
+    Shared with `api/v1/endpoints/optimizer.py` so each optimizer variant's `layout`
+    (which is a full `LayoutResult`, same as a plain `/layout/generate` call) can be
+    exposed in the exact shape the frontend already knows how to render — otherwise
+    "apply this variant" has no geometry to hand to the canvas.
+    """
     apartments_out = [
         ApartmentResult(
             id=a.id,

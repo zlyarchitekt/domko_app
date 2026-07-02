@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from shapely.geometry import Polygon
 
+from api.v1.endpoints.layout import LayoutGenerateResponse, layout_result_to_response
 from services.layout import ApartmentSpec
 from services.optimizer import OptimizerInput, OptimizerVariant, run_optimizer
 
@@ -54,6 +55,7 @@ class MetricsModel(BaseModel):
 
 
 class VariantModel(BaseModel):
+    id: str
     rank: int
     config: dict[str, Any]
     metrics: MetricsModel
@@ -63,6 +65,9 @@ class VariantModel(BaseModel):
     solar_summary: dict[str, Any]
     wt_passed: bool
     wt_issues: list[str]
+    layout: LayoutGenerateResponse
+    """Full layout geometry for this variant, in the same shape `/layout/generate`
+    returns — lets the frontend apply a variant to the canvas directly (F5-06)."""
 
 
 class OptimizerRunResponse(BaseModel):
@@ -131,6 +136,7 @@ def _variant_to_model(variant: OptimizerVariant) -> VariantModel:
     solar = variant.solar_analysis
     wt = variant.wt_validation
     return VariantModel(
+        id=f"variant-{variant.rank}",
         rank=variant.rank,
         config=variant.config,
         metrics=MetricsModel(
@@ -150,6 +156,7 @@ def _variant_to_model(variant: OptimizerVariant) -> VariantModel:
         solar_summary=solar.summary,
         wt_passed=wt.passed,
         wt_issues=wt.issues,
+        layout=layout_result_to_response(variant.layout, wt),
     )
 
 

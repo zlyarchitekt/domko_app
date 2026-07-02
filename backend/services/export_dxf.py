@@ -439,7 +439,7 @@ def build_dxf_input_from_request(data: dict[str, Any]) -> DxfExportInput:
             analysis_date = None
 
     return DxfExportInput(
-        project_id=UUID(data.get("project_id", UUID(int=0))),
+        project_id=UUID(str(data["project_id"])) if data.get("project_id") else UUID(int=0),
         project_name=str(data.get("project_name", "untitled")),
         parcel_id=UUID(data["parcel_id"]) if data.get("parcel_id") else None,
         location=location,

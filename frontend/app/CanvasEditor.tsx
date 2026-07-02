@@ -24,6 +24,25 @@ function ringToPoints(geom: GeoJsonPolygon): Point2D[] {
   return ring.slice(0, -1).map(([x, y]) => ({ x, y }));
 }
 
+interface Bounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+function computeBounds(points: Point2D[]): Bounds | null {
+  if (points.length === 0) return null;
+  const xs = points.map((p) => p.x * METER_PX);
+  const ys = points.map((p) => -p.y * METER_PX);
+  return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+}
+
+function centerOf(bounds: Bounds | null): Point2D {
+  if (!bounds) return { x: 0, y: 0 };
+  return { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2 };
+}
+
 const STATUS_COLORS: Record<string, { fill: string; stroke: string }> = {
   ok: { fill: "rgba(74, 222, 128, 0.35)", stroke: "#22c55e" },
   warning: { fill: "rgba(250, 204, 21, 0.35)", stroke: "#eab308" },
@@ -158,25 +177,26 @@ export default function CanvasEditor() {
     return { x: snap(worldPxX / METER_PX), y: snap(-worldPxY / METER_PX) };
   };
 
+  // Combined bounds (committed footprint + in-progress drawing points) — used only for
+  // the manual "Fit to screen" button, which is allowed to jump the view on demand.
   const dataBounds = useMemo(() => {
     const allPoints: Point2D[] = [];
     if (footprint) allPoints.push(...footprint);
     if (state.drawingPoints.length) allPoints.push(...state.drawingPoints);
-    if (allPoints.length === 0) return null;
-    const xs = allPoints.map((p) => p.x * METER_PX);
-    const ys = allPoints.map((p) => -p.y * METER_PX);
-    return {
-      minX: Math.min(...xs),
-      maxX: Math.max(...xs),
-      minY: Math.min(...ys),
-      maxY: Math.max(...ys),
-    };
+    return computeBounds(allPoints);
   }, [footprint, state.drawingPoints]);
 
-  const boundsCenter = useMemo(() => {
-    if (!dataBounds) return { x: 0, y: 0 };
-    return { x: (dataBounds.minX + dataBounds.maxX) / 2, y: (dataBounds.minY + dataBounds.maxY) / 2 };
-  }, [dataBounds]);
+  const boundsCenter = useMemo(() => centerOf(dataBounds), [dataBounds]);
+
+  // Footprint-only bounds drive the *automatic* re-centering effect below. It must NOT
+  // react to state.drawingPoints: recentering after every click while the user is
+  // mid-draw shifts `position`, which worldToMeters() reads on the next click — so the
+  // screen-to-world mapping drifts under the user's cursor and clicking back on the
+  // (now-moved) first point no longer lands within the closing distance. Keeping this
+  // tied to the committed `footprint` means the view still auto-fits on load/import, but
+  // stays put while a polygon is being drawn point-by-point.
+  const footprintBounds = useMemo(() => computeBounds(footprint ?? []), [footprint]);
+  const footprintCenter = useMemo(() => centerOf(footprintBounds), [footprintBounds]);
 
   useEffect(() => {
     const update = () => {
@@ -190,8 +210,8 @@ export default function CanvasEditor() {
   }, []);
 
   const initialCentered = useMemo(() => {
-    return { x: size.width / 2 - boundsCenter.x, y: size.height / 2 - boundsCenter.y };
-  }, [size.width, size.height, boundsCenter.x, boundsCenter.y]);
+    return { x: size.width / 2 - footprintCenter.x, y: size.height / 2 - footprintCenter.y };
+  }, [size.width, size.height, footprintCenter.x, footprintCenter.y]);
 
   useEffect(() => {
     setPosition(initialCentered);

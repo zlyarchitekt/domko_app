@@ -330,20 +330,53 @@ export function analyzeSolar(req: SolarAnalyzeRequest): Promise<SolarAnalyzeResp
 
 // ── Optimizer (F5) ───────────────────────────────────────────────
 
-export interface OptimizerRunRequest extends LayoutGenerateRequest {
-  num_generations?: number;
-  population_size?: number;
+export interface OptimizerRunRequest {
+  footprint: Point[];
+  apartments: ApartmentProgramInput[];
+  latitude: number;
+  longitude: number;
+  analysis_date?: string | null;
+  timezone?: string;
+  required_hours?: number;
+  cage_mode?: "auto" | "single" | "multiple";
+  corridor_width_m?: number;
+  stair_width_m?: number;
+  cage_size_m?: number;
+  local_law?: string | null;
+  max_variants?: number;
+}
+
+export interface OptimizerVariantMetrics {
+  solar_score: number;
+  wt_compliance: number;
+  total_apartments: number;
+  total_facades: number;
+  facades_meeting_wt: number;
+  wt_rules_passed: number;
+  wt_rules_total: number;
+  communication_ok: boolean;
+  communication_issues: string[];
 }
 
 export interface OptimizerVariant {
   id: string;
-  score: number;
-  apartments: ApartmentResult[];
-  circulation_parts: GeoJsonPolygon[];
-  cage_geometries: GeoJsonPolygon[];
+  rank: number;
+  config: Record<string, any>;
+  metrics: OptimizerVariantMetrics;
+  building_azimuth_deg: number | null;
+  building_orientation: string | null;
+  apartments: Record<string, any>[];
+  solar_summary: Record<string, any>;
+  wt_passed: boolean;
+  wt_issues: string[];
+  layout: LayoutGenerateResponse;
 }
 
 export interface OptimizerRunResponse {
+  method: string;
+  footprint_is_concave: boolean;
+  requested_cage_mode: string;
+  effective_cage_mode: string;
   variants: OptimizerVariant[];
 }
 

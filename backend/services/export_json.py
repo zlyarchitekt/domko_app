@@ -316,7 +316,7 @@ def build_export_payload_from_request(data: dict[str, Any]) -> ExportJsonInput:
             analysis_date = None
 
     return ExportJsonInput(
-        project_id=UUID(data.get("project_id", uuid4())),
+        project_id=UUID(str(data["project_id"])) if data.get("project_id") else uuid4(),
         project_name=str(data.get("project_name", "untitled")),
         parcel_id=UUID(data["parcel_id"]) if data.get("parcel_id") else None,
         location=location,
