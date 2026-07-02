@@ -98,7 +98,16 @@ type Action =
 function reducer(state: SessionState, action: Action): SessionState {
   switch (action.type) {
     case "SET_MODE":
-      return { ...state, mode: action.mode, drawingPoints: action.mode === "draw" ? [] : state.drawingPoints };
+      // Clear in-progress drawing points whenever entering OR leaving draw mode.
+      // Without this, canceling out of draw mode (clicking "Rysuj obrys" again, or
+      // switching to another tool) left the un-committed dashed polygon rendered on
+      // the canvas forever — idle/edit modes never read drawingPoints, so it became
+      // inert visual debris rather than actually going away.
+      return {
+        ...state,
+        mode: action.mode,
+        drawingPoints: action.mode === "draw" || state.mode === "draw" ? [] : state.drawingPoints,
+      };
     case "ADD_DRAW_POINT":
       return { ...state, drawingPoints: [...state.drawingPoints, action.point] };
     case "REMOVE_LAST_DRAW_POINT":
