@@ -21,7 +21,15 @@ const TYPOLOGY_LABELS: Record<string, string> = {
 };
 
 export default function CirculationSection() {
-  const { state, setCirculation, refreshTypologySuggestion, applyTypologyPreset } = useSession();
+  const {
+    state,
+    setCirculation,
+    refreshTypologySuggestion,
+    applyTypologyPreset,
+    runPlaceCirculation,
+    runSubdivideUnits,
+    setMode,
+  } = useSession();
 
   useEffect(() => {
     if (state.footprint && state.footprint.length >= 3) {
@@ -107,6 +115,33 @@ export default function CirculationSection() {
           className="w-16 rounded bg-neutral-800 px-2 py-1 text-neutral-100"
         />
       </label>
+
+      <div className="flex flex-col gap-2 pt-1">
+        <button
+          onClick={() => void runPlaceCirculation()}
+          disabled={!state.footprint || state.isLoading}
+          className="w-full rounded bg-blue-700 px-3 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-40"
+        >
+          {state.isLoading ? "Umieszczam..." : "1. Umieść korytarz i klatkę"}
+        </button>
+        <button
+          onClick={() => void runSubdivideUnits()}
+          disabled={!state.circulationResult || state.isLoading}
+          className="w-full rounded bg-blue-700 px-3 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-40"
+        >
+          {state.isLoading ? "Dzielę..." : "2. Podziel na mieszkania"}
+        </button>
+        <button
+          onClick={() => setMode(state.mode === "edit-circulation" ? "idle" : "edit-circulation")}
+          disabled={!state.circulationResult}
+          className={`rounded px-2 py-1.5 text-sm disabled:opacity-40 ${
+            state.mode === "edit-circulation" ? "bg-blue-600 text-white" : "bg-neutral-700 text-neutral-100 hover:bg-neutral-600"
+          }`}
+          title={!state.circulationResult ? "Wymaga umieszczenia korytarza/klatki" : "Przeciągnij korytarz/klatkę"}
+        >
+          Przesuń komunikację
+        </button>
+      </div>
     </section>
   );
 }
