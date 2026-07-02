@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Stage, Layer, Line, Rect, Text, Circle, Group } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { Stage as StageType } from "konva/lib/Stage";
+import { Maximize2, RotateCcw } from "lucide-react";
 import { useSession, Point2D } from "./state/SessionContext";
 import { deriveApartmentStatuses } from "./lib/deriveStatus";
 import { GeoJsonPolygon } from "./lib/api";
@@ -367,27 +368,37 @@ export default function CanvasEditor() {
           });
       }}
     >
-      <div className="pointer-events-none absolute left-4 top-4 z-10 flex flex-col gap-1 text-xs text-neutral-300">
-        <div>scale: {scale.toFixed(2)}x</div>
-        <div>
-          tryb:{" "}
+      <div className="pointer-events-none absolute left-4 top-4 z-10 flex items-center gap-2 rounded-xl border border-zinc-800/80 bg-zinc-900/70 px-3 py-2 text-[11px] text-zinc-400 shadow-panel backdrop-blur-xl">
+        <span className="rounded-md bg-zinc-800/80 px-1.5 py-0.5 font-mono text-zinc-300">{scale.toFixed(2)}x</span>
+        <span className="h-3 w-px bg-zinc-700" />
+        <span>
           {state.mode === "draw"
-            ? "rysowanie (klik = punkt, dwuklik = zamknij)"
+            ? "rysowanie · klik = punkt, dwuklik = zamknij"
             : state.mode === "edit-vertices"
               ? "edycja wierzchołków obrysu"
               : state.mode === "edit-lines"
                 ? "przeciąganie linii podziału mieszkań"
                 : state.mode === "edit-circulation"
                   ? "przeciąganie korytarza/klatki"
-                  : "przesuń: drag / zoom: kółko"}
-        </div>
+                  : "przesuń: drag · zoom: kółko"}
+        </span>
       </div>
 
-      <div className="absolute right-4 top-4 z-10 flex gap-2">
-        <button onClick={fitToScreen} className="rounded bg-neutral-700 px-3 py-1.5 text-sm text-white hover:bg-neutral-600 active:bg-neutral-500">
-          Fit to screen
+      <div className="absolute right-4 top-4 z-10 flex gap-1.5 rounded-xl border border-zinc-800/80 bg-zinc-900/70 p-1.5 shadow-panel backdrop-blur-xl">
+        <button
+          onClick={fitToScreen}
+          title="Fit to screen"
+          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+        >
+          <Maximize2 size={13} />
+          Fit
         </button>
-        <button onClick={resetView} className="rounded bg-neutral-700 px-3 py-1.5 text-sm text-white hover:bg-neutral-600 active:bg-neutral-500">
+        <button
+          onClick={resetView}
+          title="Reset"
+          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+        >
+          <RotateCcw size={13} />
           Reset
         </button>
       </div>
@@ -412,20 +423,20 @@ export default function CanvasEditor() {
         style={{ cursor }}
       >
         <Layer>
-          <Rect x={-worldSize / 2} y={-worldSize / 2} width={worldSize} height={worldSize} fill="#171717" />
+          <Rect x={-worldSize / 2} y={-worldSize / 2} width={worldSize} height={worldSize} fill="#0c0c10" />
         </Layer>
 
         <Layer>
           {gridLines.map((points, i) => (
-            <Line key={`g-${i}`} points={points} stroke="#333333" strokeWidth={1 / scale} />
+            <Line key={`g-${i}`} points={points} stroke="#232329" strokeWidth={1 / scale} />
           ))}
         </Layer>
 
         <Layer>
           {axisLines.map((points, i) => (
-            <Line key={`a-${i}`} points={points} stroke="#666666" strokeWidth={2 / scale} />
+            <Line key={`a-${i}`} points={points} stroke="#52525b" strokeWidth={1.5 / scale} />
           ))}
-          <Text x={8 / scale} y={4 / scale} text="0,0" fontSize={12 / scale} fill="#999" />
+          <Text x={8 / scale} y={4 / scale} text="0,0" fontSize={12 / scale} fill="#71717a" />
         </Layer>
 
         <Layer>

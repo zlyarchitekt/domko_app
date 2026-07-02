@@ -1,5 +1,6 @@
 "use client";
 
+import { Plus, X } from "lucide-react";
 import { useSession } from "../state/SessionContext";
 
 const APARTMENT_TYPES = ["M1", "M2", "M3", "M4", "M5"];
@@ -22,8 +23,8 @@ export default function ProgramSection() {
   const balance = footprintArea > 0 ? (programArea / footprintArea) * 100 : 0;
 
   return (
-    <section className="space-y-2 border-b border-neutral-700 pb-4">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Program mieszkań</h2>
+    <section className="space-y-2.5 rounded-xl border border-zinc-800/70 bg-zinc-950/40 p-3">
+      <h2 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Program mieszkań</h2>
 
       <div className="space-y-1.5">
         {state.program.map((row) => (
@@ -31,7 +32,7 @@ export default function ProgramSection() {
             <select
               value={row.type}
               onChange={(e) => updateProgramRow(row.id, { type: e.target.value })}
-              className="rounded bg-neutral-800 px-1.5 py-1 text-xs text-neutral-100"
+              className="rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-1.5 py-1 text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none"
             >
               {APARTMENT_TYPES.map((t) => (
                 <option key={t} value={t}>
@@ -45,24 +46,24 @@ export default function ProgramSection() {
               value={row.target_count}
               onChange={(e) => updateProgramRow(row.id, { target_count: Number(e.target.value) })}
               title="Liczba"
-              className="w-14 rounded bg-neutral-800 px-1.5 py-1 text-xs text-neutral-100"
+              className="w-14 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-1.5 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none"
             />
-            <span className="text-xs text-neutral-500">×</span>
+            <span className="text-xs text-zinc-600">×</span>
             <input
               type="number"
               min={1}
               value={row.min_area_m2}
               onChange={(e) => updateProgramRow(row.id, { min_area_m2: Number(e.target.value) })}
               title="Docelowa powierzchnia m²"
-              className="w-16 rounded bg-neutral-800 px-1.5 py-1 text-xs text-neutral-100"
+              className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-1.5 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none"
             />
-            <span className="text-xs text-neutral-500">m²</span>
+            <span className="text-xs text-zinc-600">m²</span>
             <button
               onClick={() => removeProgramRow(row.id)}
-              className="ml-auto rounded px-1.5 py-1 text-xs text-neutral-500 hover:bg-neutral-700 hover:text-red-400"
+              className="ml-auto rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-red-500/10 hover:text-red-400"
               aria-label="Usuń"
             >
-              ✕
+              <X size={13} />
             </button>
           </div>
         ))}
@@ -70,27 +71,28 @@ export default function ProgramSection() {
 
       <button
         onClick={addProgramRow}
-        className="w-full rounded bg-neutral-700 px-2 py-1 text-xs text-neutral-100 hover:bg-neutral-600"
+        className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-zinc-800/70 px-2 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700/70"
       >
-        + Dodaj typ mieszkania
+        <Plus size={13} />
+        Dodaj typ mieszkania
       </button>
 
-      <div className="rounded bg-neutral-800 px-3 py-2 text-xs">
-        <div className="flex justify-between text-neutral-300">
+      <div className="space-y-1 rounded-lg bg-zinc-900/70 px-3 py-2.5 text-xs">
+        <div className="flex justify-between text-zinc-400">
           <span>Program</span>
-          <span>{programArea.toFixed(1)} m²</span>
+          <span className="font-mono text-zinc-200">{programArea.toFixed(1)} m²</span>
         </div>
-        <div className="flex justify-between text-neutral-300">
+        <div className="flex justify-between text-zinc-400">
           <span>Obrys</span>
-          <span>{footprintArea.toFixed(1)} m²</span>
+          <span className="font-mono text-zinc-200">{footprintArea.toFixed(1)} m²</span>
         </div>
         <div
-          className={`mt-1 flex justify-between font-medium ${
-            balance > 95 ? "text-red-400" : balance > 80 ? "text-yellow-400" : "text-green-400"
+          className={`flex justify-between border-t border-zinc-800 pt-1 font-medium ${
+            balance > 95 ? "text-red-400" : balance > 80 ? "text-amber-400" : "text-emerald-400"
           }`}
         >
           <span>Bilans</span>
-          <span>{balance.toFixed(0)}%</span>
+          <span className="font-mono">{balance.toFixed(0)}%</span>
         </div>
       </div>
     </section>

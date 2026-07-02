@@ -1,5 +1,5 @@
 import { useSession } from "../state/SessionContext";
-import { Download, FileJson, FileType2, FileText } from "lucide-react";
+import { FileJson, FileType2, FileText } from "lucide-react";
 import * as api from "../lib/api";
 import { useState } from "react";
 
@@ -99,34 +99,36 @@ export function ExportSection() {
   };
 
   return (
-    <div className="space-y-4">
-      <h3 className="text-lg font-bold">Eksport i Raportowanie</h3>
-      <p className="text-sm text-gray-500">Zapisz wyniki pracy lokalnie lub wygeneruj raport PDF.</p>
-      
-      <div className="grid grid-cols-1 gap-2">
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-zinc-100">Eksport i raportowanie</h3>
+        <p className="mt-0.5 text-xs text-zinc-500">Zapisz wyniki pracy lokalnie lub wygeneruj raport PDF.</p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-1.5">
         <button
           onClick={handleExportJson}
           disabled={!canExport || loading !== null}
-          className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded disabled:opacity-50"
+          className="flex items-center justify-center gap-2 rounded-lg bg-zinc-800/70 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-700/70 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          <FileJson className="w-4 h-4" />
+          <FileJson size={14} />
           {loading === "json" ? "Trwa..." : "Pobierz projekt (JSON)"}
         </button>
         <button
           onClick={handleExportDxf}
           disabled={!canExport || loading !== null}
-          className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded disabled:opacity-50"
+          className="flex items-center justify-center gap-2 rounded-lg bg-zinc-800/70 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-700/70 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          <FileType2 className="w-4 h-4" />
+          <FileType2 size={14} />
           {loading === "dxf" ? "Trwa..." : "Eksportuj obrysy (DXF)"}
         </button>
         <button
           onClick={handleExportPdf}
           disabled={!canExport || loading !== null}
-          className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50"
+          className="flex items-center justify-center gap-2 rounded-lg bg-accent-500 px-3 py-2 text-xs font-medium text-white transition-all hover:bg-accent-400 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
         >
-          <FileText className="w-4 h-4" />
-          {loading === "pdf" ? "Trwa generowanie..." : "Generuj Raport (PDF)"}
+          <FileText size={14} />
+          {loading === "pdf" ? "Trwa generowanie..." : "Generuj raport (PDF)"}
         </button>
       </div>
     </div>

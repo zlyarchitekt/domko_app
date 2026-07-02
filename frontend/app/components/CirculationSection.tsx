@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { Move } from "lucide-react";
 import { useSession } from "../state/SessionContext";
 import { CagePosition } from "../lib/api";
 
@@ -39,25 +40,25 @@ export default function CirculationSection() {
   }, [state.footprint]);
 
   return (
-    <section className="space-y-2 border-b border-neutral-700 pb-4">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Komunikacja</h2>
+    <section className="space-y-2.5 rounded-xl border border-zinc-800/70 bg-zinc-950/40 p-3">
+      <h2 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Komunikacja</h2>
 
       {state.typologySuggestion && (
-        <div className="rounded bg-neutral-800 px-3 py-2 text-xs text-neutral-300">
-          <div className="mb-1 text-neutral-400">
+        <div className="rounded-lg bg-zinc-900/70 px-3 py-2 text-xs text-zinc-400">
+          <div className="mb-1">
             Sugerowana typologia:{" "}
-            <span className="font-medium text-blue-300">
+            <span className="font-medium text-accent-400">
               {TYPOLOGY_LABELS[state.typologySuggestion.typology] ?? state.typologySuggestion.typology}
             </span>
           </div>
-          <div className="text-[11px] text-neutral-500">{state.typologySuggestion.rationale}</div>
+          <div className="text-[11px] text-zinc-600">{state.typologySuggestion.rationale}</div>
         </div>
       )}
 
       <select
         value={state.selectedTypology ?? ""}
         onChange={(e) => e.target.value && void applyTypologyPreset(e.target.value)}
-        className="w-full rounded bg-neutral-800 px-2 py-1.5 text-xs text-neutral-100"
+        className="w-full rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1.5 text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none"
       >
         <option value="">— wybierz typologię (opcjonalnie) —</option>
         {Object.entries(TYPOLOGY_LABELS).map(([key, label]) => (
@@ -68,12 +69,12 @@ export default function CirculationSection() {
         ))}
       </select>
 
-      <label className="flex items-center justify-between text-xs text-neutral-300">
+      <label className="flex items-center justify-between text-xs text-zinc-400">
         Pozycja klatki
         <select
           value={state.circulation.cage_position}
           onChange={(e) => setCirculation({ cage_position: e.target.value as CagePosition })}
-          className="rounded bg-neutral-800 px-2 py-1 text-neutral-100"
+          className="rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 text-zinc-100 focus:border-accent-500/60 focus:outline-none"
         >
           {CAGE_MODES.map((m) => (
             <option key={m.value} value={m.value}>
@@ -83,16 +84,17 @@ export default function CirculationSection() {
         </select>
       </label>
 
-      <label className="flex items-center gap-2 text-xs text-neutral-300">
+      <label className="flex items-center gap-2 text-xs text-zinc-400">
         <input
           type="checkbox"
           checked={state.circulation.place_cage}
           onChange={(e) => setCirculation({ place_cage: e.target.checked })}
+          className="h-3.5 w-3.5 rounded border-zinc-600 bg-zinc-800 text-accent-500 focus:ring-accent-500/40 focus:ring-offset-0"
         />
         Umieść klatkę schodową
       </label>
 
-      <label className="flex items-center justify-between text-xs text-neutral-300">
+      <label className="flex items-center justify-between text-xs text-zinc-400">
         Wymiar klatki (m)
         <input
           type="number"
@@ -100,11 +102,11 @@ export default function CirculationSection() {
           min={1}
           value={state.circulation.cage_size_m}
           onChange={(e) => setCirculation({ cage_size_m: Number(e.target.value) })}
-          className="w-16 rounded bg-neutral-800 px-2 py-1 text-neutral-100"
+          className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 font-mono text-zinc-100 focus:border-accent-500/60 focus:outline-none"
         />
       </label>
 
-      <label className="flex items-center justify-between text-xs text-neutral-300">
+      <label className="flex items-center justify-between text-xs text-zinc-400">
         Szerokość korytarza (m)
         <input
           type="number"
@@ -112,33 +114,38 @@ export default function CirculationSection() {
           min={0.9}
           value={state.circulation.corridor_width_m}
           onChange={(e) => setCirculation({ corridor_width_m: Number(e.target.value) })}
-          className="w-16 rounded bg-neutral-800 px-2 py-1 text-neutral-100"
+          className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 font-mono text-zinc-100 focus:border-accent-500/60 focus:outline-none"
         />
       </label>
 
-      <div className="flex flex-col gap-2 pt-1">
+      <div className="flex flex-col gap-1.5 pt-1">
         <button
           onClick={() => void runPlaceCirculation()}
           disabled={!state.footprint || state.isLoading}
-          className="w-full rounded bg-blue-700 px-3 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-40"
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent-500 px-3 py-2 text-xs font-medium text-white transition-all hover:bg-accent-400 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
         >
-          {state.isLoading ? "Umieszczam..." : "1. Umieść korytarz i klatkę"}
+          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-white/20 text-[10px]">1</span>
+          {state.isLoading ? "Umieszczam..." : "Umieść korytarz i klatkę"}
         </button>
         <button
           onClick={() => void runSubdivideUnits()}
           disabled={!state.circulationResult || state.isLoading}
-          className="w-full rounded bg-blue-700 px-3 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-40"
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent-500 px-3 py-2 text-xs font-medium text-white transition-all hover:bg-accent-400 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
         >
-          {state.isLoading ? "Dzielę..." : "2. Podziel na mieszkania"}
+          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-white/20 text-[10px]">2</span>
+          {state.isLoading ? "Dzielę..." : "Podziel na mieszkania"}
         </button>
         <button
           onClick={() => setMode(state.mode === "edit-circulation" ? "idle" : "edit-circulation")}
           disabled={!state.circulationResult}
-          className={`rounded px-2 py-1.5 text-sm disabled:opacity-40 ${
-            state.mode === "edit-circulation" ? "bg-blue-600 text-white" : "bg-neutral-700 text-neutral-100 hover:bg-neutral-600"
+          className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-30 ${
+            state.mode === "edit-circulation"
+              ? "bg-accent-500/20 text-accent-400 ring-1 ring-inset ring-accent-500/30"
+              : "bg-zinc-800/70 text-zinc-300 hover:bg-zinc-700/70"
           }`}
           title={!state.circulationResult ? "Wymaga umieszczenia korytarza/klatki" : "Przeciągnij korytarz/klatkę"}
         >
+          <Move size={13} />
           Przesuń komunikację
         </button>
       </div>

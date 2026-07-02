@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { PenLine, MousePointer2, GitCommitHorizontal, UploadCloud, Check } from "lucide-react";
 import { useSession } from "../state/SessionContext";
 
 function polygonArea(points: { x: number; y: number }[]): number {
@@ -34,36 +35,45 @@ export default function FootprintSection() {
   };
 
   return (
-    <section className="space-y-2 border-b border-neutral-700 pb-4">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">Obrys</h2>
+    <section className="space-y-2.5 rounded-xl border border-zinc-800/70 bg-zinc-950/40 p-3">
+      <h2 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Obrys</h2>
 
-      <div className="flex gap-2">
+      <div className="flex gap-1.5">
         <button
           onClick={() => setMode(state.mode === "draw" ? "idle" : "draw")}
-          className={`flex-1 rounded px-2 py-1.5 text-sm ${
-            state.mode === "draw" ? "bg-blue-600 text-white" : "bg-neutral-700 text-neutral-100 hover:bg-neutral-600"
+          className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${
+            state.mode === "draw"
+              ? "bg-accent-500/20 text-accent-400 ring-1 ring-inset ring-accent-500/30"
+              : "bg-zinc-800/70 text-zinc-300 hover:bg-zinc-700/70"
           }`}
         >
-          {state.mode === "draw" ? "Rysuję… (dwuklik = zamknij)" : "Rysuj obrys"}
+          <PenLine size={13} />
+          {state.mode === "draw" ? "Rysuję…" : "Rysuj obrys"}
         </button>
         <button
           onClick={() => setMode(state.mode === "edit-vertices" ? "idle" : "edit-vertices")}
           disabled={!state.footprint}
-          className={`rounded px-2 py-1.5 text-sm disabled:opacity-40 ${
-            state.mode === "edit-vertices" ? "bg-blue-600 text-white" : "bg-neutral-700 text-neutral-100 hover:bg-neutral-600"
+          className={`flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-30 ${
+            state.mode === "edit-vertices"
+              ? "bg-accent-500/20 text-accent-400 ring-1 ring-inset ring-accent-500/30"
+              : "bg-zinc-800/70 text-zinc-300 hover:bg-zinc-700/70"
           }`}
           title={!state.footprint ? "Wymaga narysowania obrysu" : "Edytuj węzły obrysu"}
         >
+          <MousePointer2 size={13} />
           Węzły
         </button>
         <button
           onClick={() => setMode(state.mode === "edit-lines" ? "idle" : "edit-lines")}
           disabled={!state.layoutResult}
-          className={`rounded px-2 py-1.5 text-sm disabled:opacity-40 ${
-            state.mode === "edit-lines" ? "bg-blue-600 text-white" : "bg-neutral-700 text-neutral-100 hover:bg-neutral-600"
+          className={`flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-30 ${
+            state.mode === "edit-lines"
+              ? "bg-accent-500/20 text-accent-400 ring-1 ring-inset ring-accent-500/30"
+              : "bg-zinc-800/70 text-zinc-300 hover:bg-zinc-700/70"
           }`}
           title={!state.layoutResult ? "Wymaga wygenerowanego układu z komunikacją" : "Przesuwaj linie podziału mieszkań"}
         >
+          <GitCommitHorizontal size={13} />
           Linie
         </button>
       </div>
@@ -71,8 +81,9 @@ export default function FootprintSection() {
       {state.mode === "draw" && state.drawingPoints.length >= 3 && (
         <button
           onClick={() => void finishDrawing()}
-          className="w-full rounded bg-green-700 px-2 py-1.5 text-sm text-white hover:bg-green-600"
+          className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-600/90 px-2 py-1.5 text-xs font-medium text-white transition-colors hover:bg-emerald-500"
         >
+          <Check size={13} />
           Zamknij obrys ({state.drawingPoints.length} pkt)
         </button>
       )}
@@ -89,10 +100,11 @@ export default function FootprintSection() {
           void handleFile(e.dataTransfer.files?.[0]);
         }}
         onClick={() => fileInputRef.current?.click()}
-        className={`cursor-pointer rounded border border-dashed px-3 py-4 text-center text-xs ${
-          dragOver ? "border-blue-400 bg-blue-950/30 text-blue-200" : "border-neutral-600 text-neutral-400"
+        className={`flex cursor-pointer flex-col items-center gap-1.5 rounded-lg border border-dashed px-3 py-4 text-center text-[11px] transition-colors ${
+          dragOver ? "border-accent-400 bg-accent-500/10 text-accent-200" : "border-zinc-700/70 text-zinc-500 hover:border-zinc-600 hover:text-zinc-400"
         }`}
       >
+        <UploadCloud size={16} strokeWidth={1.5} />
         Upuść plik .dxf lub kliknij, aby wybrać
         <input
           ref={fileInputRef}
@@ -104,13 +116,13 @@ export default function FootprintSection() {
       </div>
 
       {state.footprint && (
-        <div className="space-y-1 rounded bg-neutral-800 px-3 py-2 text-xs text-neutral-300">
-          <div className="flex justify-between font-medium text-neutral-100">
+        <div className="space-y-1.5 rounded-lg bg-zinc-900/70 px-3 py-2.5 text-xs text-zinc-400">
+          <div className="flex justify-between font-medium text-zinc-100">
             <span>Powierzchnia</span>
-            <span>{area.toFixed(1)} m²</span>
+            <span className="font-mono">{area.toFixed(1)} m²</span>
           </div>
-          <div className="text-neutral-400">Boki:</div>
-          <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+          <div className="text-[10px] uppercase tracking-wide text-zinc-600">Boki</div>
+          <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 font-mono text-[11px] text-zinc-400">
             {lengths.map((len, i) => (
               <span key={i}>
                 #{i + 1}: {len.toFixed(2)} m
