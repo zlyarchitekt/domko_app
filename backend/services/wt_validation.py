@@ -31,6 +31,13 @@ MIN_APARTMENT_AREA_M2 = 25.0  # §94 ust. 1 — kawalerka / bezwzględne minimum
 MIN_ROOM_WIDTH_M = 2.4  # §94 ust. 2
 MIN_CORRIDOR_WIDTH_M = 1.4  # §64 (przy drzwiach; 1.2m w prześwitach — nie modelowane osobno)
 MIN_STAIR_WIDTH_M = 1.2  # §68 ust. 1 — bieg schodowy / szerokość klatki w tym uproszczonym modelu
+
+MIN_CAGE_FACADE_CONTACT_M = 2.4
+"""Styk klatki z elewacją zewnętrzną (dla naturalnego doświetlenia) —
+UWAGA: to NIE jest wymóg WT, żaden paragraf WT nie wymaga styku klatki z
+elewacją. Czysto opcjonalna heurystyka jakościowa — sprawdzana tylko gdy
+wywołujący jawnie o to poprosi (validate_layout_wt(require_cage_facade_
+contact=True)), domyślnie wyłączona i zawsze traktowana jako "nie dotyczy"."""
 DEFAULT_MAX_CORRIDOR_DISTANCE_M = 30.0  # §58 ust. 4 — komunikacja jednostronna
 CORRIDOR_GRID_STEP_M = 0.5  # plan.md §4.4 — siatka do Dijkstry
 
@@ -63,6 +70,7 @@ def validate_layout_wt(
     layout: LayoutResult,
     local_law: str | None = None,
     max_corridor_distance_m: float | None = None,
+    require_cage_facade_contact: bool = False,
 ) -> WTValidationResult:
     """Sprawdza układ pod kątem reguł WT §94/§64/§68/§58.
 
@@ -70,6 +78,10 @@ def validate_layout_wt(
     dziś nie ma udokumentowanych w planie wyjątków lokalnych dla tych
     konkretnych paragrafów, w przeciwieństwie do §13 ust.2 dla zabudowy
     śródmiejskiej, obsługiwanego w solar_analysis.py).
+
+    `require_cage_facade_contact` włącza opcjonalną (nie-WT) heurystykę
+    styku klatki z elewacją — domyślnie wyłączona, patrz
+    MIN_CAGE_FACADE_CONTACT_M.
     """
     max_distance = max_corridor_distance_m or DEFAULT_MAX_CORRIDOR_DISTANCE_M
 
@@ -80,6 +92,7 @@ def validate_layout_wt(
     rules.append(_rule_stair_width(layout))
     rules.append(_rule_max_corridor_distance(layout, max_distance))
     rules.append(_rule_circulation_utilization(layout))
+    rules.append(_rule_cage_facade_contact(layout, require_cage_facade_contact))
 
     issues = [r.detail for r in rules if not r.passed]
     passed_count = sum(1 for r in rules if r.passed)
@@ -165,6 +178,40 @@ def _rule_stair_width(layout: LayoutResult) -> WTRule:
         else f"Szerokość klatki {width:.2f} m < {MIN_STAIR_WIDTH_M} m (WT §68 ust. 1)."
     )
     return WTRule(code="§68 ust.1", description="Min. szerokość klatki schodowej", passed=passed, detail=detail)
+
+
+def _rule_cage_facade_contact(layout: LayoutResult, required: bool) -> WTRule:
+    """Opcjonalna (NIE-WT) heurystyka: styk klatki z elewacją zewnętrzną dla
+    naturalnego doświetlenia. Sprawdzana tylko gdy `required=True` — inaczej
+    zawsze "nie dotyczy", żeby nie sugerować nieistniejącego wymogu prawnego."""
+    description = "Styk klatki z elewacją (opcjonalne doświetlenie, nie WT)"
+    if not required:
+        return WTRule(
+            code="heurystyka",
+            description=description,
+            passed=True,
+            detail="Opcja doświetlenia klatki nie została włączona — reguła nie dotyczy.",
+        )
+    if not layout.cage_polygons:
+        return WTRule(
+            code="heurystyka",
+            description=description,
+            passed=True,
+            detail="Brak klatki schodowej w układzie — reguła nie dotyczy.",
+        )
+    failing: list[str] = []
+    for i, cage in enumerate(layout.cage_polygons):
+        contact = cage.boundary.intersection(layout.footprint.boundary)
+        length = 0.0 if contact.is_empty else contact.length
+        if length < MIN_CAGE_FACADE_CONTACT_M:
+            failing.append(f"klatka #{i + 1}: styk {length:.2f} m < {MIN_CAGE_FACADE_CONTACT_M} m")
+    passed = not failing
+    detail = (
+        f"Wszystkie klatki stykają się z elewacją na min. {MIN_CAGE_FACADE_CONTACT_M} m (opcja doświetlenia)."
+        if passed
+        else "Niewystarczający styk z elewacją (opcja doświetlenia): " + "; ".join(failing)
+    )
+    return WTRule(code="heurystyka", description=description, passed=passed, detail=detail)
 
 
 def _rule_max_corridor_distance(layout: LayoutResult, max_distance_m: float) -> WTRule:

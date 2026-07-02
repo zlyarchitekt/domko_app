@@ -47,7 +47,11 @@ def test_validate_full_layout_returns_wt_rules_and_communication():
     data = response.json()
     assert isinstance(data["score"], int)
     assert 0 <= data["score"] <= 100
-    assert len(data["wt_rules"]) == 6
+    # 7 rules: the 6 original codes below + a 2nd "heurystyka" rule
+    # (optional cage-facade-contact daylighting check, off by default) —
+    # same code as circulation_utilization's existing "heurystyka" rule,
+    # so the CODE set stays 6 unique values even though the rule COUNT is 7.
+    assert len(data["wt_rules"]) == 7
     assert {r["code"] for r in data["wt_rules"]} == {
         "§94 ust.1",
         "§94 ust.2",

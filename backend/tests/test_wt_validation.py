@@ -63,6 +63,50 @@ def test_all_rules_present_and_scored():
     assert result.passed == all(r.passed for r in result.rules)
 
 
+def test_cage_facade_contact_not_checked_by_default():
+    # Not a real WT requirement — off unless the caller explicitly opts in
+    # (require_cage_facade_contact=True). A fully interior cage (no facade
+    # contact at all) must still pass when the option isn't requested.
+    footprint = Polygon([(0, 0), (10, 0), (10, 6), (0, 6)])
+    cage = Polygon([(4, 2), (6, 2), (6, 4), (4, 4)])  # interior, no contact
+    layout = LayoutResult(
+        footprint=footprint, footprint_area_m2=60, circulation_area_m2=0,
+        usable_area_m2=0, apartments=[], leftover=None, zones=[],
+        cage_polygons=[cage],
+    )
+    result = validate_layout_wt(layout)
+    rule = next(r for r in result.rules if "doświetlenie" in r.description.lower())
+    assert rule.passed is True
+    assert "nie zostal" in rule.detail.lower() or "nie zosta" in rule.detail.lower()
+
+
+def test_cage_facade_contact_passes_when_requested_and_cage_touches_facade():
+    footprint = Polygon([(0, 0), (10, 0), (10, 6), (0, 6)])
+    # cage in the corner, touching two facade edges for 2.5m each — well over 2.4m
+    cage = Polygon([(0, 0), (2.5, 0), (2.5, 2.5), (0, 2.5)])
+    layout = LayoutResult(
+        footprint=footprint, footprint_area_m2=60, circulation_area_m2=0,
+        usable_area_m2=0, apartments=[], leftover=None, zones=[],
+        cage_polygons=[cage],
+    )
+    result = validate_layout_wt(layout, require_cage_facade_contact=True)
+    rule = next(r for r in result.rules if "doświetlenie" in r.description.lower())
+    assert rule.passed is True
+
+
+def test_cage_facade_contact_fails_when_requested_and_cage_is_interior():
+    footprint = Polygon([(0, 0), (10, 0), (10, 6), (0, 6)])
+    cage = Polygon([(4, 2), (6, 2), (6, 4), (4, 4)])  # fully interior
+    layout = LayoutResult(
+        footprint=footprint, footprint_area_m2=60, circulation_area_m2=0,
+        usable_area_m2=0, apartments=[], leftover=None, zones=[],
+        cage_polygons=[cage],
+    )
+    result = validate_layout_wt(layout, require_cage_facade_contact=True)
+    rule = next(r for r in result.rules if "doświetlenie" in r.description.lower())
+    assert rule.passed is False
+
+
 def test_apartment_area_rule_fails_for_tiny_apartments():
     tiny_apt = ApartmentCell(id="tiny", type="studio", polygon=Polygon([(0, 0), (3, 0), (3, 3), (0, 3)]))
     layout = _layout(SQUARE_20, apartments=[])
