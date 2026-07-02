@@ -501,7 +501,15 @@ def _summarize_apartments(
         entry["min_hours"] = round(entry["min_hours"], 2)
         entry["max_hours"] = round(entry["max_hours"], 2)
         entry["total_length_m"] = round(entry["total_length_m"], 2)
-        entry["wt_passed"] = entry["min_hours"] >= required_hours
+        # WT §13 ust. 1 requires at least ONE room/facade to meet the sun-hour
+        # threshold, not every facade (plan.md §4.6: "wystarczy że co najmniej
+        # 1 pokój w mieszkaniu spełnia warunek"). Using min_hours here required
+        # ALL facades to individually pass, silently reporting a real WT-compliant
+        # apartment (e.g. one passing west-facing facade + one failing north
+        # one) as non-compliant -- inconsistent with the frontend canvas's own
+        # per-apartment coloring (CanvasEditor.tsx: `solFa.some(f => f.meets_wt)`),
+        # which already used the correct "any" rule.
+        entry["wt_passed"] = entry["max_hours"] >= required_hours
         result.append(entry)
 
     return result
