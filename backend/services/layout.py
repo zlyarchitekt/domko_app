@@ -101,6 +101,11 @@ class ApartmentCell:
     id: str
     type: str
     polygon: Polygon
+    area_tolerance_exceeded: bool = False
+    """True if this cell's area deviates from its program spec's min_area_m2
+    by more than the ±3% tolerance (Finch-inspired, see fit_program_to_
+    rectangles in services/unit_mix.py). Default False for cells built by
+    paths that don't track this (e.g. manual apartment edits)."""
 
 
 @dataclass
