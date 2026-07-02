@@ -3,9 +3,11 @@ import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from shapely.geometry import Polygon
+from shapely.geometry import shape as _shape
 
 from services.circulation import CAGE_POSITION_MODES, place_circulation
 from services.layout import ApartmentSpec, LayoutInput, LayoutResult, generate_layout
+from services.unit_mix import subdivide_units
 from services.wt_validation import WTValidationResult, validate_layout_wt
 
 router = APIRouter()
@@ -224,6 +226,50 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
         ),
         cage_geometries=[json.loads(json.dumps(c.__geo_interface__)) for c in result.cage_polygons],
         remainder=json.loads(json.dumps(result.remainder.__geo_interface__)),
+    )
+
+
+class UnitsRequest(BaseModel):
+    remainder: dict
+    apartments: list[ApartmentProgram] = Field(default_factory=list)
+
+
+class UnitsResponse(BaseModel):
+    apartments: list[ApartmentResult]
+    leftover: dict | None = None
+
+
+@router.post("/units", response_model=UnitsResponse)
+def subdivide_units_endpoint(request: UnitsRequest):
+    """Etap 2 osobno (docs/superpowers/specs/2026-07-02-layout-engine-redesign-design.md)."""
+    try:
+        remainder = _shape(request.remainder)
+        if remainder.is_empty or not remainder.is_valid:
+            raise ValueError("remainder geometry is empty or invalid")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid remainder geometry: {exc}")
+
+    specs = [
+        ApartmentSpec(
+            type=a.type, min_area_m2=a.min_area_m2, target_count=a.target_count,
+            width_m=a.width_m, depth_m=a.depth_m,
+        )
+        for a in request.apartments
+    ]
+
+    cells, leftover = subdivide_units(remainder, specs)
+
+    apartments_out = [
+        ApartmentResult(
+            id=c.id, type=c.type, area_m2=c.polygon.area,
+            geometry=json.loads(json.dumps(c.polygon.__geo_interface__)),
+        )
+        for c in cells
+    ]
+
+    return UnitsResponse(
+        apartments=apartments_out,
+        leftover=json.loads(json.dumps(leftover.__geo_interface__)) if leftover else None,
     )
 
 

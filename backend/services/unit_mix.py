@@ -28,6 +28,10 @@ komórka jest wciąż tworzona (najlepsze dostępne dopasowanie), ale oznaczona
 ApartmentCell.area_tolerance_exceeded=True zamiast cichego zaakceptowania
 dowolnego odchylenia."""
 
+_FEASIBILITY_EPS = 1e-6
+"""Tolerancja zmiennoprzecinkowa przy porównywaniu cut_size z wymiarem
+prostokąta wzdłuż osi cięcia — patrz komentarze w fit_program_to_rectangles."""
+
 
 def fit_program_to_rectangles(
     rectangles: list[Polygon], specs: list[ApartmentSpec]
@@ -80,7 +84,7 @@ def fit_program_to_rectangles(
         for i, spec in enumerate(unused_specs):
             fitted = spec.min_area_m2 / available_depth
             cut_size = max(fitted, MIN_CELL_DIMENSION_M)
-            if cut_size >= along_axis_extent:
+            if cut_size > along_axis_extent + _FEASIBILITY_EPS:
                 # Bug found while implementing this task: cut_size is
                 # ALWAYS a near-perfect (deviation~0) match algebraically,
                 # since cut_size = min_area_m2 / available_depth makes
@@ -91,6 +95,8 @@ def fit_program_to_rectangles(
                 # "win" the best-match selection with deviation=0, then
                 # silently fail in _cut_cell and retire the whole rectangle
                 # as leftover instead of trying a smaller spec that fits.
+                # Strictly-greater (not >=): cut_size == along_axis_extent
+                # is a legitimate exact fit, handled below.
                 continue
             projected_area = cut_size * available_depth
             deviation = abs(projected_area - spec.min_area_m2) / spec.min_area_m2
@@ -106,7 +112,18 @@ def fit_program_to_rectangles(
         fitted = spec.min_area_m2 / available_depth
         cut_size = max(fitted, MIN_CELL_DIMENSION_M)
 
-        cell_poly, rest = _cut_cell(rect, cut_size, horizontal)
+        if cut_size >= along_axis_extent - _FEASIBILITY_EPS:
+            # Exact (or near-exact) fit — the whole rectangle becomes the
+            # cell, no split needed. _cut_cell's own strict `cut_x/cut_y >=
+            # maxx/maxy` boundary check would otherwise reject this (the cut
+            # line lands exactly on the rectangle's far edge, producing no
+            # second fragment), silently discarding a perfectly valid
+            # whole-rectangle cell — e.g. 3 apartments of 40m^2 exactly
+            # filling a 120m^2 strip lost the 3rd apartment to "leftover"
+            # before this fix.
+            cell_poly, rest = rect, None
+        else:
+            cell_poly, rest = _cut_cell(rect, cut_size, horizontal)
         if cell_poly is None or cell_poly.area < 1e-6:
             leftover_parts.append(remaining_rects.pop(idx))
             continue
