@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from shapely.geometry import Polygon
 
-from services.circulation import CAGE_POSITION_MODES
+from services.circulation import CAGE_POSITION_MODES, place_circulation
 from services.layout import ApartmentSpec, LayoutInput, LayoutResult, generate_layout
 from services.wt_validation import WTValidationResult, validate_layout_wt
 
@@ -184,6 +184,47 @@ def _decompose_to_polygons(geom: Polygon | None) -> list[dict]:
             if part.geom_type == "Polygon"
         ]
     return []
+
+
+class CirculationResponse(BaseModel):
+    circulation_geometry: dict | None = None
+    cage_geometries: list[dict] = []
+    remainder: dict
+
+
+@router.post("/circulation", response_model=CirculationResponse)
+def place_circulation_endpoint(request: LayoutGenerateRequest):
+    """Etap 1 osobno (docs/superpowers/specs/2026-07-02-layout-engine-redesign-design.md)."""
+    try:
+        footprint = _points_to_polygon(request.footprint)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    circulation = request.circulation
+    if circulation.cage_position not in CAGE_POSITION_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid cage_position '{circulation.cage_position}'. Valid: {CAGE_POSITION_MODES}",
+        )
+
+    result = place_circulation(
+        footprint,
+        corridor_width_m=circulation.corridor_width_m,
+        stair_width_m=circulation.stair_width_m,
+        place_cage=circulation.place_cage,
+        cage_size_m=circulation.cage_size_m,
+        cage_position=circulation.cage_position,
+    )
+
+    return CirculationResponse(
+        circulation_geometry=(
+            json.loads(json.dumps(result.circulation_geometry.__geo_interface__))
+            if result.circulation_geometry is not None
+            else None
+        ),
+        cage_geometries=[json.loads(json.dumps(c.__geo_interface__)) for c in result.cage_polygons],
+        remainder=json.loads(json.dumps(result.remainder.__geo_interface__)),
+    )
 
 
 class SplitRequest(BaseModel):
