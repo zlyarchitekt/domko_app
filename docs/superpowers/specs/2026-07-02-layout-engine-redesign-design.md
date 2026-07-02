@@ -8,7 +8,7 @@ Rozdział "Pokoje" (Finch Moduł 4 — adaptacyjne rzuty wewnętrzne, solver Cas
 
 ---
 
-## 1. Architektura — dwa jawne etapy
+## 1. Architektura — dwa jawne etapy (skorygowane 2026-07-02, patrz §1a)
 
 Dziś: `generate_layout()` robi wszystko w jednej rekurencyjnej funkcji (`bsp_zones`), z ukrytym założeniem że każda "strefa" jest prostokątem. Nowy podział:
 
@@ -19,19 +19,28 @@ Etap 0 (bez zmian): obrys
 
 Etap 1: place_circulation(footprint, params) → CirculationResult
   backend/services/circulation.py (NOWY plik)
-  - klatka wg trybu 1a/1b/2/3/auto — PRZENIESIONA z layout.py, logika bez zmian
-    (_edge_cage, _centered_cage, _corner_cage_convex, corner_cage dla wklęsłych)
-  - korytarz: footprint.buffer(-corridor_width_m) → footprint.difference(offset)
-    → pas wzdłuż wnętrza obrysu, przycięty po stronie klatki (patrz §3)
-  - wynik: circulation_geometry (Polygon|MultiPolygon), cage_polygons, 
-    remainder (Polygon|MultiPolygon — przestrzeń zostająca na mieszkania,
-    MOŻE BYĆ wklęsła/wieloczęściowa, to jest oczekiwane, nie błąd)
+  1. zones = rectangle_decompose(footprint)  (patrz §3)
+     — REALNA dekompozycja obrysu (także wklęsłego) na prawie-prostokątne
+       strefy. To jest właściwa naprawa dzisiejszego buga — bsp_zones cicho
+       zostawiał strefy wciąż wklęsłe.
+  2. dla każdej strefy: klatka wg trybu 1a/1b/2/3/auto — PRZENIESIONA
+     z layout.py, logika bez zmian (_edge_cage, _centered_cage,
+     _corner_cage_convex, corner_cage dla wklęsłych)
+  3. dla każdej strefy: korytarz — dzisiejsza technika linii środkowej
+     bounding-boxa strefy (`_build_corridor`), PRZENIESIONA bez zmian logiki.
+     Działa poprawnie, bo strefa jest już prawie-prostokątna po kroku 1 —
+     korytarz NIGDY nie był tym, co było zepsute (patrz §1a).
+  - wynik: circulation_geometry (unia korytarzy wszystkich stref,
+    Polygon|MultiPolygon), cage_polygons, remainder (unia pozostałości
+    wszystkich stref po klatce+korytarzu — MOŻE BYĆ wklęsła/wieloczęściowa,
+    to jest oczekiwane, drugi etap sobie z tym radzi)
 
 Etap 2: subdivide_units(remainder, apartment_specs) → UnitMixResult
   backend/services/unit_mix.py (NOWY plik)
-  2a. rectangle_decompose(remainder) → list[Polygon]  (patrz §4)
-      — realna dekompozycja wielokąta (także wklęsłego) na prostokąty,
-        zastępuje fikcyjną obsługę wklęsłości w bsp_zones
+  2a. rectangle_decompose(remainder) → list[Polygon]  (ta sama funkcja co
+      Etap 1 krok 1 — pozostałość per strefa powinna już być prosta pasem
+      przed/za korytarzem, ale asymetryczne umieszczenie klatki może
+      lokalnie zostawić coś nieprostokątnego; funkcja to sprząta)
   2b. fit_program_to_rectangles(rectangles, specs) → list[ApartmentCell], leftover
       — knapsack/DP zamiast dzisiejszego sekwencyjnego FIFO (patrz §5)
 
@@ -40,6 +49,20 @@ generate_layout() (ZOSTAJE, jako wrapper):
   units = subdivide_units(circulation.remainder, ...)
   return LayoutResult(...)  # dokładnie ten sam kształt co dziś
 ```
+
+### 1a. Korekta względem pierwszej wersji tego specu
+
+Pierwsza wersja proponowała korytarz jako `footprint.buffer(-width)` (pas
+wzdłuż CAŁEGO obwodu obrysu). **To było architektonicznie błędne** —
+sprawdzone wobec `typologies.md`: dla klatkowca wzdłużnego dałoby to pas
+grubości ~1,5m dookoła wszystkich krawędzi, z którego trzeba by wyciąć
+mieszkania — mieszkanie potrzebuje ~6-8m głębokości, nie 1,5m. Realny wzorzec
+("korytarz przez środek, mieszkania z przodu i z tyłu") wymaga korytarza jako
+osi przez ŚRODEK strefy, nie pierścienia po obwodzie — dokładnie tak jak
+robi to dzisiejsze `_build_corridor()`. Ta funkcja nigdy nie była właściwą
+przyczyną błędów; błędne były strefy, które dostawała na wejściu (z
+zepsutego `bsp_zones`). Naprawa: `rectangle_decompose` (nowa, realna
+dekompozycja) zamiast nowej geometrii korytarza.
 
 **Dlaczego wrapper, nie usunięcie starego kontraktu:** `optimizer.py` (`_run_lp_branch`/`_run_ga_branch`) i `/api/v1/layout/generate` potrzebują pełnego wyniku za jednym wywołaniem — przeszukiwanie wariantów w optymalizatorze zostaje nietknięte. Frontend, solar_analysis.py, wt_validation.py, export_* konsumują `LayoutResult` — jego kształt (pola, typy) **nie zmienia się**.
 
@@ -52,39 +75,15 @@ generate_layout() (ZOSTAJE, jako wrapper):
 | `POST /api/v1/layout/generate` | **ZOSTAJE** | Wrapper wołający oba etapy po kolei — używany przez optymalizator i jako "szybka ścieżka" (np. przy imporcie DXF, gdy użytkownik nie chce ręcznie korygować kroków). |
 | `POST /api/v1/layout/split` | bez zmian, ale naprawiony | `split_polygon_by_edge` (bsp.py) dostaje tę samą, solidną dekompozycję z §4 zamiast dzisiejszego gubienia powierzchni dla >2 przecięć. |
 
-## 3. Etap 1 — korytarz jako offset (nie bounding-box)
+## 3. Wspólny prymityw — dekompozycja na prostokąty (rectangle_decompose)
 
-Zastępuje `_build_corridor()` (dziś: prostokąt z bounding-boxa strefy — działa tylko dla prostokątów).
+Używana w Etapie 1 (na surowym obrysie) i Etapie 2a (na pozostałości po korytarzu/klatce) — jedna funkcja, dwa miejsca użycia. Zastępuje fikcyjną obsługę wklęsłości w `bsp_zones()` (dziś: wycina stały nibble 1×1m z pierwszego wklęsłego wierzchołka, często zostawiając resztę wciąż wklęsłą).
 
-```python
-def _corridor_band(footprint: Polygon, width: float) -> Polygon | MultiPolygon:
-    """Pas komunikacji wzdłuż wnętrza obrysu, szerokości `width`."""
-    inner = footprint.buffer(-width)
-    if inner.is_empty:
-        # obrys za wąski na korytarz o tej szerokości na całym obwodzie —
-        # zwróć całość jako korytarz (brak miejsca na mieszkania to wtedy
-        # realny wynik programu, nie błąd algorytmu)
-        return footprint
-    return footprint.difference(inner)
-```
-
-To wykorzystuje `Polygon.buffer()`/`difference()` — dojrzałe, testowane od lat operacje GEOS, solidne dla obrysów wklęsłych (w przeciwieństwie do custom straight-skeleton, którego świadomie unikamy — uzasadnienie w rozmowie: `polyskel` jest niestabilny właśnie dla wierzchołków wklęsłych, czyli tam gdzie najbardziej nam zależy na poprawności).
-
-**Ograniczenie do jednej strony (tryb klatki):** dla trybów 1a/1b (klatka przy elewacji) pas korytarza jest dalej przycinany do połowy obrysu (od strony klatki) tak jak dziś robi to pośrednio `_build_corridor` przez `cage_polygon.centroid` — logika wyboru strony zostaje, zmienia się tylko GEOMETRIA bazowa korytarza (offset zamiast bboxa).
-
-**Cage placement** (`_place_cage_by_mode` + `_edge_cage`/`_centered_cage`/`_corner_cage_convex`/`corner_cage`) **przenosi się bez zmian logiki** z `layout.py`/`bsp.py` do nowego `circulation.py` — to nie jest zepsute, to jest przenoszone dla porządku (moduł per etap).
-
-`remainder = footprint.difference(unary_union([circulation_geometry] + cage_polygons))` — może być `MultiPolygon`, może mieć wklęsłe części. To jest wejście do Etapu 2.
-
-## 4. Etap 2a — dekompozycja na prostokąty (rectangle_decompose)
-
-Zastępuje fikcyjną obsługę wklęsłości w `bsp_zones()` (dziś: wycina stały nibble 1×1m z pierwszego wklęsłego wierzchołka, często zostawiając resztę wciąż wklęsłą).
-
-Algorytm — **rekurencyjny podział prowadzony po wierzchołkach wklęsłych, nie po stałym rozmiarze klatki**:
+Algorytm — **rekurencyjny podział prowadzony przez realny wierzchołek wklęsły, nie po stałym rozmiarze klatki**:
 
 ```python
 def rectangle_decompose(poly: Polygon) -> list[Polygon]:
-    """Dzieli (możliwie wklęsły) poligon na listę prostokątów."""
+    """Dzieli (możliwie wklęsły) poligon na listę prawie-prostokątnych części."""
     if not concave_vertices(poly):
         # Poligon wypukły. Jeśli to NIE jest dokładnie prostokąt (skośny
         # czworobok po ekstremalnej edycji wierzchołka), zostaje jedną
@@ -93,11 +92,10 @@ def rectangle_decompose(poly: Polygon) -> list[Polygon]:
         # (§5) operuje wtedy na jego bounding-boxie, tak jak dziś.
         return [poly]
     idx, x, y = concave_vertices(poly)[0]
-    # Tnij PROSTĄ przechodzącą przez wierzchołek wklęsły, prostopadle do
-    # jednej z sąsiadujących krawędzi (nie stały nibble 1x1m) — to jest
-    # standardowa technika "rectangular decomposition of rectilinear
-    # polygons przez wierzchołki refleksywne", rozszerzona o rzut na
-    # najbliższą krawędź dla poligonów nie w pełni prostokątnych.
+    # Tnij PROSTĄ przechodzącą przez wierzchołek wklęsły — przedłużenie
+    # jednej z dwóch sąsiadujących krawędzi przez ten wierzchołek w głąb
+    # poligonu (standardowa technika dekompozycji przez wierzchołki
+    # refleksywne), nie stały nibble 1x1m.
     part_a, part_b = split_polygon_by_edge(poly, cut_line_through(poly, idx, x, y))
     return rectangle_decompose(part_a) + rectangle_decompose(part_b)
 ```
@@ -106,9 +104,19 @@ Kluczowa różnica względem dzisiejszego `bsp_zones`: cięcie prowadzone jest *
 
 `split_polygon_by_edge` (bsp.py) dostaje przy okazji naprawę z audytu: obsługę >2 punktów przecięcia (dziś ucina do pierwszego/ostatniego i gubi powierzchnię) oraz przypadku kolinearnego (dziś ignorowany, GEOS-owy analog dzisiejszego buga solarnego) — używając tej samej techniki dystans-do-prostej + rzut parametryczny, którą naprawiłem dziś w `solar_analysis.py`.
 
+## 4. Etap 1 — strefy → klatka → korytarz (bez nowej geometrii korytarza)
+
+Po `rectangle_decompose(footprint)` (§3) mamy listę prawie-prostokątnych stref. Dla każdej:
+
+**Cage placement** (`_place_cage_by_mode` + `_edge_cage`/`_centered_cage`/`_corner_cage_convex`/`corner_cage`) **przenosi się bez zmian logiki** z `layout.py`/`bsp.py` do nowego `circulation.py` — to nie jest zepsute, to jest przenoszone dla porządku (moduł per etap).
+
+**Korytarz** — `_build_corridor()` **przenosi się bez zmian logiki** (linia środkowa bounding-boxa strefy, przycięta do strony klatki dla trybów 1a/1b przez `cage_polygon.centroid`). Działa poprawnie, bo strefa jest już prawie-prostokątna dzięki §3 — to jest właśnie korekta z §1a: korytarz nigdy nie wymagał nowej geometrii, wymagał tylko poprawnych stref na wejściu.
+
+`remainder = unary_union(strefa.difference(unary_union([korytarz_strefy] + klatki_strefy)) dla każdej strefy)` — może być `MultiPolygon`, może mieć lokalnie wklęsłe części (np. przy asymetrycznym umieszczeniu klatki). To jest wejście do Etapu 2a.
+
 ## 5. Etap 2b — dopasowanie programu (fit_program_to_rectangles)
 
-Zastępuje dzisiejsze `_slice_apartments`/`_cut_cell` (sekwencyjne, FIFO, trwałe odrzucanie części — bug #6 z audytu).
+Zastępuje dzisiejsze `_slice_apartments` (sekwencyjne, FIFO, trwałe odrzucanie części — bug #6 z audytu). **Reużywa** `_cut_cell` (layout.py, naprawiony dziś — bug depth/width) do samego cięcia pojedynczej komórki — zmienia się tylko WYBÓR, którą specyfikację i który prostokąt ciąć, nie mechanika cięcia.
 
 ```python
 def fit_program_to_rectangles(
@@ -158,7 +166,7 @@ Poza przykładowymi testami (jak dziś) — **testy właściwościowe (property-
 
 - `LayoutResult`, `ApartmentCell`, `Zone` (dataclassy) — bez zmian pól (dodajemy tylko opcjonalne `area_tolerance_exceeded` na `ApartmentCell`, `default=False`, nie łamie istniejących konsumentów). **Wyjątek:** `circulation_geometry` może teraz faktycznie być `MultiPolygon` w praktyce (korytarz-jako-offset wokół wklęsłego obrysu może rozpaść się na kilka części) — typ pola w Pythonie nie jest dziś twardo wymuszany, ale każdy kod czytający to pole (solar_analysis.py, wt_validation.py, eksporty) musi obsłużyć `hasattr(geom, "geoms")` tak jak już robi `_decompose_to_polygons()` w `layout.py`/endpointach — sprawdzić przy implementacji, nie zakładać `Polygon` bez wyjątku.
 - `solar_analysis.py`, `wt_validation.py` (poza nową regułą z §6), `optimizer.py`, `export_*.py`, cały frontend poza sekcją Komunikacja — bez zmian.
-- Stare `bsp_zones()`, `_build_corridor()`, `_slice_apartments()`, `_cut_cell()` — usunięte, zastąpione przez `circulation.py`+`unit_mix.py`. `concave_vertices()`, `corner_cage()`, `split_polygon_by_edge()` (naprawiony) — zostają w `bsp.py`, nadal używane przez nowy kod.
+- `bsp_zones()` — usunięta, zastąpiona przez `rectangle_decompose()` (§3). `_slice_apartments()` — usunięta, zastąpiona przez `fit_program_to_rectangles()` (§5, ale reużywa `_cut_cell` — patrz niżej). `_build_corridor()`, `_place_cage_by_mode()` + warianty (`_edge_cage`/`_centered_cage`/`_corner_cage_convex`) — **przeniesione bez zmian logiki** do `circulation.py` (§4), nie usunięte — nigdy nie były zepsute. `_cut_cell()` (naprawiony dziś, bug depth/width) — **zostaje w layout.py, reużywany przez `fit_program_to_rectangles`** zamiast duplikowania logiki cięcia. `concave_vertices()`, `corner_cage()`, `split_polygon_by_edge()` (naprawiony) — zostają w `bsp.py`, używane przez `rectangle_decompose`.
 - Testy referencyjne dzisiejszych bugów (6×30m → 50m², CW-winding azimuth, wklęsły U/L-kształt) przechodzą na nowy silnik jako regresja.
 
 ## 10. Co świadomie NIE jest w zakresie
