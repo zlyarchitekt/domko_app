@@ -452,44 +452,6 @@ export default function CanvasEditor() {
           )}
 
           {/* Rysowanie w toku */}
-          {/* Przesuwanie linii (edit-lines) */}
-          {state.mode === "edit-lines" && sharedLines.map((sl, i) => {
-            const isVert = sl.orientation === "vertical";
-            const points = [sl.p1.x * METER_PX, -sl.p1.y * METER_PX, sl.p2.x * METER_PX, -sl.p2.y * METER_PX];
-            return (
-              <Group
-                key={sl.id}
-                draggable
-                onDragEnd={(e) => {
-                  const node = e.target;
-                  const dx = node.x();
-                  const dy = node.y();
-                  node.position({ x: 0, y: 0 }); // reset Konva transform
-                  
-                  let newValue = isVert ? sl.p1.x + dx / METER_PX : sl.p1.y - dy / METER_PX;
-                  newValue = snap(newValue);
-                  
-                  const updatedApartments = moveSharedLine(sl, newValue, apartments);
-                  updateApartmentsAndValidate(updatedApartments);
-                }}
-                onMouseEnter={(e) => {
-                  const container = e.target.getStage()?.container();
-                  if (container) container.style.cursor = isVert ? "col-resize" : "row-resize";
-                }}
-                onMouseLeave={(e) => {
-                  const container = e.target.getStage()?.container();
-                  if (container) container.style.cursor = cursor;
-                }}
-              >
-                <Line
-                  points={points}
-                  stroke="#3b82f6"
-                  strokeWidth={6 / scale}
-                  hitStrokeWidth={20 / scale}
-                />
-              </Group>
-            );
-          })}
 
           {drawingCanvasPoints.length > 0 && (
             <Line 
@@ -532,7 +494,15 @@ export default function CanvasEditor() {
           {state.mode === "edit-circulation" && state.circulationResult && (
             <Group
               draggable
+              onDragStart={(e) => {
+                e.cancelBubble = true;
+              }}
               onDragEnd={(e) => {
+                // See the edit-lines Group's onDragEnd above — same Konva
+                // event-bubbling issue: without cancelBubble, the Stage's own
+                // onDragEnd fires afterward with the already-reset (0,0)
+                // position and snaps the whole pannable view to the origin.
+                e.cancelBubble = true;
                 const node = e.target;
                 const dxM = node.x() / METER_PX;
                 const dyM = -node.y() / METER_PX;
@@ -750,6 +720,9 @@ export default function CanvasEditor() {
                   hitStrokeWidth={20}
                   opacity={0.8}
                   draggable
+                  onDragStart={(e) => {
+                    e.cancelBubble = true;
+                  }}
                   onMouseEnter={(e) => {
                     const container = e.target.getStage()?.container();
                     if (container) container.style.cursor = line.orientation === "vertical" ? "ew-resize" : "ns-resize";
@@ -775,6 +748,10 @@ export default function CanvasEditor() {
                     }
                   }}
                   onDragEnd={(e) => {
+                    // See the edit-circulation Group's onDragEnd for why this
+                    // matters: without cancelBubble, this dragend bubbles up
+                    // to the Stage and snaps the whole pannable view.
+                    e.cancelBubble = true;
                     const node = e.target;
                     let newValue = 0;
                     if (line.orientation === "vertical") {
@@ -805,6 +782,9 @@ export default function CanvasEditor() {
                 stroke="#2563eb"
                 strokeWidth={2 / scale}
                 draggable
+                onDragStart={(e) => {
+                  e.cancelBubble = true;
+                }}
                 onDragMove={(e) => {
                   const node = e.target;
                   const snapped = worldToMeters(
@@ -815,6 +795,15 @@ export default function CanvasEditor() {
                   node.y(-snapped.y * METER_PX);
                 }}
                 onDragEnd={(e) => {
+                  // Same Konva bubbling issue as the other draggable nodes in
+                  // this Stage: without this, dragging a footprint vertex
+                  // bubbles dragend to the Stage's own onDragEnd, which reads
+                  // e.target.x()/y() — the VERTEX's raw screen coordinates,
+                  // not the Stage's — and snaps the whole pannable view
+                  // there. This was likely the dominant cause of the reported
+                  // "wyśrodkowanie" complaint, since vertex-dragging is the
+                  // most common canvas interaction.
+                  e.cancelBubble = true;
                   const snapped = worldToMeters(
                     e.target.x() * scale + position.x,
                     e.target.y() * scale + position.y
