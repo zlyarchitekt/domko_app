@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from shapely.geometry import LineString, Polygon
+from shapely.ops import split as shapely_split
+from shapely.ops import unary_union
 
 
 @dataclass(frozen=True)
@@ -64,32 +67,70 @@ def concave_vertices(polygon: Polygon) -> list[tuple[int, float, float]]:
 def split_polygon_by_edge(
     polygon: Polygon, p1: tuple[float, float], p2: tuple[float, float]
 ) -> tuple[Polygon, Polygon]:
-    """Dzieli poligon prostą przechodzącą przez dwa punkty krawędzi (p1, p2)."""
-    coords = list(polygon.exterior.coords)[:-1]
-    n = len(coords)
-    line = LineString([p1, p2])
-    intersections = set()
-    for i in range(n):
-        edge = LineString([coords[i], coords[(i + 1) % n]])
-        if edge.intersects(line):
-            inter = edge.intersection(line)
-            if not inter.is_empty:
-                if inter.geom_type == "Point":
-                    intersections.add((round(inter.x, 6), round(inter.y, 6)))
-                elif inter.geom_type == "MultiPoint":
-                    for pt in inter.geoms:
-                        intersections.add((round(pt.x, 6), round(pt.y, 6)))
-    pts = sorted(intersections)
-    if len(pts) < 2:
+    """Dzieli poligon prostą przechodzącą przez dwa punkty (p1, p2).
+
+    Rozszerza odcinek p1-p2 do prostej przecinającej cały poligon, następnie
+    używa shapely.ops.split — poprawnie obsługuje poligony wklęsłe, w
+    których prosta może przeciąć granicę więcej niż dwa razy (każdy
+    fragment trafia na właściwą stronę wg położenia względem prostej, żadna
+    powierzchnia nie ginie — naprawa buga z audytu 2026-07-02, gdzie
+    poprzednia wersja brała tylko dwa skrajne punkty przecięcia i cicho
+    odrzucała resztę geometrii przez `polygon.difference(cutter.buffer(eps))`).
+    Naprawia też przypadek, gdy linia cięcia jest kolinearna z istniejącą
+    krawędzią (poprzednia wersja obsługiwała tylko przecięcia typu
+    Point/MultiPoint, cicho ignorując LineString — analog buga solarnego
+    naprawionego dziś w services/solar_analysis.py).
+    """
+    minx, miny, maxx, maxy = polygon.bounds
+    diag = math.hypot(maxx - minx, maxy - miny) * 2 + 1.0
+    dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+    length = math.hypot(dx, dy)
+    if length < 1e-9:
+        raise ValueError("Split line points must be distinct")
+    ux, uy = dx / length, dy / length
+    ext_a = (p1[0] - ux * diag, p1[1] - uy * diag)
+    ext_b = (p2[0] + ux * diag, p2[1] + uy * diag)
+    cutter = LineString([ext_a, ext_b])
+
+    # Reject lines that don't actually pass through/touch the polygon in
+    # their GIVEN (unextended) form — the extended cutter almost always
+    # intersects any bounded polygon (it's infinite), so that check alone
+    # would silently accept nonsensical split lines drawn nowhere near the
+    # footprint (e.g. a UI split-line the user drew off to the side).
+    if not LineString([p1, p2]).intersects(polygon):
         raise ValueError("Split line does not intersect polygon boundary in two distinct points")
-    cutter = LineString([pts[0], pts[-1]])
-    parts = polygon.difference(cutter.buffer(1e-9))
-    if parts.geom_type == "Polygon":
-        return parts, Polygon()
-    geoms = list(parts.geoms)
-    if len(geoms) < 2:
+
+    try:
+        result = shapely_split(polygon, cutter)
+    except Exception as exc:
+        raise ValueError(f"Could not split polygon: {exc}") from exc
+
+    geoms = [g for g in result.geoms if g.geom_type == "Polygon" and g.area > 1e-9]
+    if not geoms:
+        raise ValueError("Split line does not intersect polygon boundary in two distinct points")
+    if len(geoms) == 1:
+        # Cutter didn't actually divide the interior (e.g. collinear with an
+        # existing edge, tangent to the boundary) — degenerate but not an
+        # error: whole polygon, empty second part, no area lost.
+        return geoms[0], Polygon()
+
+    # Normal to the cutting line — used to decide which side each resulting
+    # fragment is on (there can be more than one fragment per side for a
+    # concave polygon; they get unioned together).
+    nx_, ny_ = -uy, ux
+
+    def side(g: Polygon) -> float:
+        c = g.centroid
+        return (c.x - p1[0]) * nx_ + (c.y - p1[1]) * ny_
+
+    left = [g for g in geoms if side(g) >= 0]
+    right = [g for g in geoms if side(g) < 0]
+    if not left or not right:
         raise ValueError("Split did not produce two polygons")
-    return geoms[0], geoms[1]
+
+    part_a = unary_union(left) if len(left) > 1 else left[0]
+    part_b = unary_union(right) if len(right) > 1 else right[0]
+    return part_a, part_b
 
 
 def corner_cage(polygon: Polygon, corner: tuple[float, float], size: float = 1.0) -> Polygon:

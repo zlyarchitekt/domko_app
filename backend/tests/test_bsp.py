@@ -3,7 +3,13 @@ from fastapi.testclient import TestClient
 from shapely.geometry import Polygon
 
 from main import app
-from services.bsp import bsp_zones, concave_vertices, corner_cage, is_concave
+from services.bsp import (
+    bsp_zones,
+    concave_vertices,
+    corner_cage,
+    is_concave,
+    split_polygon_by_edge,
+)
 from services.polygon_input import points_to_polygon
 
 client = TestClient(app)
@@ -78,3 +84,28 @@ def test_bsp_cage_endpoint():
     data = response.json()
     assert data["corner"] == [5.0, 5.0]
     assert data["cage"]["type"] == "Polygon"
+
+
+def test_split_polygon_by_edge_concave_does_not_lose_area():
+    # "U"/tub shape: legs at x=0-2 and x=10-12 (full height 0-8), notch open
+    # at the top between x=2..10, y=6..8. 80 m^2 total.
+    u_shape = Polygon([
+        (0, 0), (12, 0), (12, 8), (10, 8), (10, 6), (2, 6), (2, 8), (0, 8),
+    ])
+    assert u_shape.area == 80.0
+    # Horizontal cut through the notch at y=7 crosses the boundary 4 times
+    # (both legs of the U plus both sides of the top notch).
+    part_a, part_b = split_polygon_by_edge(u_shape, (-1, 7), (13, 7))
+    assert abs((part_a.area + part_b.area) - u_shape.area) < 1e-6
+
+
+def test_split_polygon_by_edge_collinear_with_existing_edge():
+    square = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+    # Cut line lies exactly on the top edge (y=10) — must not silently
+    # drop this as "no valid split", nor lose area.
+    part_a, part_b = split_polygon_by_edge(square, (0, 10), (10, 10))
+    # A cut along the boundary itself degenerates to (whole, empty) or
+    # raises — either is acceptable as long as no area is silently lost
+    # and no exception other than ValueError propagates.
+    total = part_a.area + part_b.area
+    assert abs(total - square.area) < 1e-6 or total == 0.0
