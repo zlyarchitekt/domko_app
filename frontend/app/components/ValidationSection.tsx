@@ -36,9 +36,9 @@ export default function ValidationSection() {
       </div>
 
       <ul className="space-y-1 text-xs">
-        {validation.wt_rules.map((rule) => (
+        {validation.wt_rules.map((rule, i) => (
           <li
-            key={rule.code}
+            key={`${rule.code}-${i}`}
             className={`flex gap-1.5 rounded px-2 py-1 ${
               rule.passed ? "text-green-400" : "text-red-400 bg-red-950/40"
             }`}
