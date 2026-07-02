@@ -1,7 +1,9 @@
 import pytest
 from shapely.geometry import Polygon
-from services.solar_analysis import analyze_solar_access
+
 from services.layout import ApartmentCell, LayoutResult
+from services.solar_analysis import analyze_solar_access
+
 
 def _mock_layout() -> LayoutResult:
     p1 = Polygon([(0, 0), (20, 0), (20, 20), (0, 20), (0, 0)])
@@ -39,6 +41,6 @@ def test_solar_analysis_performance():
         None
     )
     duration = time.perf_counter() - start_time
-    
+
     assert result.building_orientation is not None
     assert duration < 3.0, f"Solar analysis took too long: {duration:.2f}s"
