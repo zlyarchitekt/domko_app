@@ -57,19 +57,32 @@ DOMKO_APP to narzędzie do wstępnego projektowania układu kondygnacji budynku 
 - [ ] Podgląd skali (obrys + wymiary w metrach)
 - [ ] Możliwość edycji wierzchołków po imporcie
 
-#### Moduł B — Program i automatyczny podział na mieszkania
+#### Moduł B — Komunikacja (korytarz + klatka schodowa)
+> **Historia:** ten moduł biegnie jako **Etap 1** (patrz §4.1) — przed
+> podziałem na mieszkania w module C, nie po nim. Kolejność modułów B/C w
+> tym pliku była odwrócona względem faktycznego algorytmu do 2026-07-02
+> (§4.1 opisywał poprawną kolejność, ale ten checklist — nie); poprawione.
+
+- [ ] Automatyczne umieszczenie klatki i korytarza przez algorytm (Etap 1 — `place_circulation()`, poprzedza podział na mieszkania w module C)
+- [ ] Możliwość ręcznego przesunięcia / zmiany wymiarów klatki po auto-umieszczeniu
+- [ ] Walidacja styku: każde mieszkanie musi dzielić co najmniej jeden odcinek ściany z korytarzem lub klatką, długość styku minimum 1,2m,
+- [ ] Walidacja wymiarów klatki (według ustawień użytkownika)
+- [ ] Walidacja długości korytarza (według ustawień użytkownika)
+- [ ] Wizualizacja styków (podświetlenie krawędzi z kontaktem)
+
+#### Moduł C — Program i automatyczny podział na mieszkania
 - [ ] **Sidebar parametrów** (zawsze widoczny obok canvasu):
   - Liczba i typy mieszkań (kawalerka (M1), M2, M3, M4, M5+) z docelowymi metrażami
   - Orientacja klatki schodowej (pozycja preferowana: środek / narożnik / konkretna ściana) wymiar klatki (wstępnie 5,7 x 5,2 m ale to ustawiania)
   - Szerokość korytarza (domyślnie 1,4m)
   - Bilans automatyczny: suma programu vs pow. kondygnacji, procent komunikacji
-- [ ] **Automatyczny algorytm podziału** (BSP — Binary Space Partitioning):
-  - Na podstawie programu z sidebaru algorytm generuje propozycję podziału
+- [ ] **Automatyczny algorytm podziału** (Etap 2 — `subdivide_units()`, patrz §4.1):
+  - Na podstawie programu z sidebaru algorytm dzieli **pozostałość po komunikacji** (remainder z modułu B) na mieszkania, nie cały obrys
   - Uwzględnia: minimalne szerokości pomieszczeń, minimalne powierzchnie WT, dostęp do komunikacji
-  - Wynik: kompletny układ z klatką i korytarzem
+  - Wynik: kompletny układ mieszkań dopasowany do już umieszczonej klatki i korytarza
   - Możliwość generowania różnych wariantów, które są oceniane według parametrów (system punktacji)
 - [ ] **Korekta ręczna** po auto-podziale:
-  - Przeciąganie linii podziałowych (drag) skok co 1 cm (0,01m)
+  - Przeciąganie linii podziałowych (drag) skok co 0,5m
   - Zmiana przypisania typu mieszkania do segmentu
   - Przerysowanie wybranego segmentu (delete + redraw)
   - Po każdej korekcie: re-walidacja WT na żywo
@@ -77,14 +90,6 @@ DOMKO_APP to narzędzie do wstępnego projektowania układu kondygnacji budynku 
   - Sygnalizacja kolorem: zielony OK / żółty ostrzeżenie / czerwony błąd
   - Lista błędów w sidebarze (klik → podświetlenie segmentu)
 - [ ] Etykiety na canvasie: numer mieszkania, typ, powierzchnia
-
-#### Moduł C — Komunikacja (korytarz + klatka schodowa)
-- [ ] Automatyczne umieszczenie klatki i korytarza przez algorytm (wynik modułu B)
-- [ ] Możliwość ręcznego przesunięcia / zmiany wymiarów klatki po auto-podziale
-- [ ] Walidacja styku: każde mieszkanie musi dzielić co najmniej jeden odcinek ściany z korytarzem lub klatką, długość styku minimum 1,2m,
-- [ ] Walidacja wymiarów klatki (według ustawień użytkownika)
-- [ ] Walidacja długości korytarza (według ustawień użytkownika)
-- [ ] Wizualizacja styków (podświetlenie krawędzi z kontaktem)
 
 #### Moduł D — Analiza nasłonecznienia
 - [ ] Wybór lokalizacji na mapie (Leaflet + OpenStreetMap) → lat/lng
