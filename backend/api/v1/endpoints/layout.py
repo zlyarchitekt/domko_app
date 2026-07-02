@@ -4,7 +4,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from shapely.geometry import Polygon
 
-from services.layout import CAGE_POSITION_MODES, ApartmentSpec, LayoutInput, LayoutResult, generate_layout
+from services.circulation import CAGE_POSITION_MODES
+from services.layout import ApartmentSpec, LayoutInput, LayoutResult, generate_layout
 from services.wt_validation import WTValidationResult, validate_layout_wt
 
 router = APIRouter()
