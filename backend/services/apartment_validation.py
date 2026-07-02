@@ -22,6 +22,15 @@ from services.wt_validation import (
 
 MIN_ROOM_WIDTH_M = 2.4  # WT §94 ust. 2
 
+MIN_FACADE_FRONTAGE_M = 3.6
+"""Finch §B.2 (adaptowane, nie polskie WT) — min. długość elewacji frontowej
+apartamentu, zapobiega bardzo wąskim mieszkaniom. Ostrzeżenie, nie błąd
+twardy — to heurystyka jakościowa, nie przepis prawa budowlanego."""
+
+MAX_APARTMENT_ASPECT_RATIO = 2.5
+"""Finch §B.2 — max. stosunek głębokości do szerokości mieszkania.
+Ostrzeżenie, ta sama logika co wyżej."""
+
 
 @dataclass
 class ApartmentValidationResult:
@@ -52,6 +61,13 @@ def _apartment_min_width(apt: ApartmentCell) -> float:
     return min(maxx - minx, maxy - miny)
 
 
+def _apartment_aspect_ratio(apt: ApartmentCell) -> float:
+    minx, miny, maxx, maxy = apt.polygon.bounds
+    w, h = maxx - minx, maxy - miny
+    short, long_ = min(w, h), max(w, h)
+    return long_ / short if short > 1e-9 else float("inf")
+
+
 def validate_apartment(
     apt: ApartmentCell, min_area_m2: float | None
 ) -> ApartmentValidationResult:
@@ -75,6 +91,19 @@ def validate_apartment(
     if width < MIN_ROOM_WIDTH_M:
         errors.append(
             f"{apt.id}: szerokość {width:.2f} m < {MIN_ROOM_WIDTH_M} m (WT §94 ust. 2)."
+        )
+
+    if width < MIN_FACADE_FRONTAGE_M:
+        warnings.append(
+            f"{apt.id}: szerokość frontu {width:.2f} m < zalecane {MIN_FACADE_FRONTAGE_M} m "
+            f"(ryzyko zbyt wąskiego mieszkania, heurystyka nie-WT)."
+        )
+
+    ratio = _apartment_aspect_ratio(apt)
+    if ratio > MAX_APARTMENT_ASPECT_RATIO:
+        warnings.append(
+            f"{apt.id}: stosunek głębokość:szerokość {ratio:.2f}:1 > zalecane "
+            f"{MAX_APARTMENT_ASPECT_RATIO}:1 (heurystyka nie-WT)."
         )
 
     return ApartmentValidationResult(

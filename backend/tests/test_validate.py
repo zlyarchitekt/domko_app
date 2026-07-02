@@ -158,3 +158,43 @@ def test_validate_full_layout_with_explicit_geometry():
     assert data["apartments"][0]["apartment_id"] == "apt1"
     assert data["apartments"][0]["area_m2"] == 50.0
 
+
+def test_validate_apartment_warns_on_narrow_facade_frontage():
+    from shapely.geometry import Polygon
+
+    from services.apartment_validation import validate_apartment
+    from services.layout import ApartmentCell
+
+    # 3m wide x 20m deep — facade frontage well under 3.6m
+    apt = ApartmentCell(id="a1", type="M2", polygon=Polygon([(0, 0), (3, 0), (3, 20), (0, 20)]))
+    result = validate_apartment(apt, min_area_m2=None)
+    assert any("front" in w.lower() or "elewacj" in w.lower() for w in result.warnings)
+
+
+def test_validate_apartment_warns_on_excessive_aspect_ratio():
+    from shapely.geometry import Polygon
+
+    from services.apartment_validation import validate_apartment
+    from services.layout import ApartmentCell
+
+    # 4m wide x 15m deep -> ratio 3.75:1, over the 2.5:1 threshold
+    apt = ApartmentCell(id="a1", type="M2", polygon=Polygon([(0, 0), (4, 0), (4, 15), (0, 15)]))
+    result = validate_apartment(apt, min_area_m2=None)
+    assert any("stosun" in w.lower() or "aspect" in w.lower() for w in result.warnings)
+
+
+def test_validate_apartment_no_warning_for_well_proportioned_unit():
+    from shapely.geometry import Polygon
+
+    from services.apartment_validation import validate_apartment
+    from services.layout import ApartmentCell
+
+    # 5m x 9m, area 45, aspect ratio 1.8:1, frontage 5m — all within bounds.
+    # min_area_m2=None sidesteps the unrelated pre-existing "blisko minimum"
+    # warning (fires whenever area is within 5% of min_area_m2 — would
+    # trigger here at exactly 0% deviation and has nothing to do with the
+    # facade-frontage/aspect-ratio checks this test targets).
+    apt = ApartmentCell(id="a1", type="M2", polygon=Polygon([(0, 0), (5, 0), (5, 9), (0, 9)]))
+    result = validate_apartment(apt, min_area_m2=None)
+    assert result.warnings == []
+
