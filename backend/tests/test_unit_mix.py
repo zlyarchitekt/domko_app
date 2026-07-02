@@ -1,7 +1,9 @@
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from shapely.geometry import Polygon
 
 from services.layout import ApartmentSpec
-from services.unit_mix import subdivide_units
+from services.unit_mix import fit_program_to_rectangles, subdivide_units
 
 
 def test_subdivide_units_exact_fit_horizontal():
@@ -59,3 +61,35 @@ def test_subdivide_units_no_specs_returns_all_as_leftover():
     assert cells == []
     assert leftover is not None
     assert abs(leftover.area - 100.0) < 1e-6
+
+
+@given(
+    rect_w=st.floats(min_value=4.0, max_value=40.0),
+    rect_h=st.floats(min_value=4.0, max_value=40.0),
+    target_area=st.floats(min_value=20.0, max_value=100.0),
+    target_count=st.integers(min_value=1, max_value=5),
+)
+@settings(max_examples=100, deadline=None)
+def test_fit_program_never_exceeds_source_area(rect_w, rect_h, target_area, target_count):
+    rect = Polygon([(0, 0), (rect_w, 0), (rect_w, rect_h), (0, rect_h)])
+    specs = [ApartmentSpec(type="M2", min_area_m2=target_area, target_count=target_count)]
+    cells, leftover = fit_program_to_rectangles([rect], specs)
+    total_cells_area = sum(c.polygon.area for c in cells)
+    leftover_area = leftover.area if leftover is not None else 0.0
+    assert total_cells_area + leftover_area <= rect.area + 1e-3
+
+
+@given(
+    rect_w=st.floats(min_value=4.0, max_value=40.0),
+    rect_h=st.floats(min_value=4.0, max_value=40.0),
+    target_area=st.floats(min_value=20.0, max_value=100.0),
+    target_count=st.integers(min_value=1, max_value=5),
+)
+@settings(max_examples=100, deadline=None)
+def test_fit_program_area_conserved(rect_w, rect_h, target_area, target_count):
+    rect = Polygon([(0, 0), (rect_w, 0), (rect_w, rect_h), (0, rect_h)])
+    specs = [ApartmentSpec(type="M2", min_area_m2=target_area, target_count=target_count)]
+    cells, leftover = fit_program_to_rectangles([rect], specs)
+    total_cells_area = sum(c.polygon.area for c in cells)
+    leftover_area = leftover.area if leftover is not None else 0.0
+    assert abs((total_cells_area + leftover_area) - rect.area) < 1e-3
