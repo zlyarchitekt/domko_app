@@ -162,8 +162,16 @@ export default function CanvasEditor() {
 
   const footprint = state.footprint;
   const apartments = useMemo(() => state.layoutResult?.apartments ?? [], [state.layoutResult]);
-  const circulationParts = useMemo(() => state.layoutResult?.circulation_parts ?? [], [state.layoutResult]);
-  const cageGeometries = useMemo(() => state.layoutResult?.cage_geometries ?? [], [state.layoutResult]);
+  const circulationParts = useMemo(() => {
+    if (state.layoutResult) return state.layoutResult.circulation_parts ?? [];
+    if (state.circulationResult?.circulation_geometry) return [state.circulationResult.circulation_geometry];
+    return [];
+  }, [state.layoutResult, state.circulationResult]);
+  const cageGeometries = useMemo(() => {
+    if (state.layoutResult) return state.layoutResult.cage_geometries ?? [];
+    if (state.circulationResult) return state.circulationResult.cage_geometries;
+    return [];
+  }, [state.layoutResult, state.circulationResult]);
 
   const apartmentStatuses = useMemo(
     () => deriveApartmentStatuses(state.layoutResult, state.validation),
@@ -315,7 +323,7 @@ export default function CanvasEditor() {
       ? "crosshair"
       : state.mode === "edit-vertices"
         ? "pointer"
-        : state.mode === "edit-lines"
+        : state.mode === "edit-lines" || state.mode === "edit-circulation"
           ? "move"
           : isPanning
             ? "grabbing"
@@ -369,7 +377,9 @@ export default function CanvasEditor() {
               ? "edycja wierzchołków obrysu"
               : state.mode === "edit-lines"
                 ? "przeciąganie linii podziału mieszkań"
-                : "przesuń: drag / zoom: kółko"}
+                : state.mode === "edit-circulation"
+                  ? "przeciąganie korytarza/klatki"
+                  : "przesuń: drag / zoom: kółko"}
         </div>
       </div>
 
@@ -506,6 +516,41 @@ export default function CanvasEditor() {
               strokeWidth={1.5 / scale}
             />
           ))}
+
+          {/* Przesuwanie korytarza/klatki jako sztywnej bryły (edit-circulation) */}
+          {state.mode === "edit-circulation" && state.circulationResult && (
+            <Group
+              draggable
+              onDragEnd={(e) => {
+                const node = e.target;
+                const dxM = node.x() / METER_PX;
+                const dyM = -node.y() / METER_PX;
+                node.position({ x: 0, y: 0 });
+                dispatch({ type: "TRANSLATE_CIRCULATION", dx: dxM, dy: dyM });
+              }}
+            >
+              {circulationParts.map((geom, i) => (
+                <Line
+                  key={`edit-corridor-${i}`}
+                  points={toCanvasPoints(ringToPoints(geom))}
+                  closed
+                  fill="rgba(211,211,211,0.5)"
+                  stroke="#60a5fa"
+                  strokeWidth={2 / scale}
+                />
+              ))}
+              {cageGeometries.map((geom, i) => (
+                <Line
+                  key={`edit-cage-${i}`}
+                  points={toCanvasPoints(ringToPoints(geom))}
+                  closed
+                  fill="rgba(128,128,128,0.7)"
+                  stroke="#60a5fa"
+                  strokeWidth={2 / scale}
+                />
+              ))}
+            </Group>
+          )}
 
           {/* Mieszkania — kolor wg statusu walidacji (F3-06) lub Solara (F4) */}
           {apartments.map((apt) => {

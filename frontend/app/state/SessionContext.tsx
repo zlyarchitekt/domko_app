@@ -5,7 +5,7 @@ import * as api from "../lib/api";
 
 export type Point2D = { x: number; y: number };
 
-export type EditorMode = "idle" | "draw" | "edit-vertices" | "edit-lines";
+export type EditorMode = "idle" | "draw" | "edit-vertices" | "edit-lines" | "edit-circulation";
 
 export interface ProgramRow {
   id: string;
@@ -96,6 +96,7 @@ type Action =
   | { type: "SET_OPTIMIZER_VARIANTS"; variants: api.OptimizerVariant[] }
   | { type: "SET_ACTIVE_VARIANT"; id: string | null }
   | { type: "SET_IS_OPTIMIZING"; isOptimizing: boolean }
+  | { type: "TRANSLATE_CIRCULATION"; dx: number; dy: number }
   | { type: "RESTORE_STATE"; state: SessionState };
 
 function reducer(state: SessionState, action: Action): SessionState {
@@ -191,6 +192,25 @@ function reducer(state: SessionState, action: Action): SessionState {
     case "SET_OPTIMIZER_VARIANTS": return { ...state, optimizerVariants: action.variants };
     case "SET_ACTIVE_VARIANT": return { ...state, activeVariantId: action.id };
     case "SET_IS_OPTIMIZING": return { ...state, isOptimizing: action.isOptimizing };
+    case "TRANSLATE_CIRCULATION": {
+      if (!state.circulationResult) return state;
+      const { dx, dy } = action;
+      return {
+        ...state,
+        circulationResult: {
+          ...state.circulationResult,
+          circulation_geometry: state.circulationResult.circulation_geometry
+            ? translateGeoJson(state.circulationResult.circulation_geometry, dx, dy)
+            : null,
+          cage_geometries: state.circulationResult.cage_geometries.map((g) => translateGeoJson(g, dx, dy)),
+          // remainder is NOT recomputed client-side here (real polygon.difference
+          // needs a real geometry library) — runSubdivideUnits always uses the
+          // last server-computed remainder from the most recent
+          // runPlaceCirculation call, not a client-recomputed one. Documented
+          // limitation, see runSubdivideUnits below and Task 16 commit message.
+        },
+      };
+    }
     case "RESTORE_STATE": return { ...action.state, isLoading: false, error: null };
     default:
       return state;
@@ -214,6 +234,19 @@ function polygonAreaFromPoints(points: Point2D[]): number {
 function polygonFromGeoJson(geom: api.GeoJsonPolygon): Point2D[] {
   const ring = geom.coordinates[0] ?? [];
   return ring.slice(0, -1).map(([x, y]) => ({ x, y }));
+}
+
+function snapToGrid(v: number): number {
+  return Math.round(v / 0.5) * 0.5;
+}
+
+function translateGeoJson(geom: api.GeoJsonPolygon, dx: number, dy: number): api.GeoJsonPolygon {
+  return {
+    type: geom.type,
+    coordinates: geom.coordinates.map((ring) =>
+      ring.map(([x, y]) => [snapToGrid(x + dx), snapToGrid(y + dy)])
+    ),
+  } as api.GeoJsonPolygon;
 }
 
 interface SessionContextValue {
