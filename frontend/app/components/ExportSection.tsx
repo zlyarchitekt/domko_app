@@ -101,7 +101,7 @@ export function ExportSection() {
   return (
     <div className="space-y-3">
       <div>
-        <h3 className="text-sm font-semibold text-zinc-100">Eksport i raportowanie</h3>
+        <h3 className="text-sm font-semibold text-zinc-100 light:text-zinc-900">Eksport i raportowanie</h3>
         <p className="mt-0.5 text-xs text-zinc-500">Zapisz wyniki pracy lokalnie lub wygeneruj raport PDF.</p>
       </div>
 
@@ -109,7 +109,7 @@ export function ExportSection() {
         <button
           onClick={handleExportJson}
           disabled={!canExport || loading !== null}
-          className="flex items-center justify-center gap-2 rounded-lg bg-zinc-800/70 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-700/70 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex items-center justify-center gap-2 rounded-lg bg-zinc-800/70 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-700/70 disabled:cursor-not-allowed disabled:opacity-40 light:bg-zinc-100 light:text-zinc-700 light:hover:bg-zinc-200"
         >
           <FileJson size={14} />
           {loading === "json" ? "Trwa..." : "Pobierz projekt (JSON)"}
@@ -117,7 +117,7 @@ export function ExportSection() {
         <button
           onClick={handleExportDxf}
           disabled={!canExport || loading !== null}
-          className="flex items-center justify-center gap-2 rounded-lg bg-zinc-800/70 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-700/70 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex items-center justify-center gap-2 rounded-lg bg-zinc-800/70 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-700/70 disabled:cursor-not-allowed disabled:opacity-40 light:bg-zinc-100 light:text-zinc-700 light:hover:bg-zinc-200"
         >
           <FileType2 size={14} />
           {loading === "dxf" ? "Trwa..." : "Eksportuj obrysy (DXF)"}
@@ -125,7 +125,7 @@ export function ExportSection() {
         <button
           onClick={handleExportPdf}
           disabled={!canExport || loading !== null}
-          className="flex items-center justify-center gap-2 rounded-lg bg-accent-500 px-3 py-2 text-xs font-medium text-white transition-all hover:bg-accent-400 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+          className="flex items-center justify-center gap-2 rounded-lg bg-accent-500 px-3 py-2 text-xs font-medium text-white transition-all hover:bg-accent-400 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 light:disabled:bg-zinc-200 light:disabled:text-zinc-400"
         >
           <FileText size={14} />
           {loading === "pdf" ? "Trwa generowanie..." : "Generuj raport (PDF)"}

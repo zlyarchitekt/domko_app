@@ -8,7 +8,7 @@ export default function OptimizerSection() {
   const canOptimize = !!state.footprint && state.program.length > 0;
 
   return (
-    <section className="space-y-2.5 rounded-xl border border-zinc-800/70 bg-zinc-950/40 p-3">
+    <section className="space-y-2.5 rounded-xl border border-zinc-800/70 bg-zinc-950/40 p-3 light:border-zinc-200 light:bg-white">
       <h2 className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
         <Sparkles size={12} className="text-violet-400" />
         Optymalizator układu
@@ -21,7 +21,7 @@ export default function OptimizerSection() {
       <button
         onClick={() => void runOptimizer()}
         disabled={!canOptimize || state.isOptimizing}
-        className="flex w-full items-center justify-center gap-2 rounded-lg bg-violet-600/90 px-3 py-2 text-xs font-medium text-white transition-all hover:bg-violet-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+        className="flex w-full items-center justify-center gap-2 rounded-lg bg-violet-600/90 px-3 py-2 text-xs font-medium text-white transition-all hover:bg-violet-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 light:disabled:bg-zinc-200 light:disabled:text-zinc-400"
       >
         <Sparkles size={13} />
         {state.isOptimizing ? "Optymalizuję..." : "Uruchom optymalizator"}
@@ -41,8 +41,8 @@ export default function OptimizerSection() {
                   onClick={() => setActiveVariant(v.id)}
                   className={`cursor-pointer rounded-lg border p-2.5 text-xs transition-colors ${
                     isActive
-                      ? "border-violet-500/40 bg-violet-500/10 text-violet-100"
-                      : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700"
+                      ? "border-violet-500/40 bg-violet-500/10 text-violet-100 light:text-violet-800"
+                      : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 light:border-zinc-200 light:bg-zinc-50 light:hover:border-zinc-300"
                   }`}
                 >
                   <div className="flex justify-between font-medium">
@@ -66,7 +66,7 @@ export default function OptimizerSection() {
                       e.stopPropagation();
                       applyVariant(v.id);
                     }}
-                    className="mt-2 w-full rounded-md bg-zinc-800/80 px-2 py-1 text-xs text-zinc-200 transition-colors hover:bg-zinc-700"
+                    className="mt-2 w-full rounded-md bg-zinc-800/80 px-2 py-1 text-xs text-zinc-200 transition-colors hover:bg-zinc-700 light:bg-white light:text-zinc-700 light:hover:bg-zinc-100"
                   >
                     Zastosuj ten układ
                   </button>

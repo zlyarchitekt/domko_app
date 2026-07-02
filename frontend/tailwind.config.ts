@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import plugin from "tailwindcss/plugin";
 
 const config: Config = {
   content: [
@@ -27,7 +28,14 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // Default theme is dark (existing unprefixed classes, unchanged).
+    // `light:` overrides apply when an ancestor carries the `.light` class,
+    // toggled by SessionContext's theme state — see app/state/SessionContext.tsx.
+    plugin(({ addVariant }) => {
+      addVariant("light", ":where(.light, .light *) &");
+    }),
+  ],
 };
 
 export default config;

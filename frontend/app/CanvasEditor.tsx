@@ -161,6 +161,27 @@ export default function CanvasEditor() {
   // Stan do tooltipa
   const [hoveredFacade, setHoveredFacade] = useState<{ x: number, y: number, text: string } | null>(null);
 
+  // Konva shape fills/strokes are literal hex props, not Tailwind classes, so
+  // theme-following them needs its own small palette instead of `light:`.
+  const canvasColors =
+    state.theme === "light"
+      ? {
+          bg: "#f4f4f5",
+          grid: "#e4e4e7",
+          axis: "#a1a1aa",
+          axisText: "#71717a",
+          outline: "#18181b",
+          outlineFill: "rgba(24,24,27,0.04)",
+        }
+      : {
+          bg: "#0c0c10",
+          grid: "#232329",
+          axis: "#52525b",
+          axisText: "#71717a",
+          outline: "#ffffff",
+          outlineFill: "rgba(255,255,255,0.05)",
+        };
+
   const footprint = state.footprint;
   const apartments = useMemo(() => state.layoutResult?.apartments ?? [], [state.layoutResult]);
   const circulationParts = useMemo(() => {
@@ -368,9 +389,9 @@ export default function CanvasEditor() {
           });
       }}
     >
-      <div className="pointer-events-none absolute left-4 top-4 z-10 flex items-center gap-2 rounded-xl border border-zinc-800/80 bg-zinc-900/70 px-3 py-2 text-[11px] text-zinc-400 shadow-panel backdrop-blur-xl">
-        <span className="rounded-md bg-zinc-800/80 px-1.5 py-0.5 font-mono text-zinc-300">{scale.toFixed(2)}x</span>
-        <span className="h-3 w-px bg-zinc-700" />
+      <div className="pointer-events-none absolute left-4 top-4 z-10 flex items-center gap-2 rounded-xl border border-zinc-800/80 bg-zinc-900/70 px-3 py-2 text-[11px] text-zinc-400 shadow-panel backdrop-blur-xl light:border-zinc-200 light:bg-white/80">
+        <span className="rounded-md bg-zinc-800/80 px-1.5 py-0.5 font-mono text-zinc-300 light:bg-zinc-100 light:text-zinc-700">{scale.toFixed(2)}x</span>
+        <span className="h-3 w-px bg-zinc-700 light:bg-zinc-300" />
         <span>
           {state.mode === "draw"
             ? "rysowanie · klik = punkt, dwuklik = zamknij"
@@ -384,11 +405,11 @@ export default function CanvasEditor() {
         </span>
       </div>
 
-      <div className="absolute right-4 top-4 z-10 flex gap-1.5 rounded-xl border border-zinc-800/80 bg-zinc-900/70 p-1.5 shadow-panel backdrop-blur-xl">
+      <div className="absolute right-4 top-4 z-10 flex gap-1.5 rounded-xl border border-zinc-800/80 bg-zinc-900/70 p-1.5 shadow-panel backdrop-blur-xl light:border-zinc-200 light:bg-white/80">
         <button
           onClick={fitToScreen}
           title="Fit to screen"
-          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800 light:text-zinc-700 light:hover:bg-zinc-100"
         >
           <Maximize2 size={13} />
           Fit
@@ -396,7 +417,7 @@ export default function CanvasEditor() {
         <button
           onClick={resetView}
           title="Reset"
-          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800 light:text-zinc-700 light:hover:bg-zinc-100"
         >
           <RotateCcw size={13} />
           Reset
@@ -423,20 +444,20 @@ export default function CanvasEditor() {
         style={{ cursor }}
       >
         <Layer>
-          <Rect x={-worldSize / 2} y={-worldSize / 2} width={worldSize} height={worldSize} fill="#0c0c10" />
+          <Rect x={-worldSize / 2} y={-worldSize / 2} width={worldSize} height={worldSize} fill={canvasColors.bg} />
         </Layer>
 
         <Layer>
           {gridLines.map((points, i) => (
-            <Line key={`g-${i}`} points={points} stroke="#232329" strokeWidth={1 / scale} />
+            <Line key={`g-${i}`} points={points} stroke={canvasColors.grid} strokeWidth={1 / scale} />
           ))}
         </Layer>
 
         <Layer>
           {axisLines.map((points, i) => (
-            <Line key={`a-${i}`} points={points} stroke="#52525b" strokeWidth={1.5 / scale} />
+            <Line key={`a-${i}`} points={points} stroke={canvasColors.axis} strokeWidth={1.5 / scale} />
           ))}
-          <Text x={8 / scale} y={4 / scale} text="0,0" fontSize={12 / scale} fill="#71717a" />
+          <Text x={8 / scale} y={4 / scale} text="0,0" fontSize={12 / scale} fill={canvasColors.axisText} />
         </Layer>
 
         <Layer>
@@ -445,9 +466,9 @@ export default function CanvasEditor() {
             <Line
               points={footprintCanvasPoints}
               closed
-              stroke="#ffffff"
+              stroke={canvasColors.outline}
               strokeWidth={2 / scale}
-              fill={apartments.length === 0 ? "rgba(255,255,255,0.05)" : undefined}
+              fill={apartments.length === 0 ? canvasColors.outlineFill : undefined}
             />
           )}
 

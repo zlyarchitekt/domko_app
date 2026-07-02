@@ -26,7 +26,7 @@ export default function RootLayout({
   return (
     <html lang="pl">
       <body
-        className={`${spaceGrotesk.variable} ${plexMono.variable} h-screen w-screen overflow-hidden bg-zinc-950 font-sans text-white antialiased`}
+        className={`${spaceGrotesk.variable} ${plexMono.variable} h-screen w-screen overflow-hidden bg-zinc-950 font-sans text-white antialiased light:bg-zinc-100 light:text-zinc-900`}
       >
         {children}
       </body>

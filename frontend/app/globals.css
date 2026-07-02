@@ -25,6 +25,13 @@
     background-clip: padding-box;
   }
 
+  html.light ::-webkit-scrollbar-thumb {
+    background: rgb(212 212 216 / 0.9); /* zinc-300 */
+  }
+  html.light ::-webkit-scrollbar-thumb:hover {
+    background: rgb(161 161 170 / 0.9); /* zinc-400 */
+  }
+
   input[type="number"]::-webkit-inner-spin-button,
   input[type="number"]::-webkit-outer-spin-button {
     opacity: 0.35;

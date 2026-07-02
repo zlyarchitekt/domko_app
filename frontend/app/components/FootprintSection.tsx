@@ -35,7 +35,7 @@ export default function FootprintSection() {
   };
 
   return (
-    <section className="space-y-2.5 rounded-xl border border-zinc-800/70 bg-zinc-950/40 p-3">
+    <section className="space-y-2.5 rounded-xl border border-zinc-800/70 bg-zinc-950/40 p-3 light:border-zinc-200 light:bg-white">
       <h2 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Obrys</h2>
 
       <div className="flex gap-1.5">
@@ -44,7 +44,7 @@ export default function FootprintSection() {
           className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${
             state.mode === "draw"
               ? "bg-accent-500/20 text-accent-400 ring-1 ring-inset ring-accent-500/30"
-              : "bg-zinc-800/70 text-zinc-300 hover:bg-zinc-700/70"
+              : "bg-zinc-800/70 text-zinc-300 hover:bg-zinc-700/70 light:bg-zinc-100 light:text-zinc-700 light:hover:bg-zinc-200"
           }`}
         >
           <PenLine size={13} />
@@ -56,7 +56,7 @@ export default function FootprintSection() {
           className={`flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-30 ${
             state.mode === "edit-vertices"
               ? "bg-accent-500/20 text-accent-400 ring-1 ring-inset ring-accent-500/30"
-              : "bg-zinc-800/70 text-zinc-300 hover:bg-zinc-700/70"
+              : "bg-zinc-800/70 text-zinc-300 hover:bg-zinc-700/70 light:bg-zinc-100 light:text-zinc-700 light:hover:bg-zinc-200"
           }`}
           title={!state.footprint ? "Wymaga narysowania obrysu" : "Edytuj węzły obrysu"}
         >
@@ -69,7 +69,7 @@ export default function FootprintSection() {
           className={`flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-30 ${
             state.mode === "edit-lines"
               ? "bg-accent-500/20 text-accent-400 ring-1 ring-inset ring-accent-500/30"
-              : "bg-zinc-800/70 text-zinc-300 hover:bg-zinc-700/70"
+              : "bg-zinc-800/70 text-zinc-300 hover:bg-zinc-700/70 light:bg-zinc-100 light:text-zinc-700 light:hover:bg-zinc-200"
           }`}
           title={!state.layoutResult ? "Wymaga wygenerowanego układu z komunikacją" : "Przesuwaj linie podziału mieszkań"}
         >
@@ -101,7 +101,9 @@ export default function FootprintSection() {
         }}
         onClick={() => fileInputRef.current?.click()}
         className={`flex cursor-pointer flex-col items-center gap-1.5 rounded-lg border border-dashed px-3 py-4 text-center text-[11px] transition-colors ${
-          dragOver ? "border-accent-400 bg-accent-500/10 text-accent-200" : "border-zinc-700/70 text-zinc-500 hover:border-zinc-600 hover:text-zinc-400"
+          dragOver
+            ? "border-accent-400 bg-accent-500/10 text-accent-200 light:text-accent-700"
+            : "border-zinc-700/70 text-zinc-500 hover:border-zinc-600 hover:text-zinc-400 light:border-zinc-300 light:hover:border-zinc-400 light:hover:text-zinc-600"
         }`}
       >
         <UploadCloud size={16} strokeWidth={1.5} />
@@ -116,8 +118,8 @@ export default function FootprintSection() {
       </div>
 
       {state.footprint && (
-        <div className="space-y-1.5 rounded-lg bg-zinc-900/70 px-3 py-2.5 text-xs text-zinc-400">
-          <div className="flex justify-between font-medium text-zinc-100">
+        <div className="space-y-1.5 rounded-lg bg-zinc-900/70 px-3 py-2.5 text-xs text-zinc-400 light:bg-zinc-100">
+          <div className="flex justify-between font-medium text-zinc-100 light:text-zinc-900">
             <span>Powierzchnia</span>
             <span className="font-mono">{area.toFixed(1)} m²</span>
           </div>

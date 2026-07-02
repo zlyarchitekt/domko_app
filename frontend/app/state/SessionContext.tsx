@@ -35,6 +35,7 @@ interface SessionState {
   optimizerVariants: api.OptimizerVariant[];
   activeVariantId: string | null;
   isOptimizing: boolean;
+  theme: "dark" | "light";
 }
 
 const initialCirculation: api.CirculationSpecInput = {
@@ -66,6 +67,7 @@ const initialState: SessionState = {
   optimizerVariants: [],
   activeVariantId: null,
   isOptimizing: false,
+  theme: "dark",
 };
 
 type Action =
@@ -96,6 +98,7 @@ type Action =
   | { type: "SET_OPTIMIZER_VARIANTS"; variants: api.OptimizerVariant[] }
   | { type: "SET_ACTIVE_VARIANT"; id: string | null }
   | { type: "SET_IS_OPTIMIZING"; isOptimizing: boolean }
+  | { type: "SET_THEME"; theme: "dark" | "light" }
   | { type: "TRANSLATE_CIRCULATION"; dx: number; dy: number }
   | { type: "RESTORE_STATE"; state: SessionState };
 
@@ -192,6 +195,7 @@ function reducer(state: SessionState, action: Action): SessionState {
     case "SET_OPTIMIZER_VARIANTS": return { ...state, optimizerVariants: action.variants };
     case "SET_ACTIVE_VARIANT": return { ...state, activeVariantId: action.id };
     case "SET_IS_OPTIMIZING": return { ...state, isOptimizing: action.isOptimizing };
+    case "SET_THEME": return { ...state, theme: action.theme };
     case "TRANSLATE_CIRCULATION": {
       if (!state.circulationResult) return state;
       const { dx, dy } = action;
@@ -276,6 +280,7 @@ interface SessionContextValue {
   runOptimizer: () => Promise<void>;
   setActiveVariant: (id: string | null) => void;
   applyVariant: (id: string) => void;
+  toggleTheme: () => void;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -299,6 +304,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     const toSave = { ...state, isLoading: false, error: null };
     localStorage.setItem("domko_session", JSON.stringify(toSave));
   }, [state]);
+
+  // Drives the `light:` Tailwind variant (see tailwind.config.ts) via a
+  // `.light` class on <html> — layout.tsx is a server component so it
+  // can't read the persisted theme itself, hence the client-side sync here.
+  useEffect(() => {
+    document.documentElement.classList.toggle("light", state.theme === "light");
+  }, [state.theme]);
 
   const setMode = useCallback((mode: EditorMode) => dispatch({ type: "SET_MODE", mode }), []);
   const addDrawPoint = useCallback((point: Point2D) => dispatch({ type: "ADD_DRAW_POINT", point }), []);
@@ -367,6 +379,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const setAnalysisDate = useCallback((date: string) => dispatch({ type: "SET_ANALYSIS_DATE", date }), []);
   const setIsDowntown = useCallback((isDowntown: boolean) => dispatch({ type: "SET_IS_DOWNTOWN", isDowntown }), []);
   const setActiveVariant = useCallback((id: string | null) => dispatch({ type: "SET_ACTIVE_VARIANT", id }), []);
+  const toggleTheme = useCallback(() => {
+    dispatch({ type: "SET_THEME", theme: state.theme === "dark" ? "light" : "dark" });
+  }, [state.theme]);
 
   const buildRequest = useCallback(
     (footprint: Point2D[]): api.LayoutGenerateRequest => ({
@@ -635,6 +650,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       runOptimizer,
       setActiveVariant,
       applyVariant,
+      toggleTheme,
     }),
     [
       state,
@@ -662,6 +678,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       runOptimizer,
       setActiveVariant,
       applyVariant,
+      toggleTheme,
     ]
   );
 
