@@ -1,43 +1,167 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Stage, Layer, Line, Rect, Text } from "react-konva";
+import { Stage, Layer, Line, Rect, Text, Circle, Group } from "react-konva";
+import type { KonvaEventObject } from "konva/lib/Node";
 import { Stage as StageType } from "konva/lib/Stage";
-import { BSP_COLORS, BspResult, getApartmentFill, getApartmentStroke } from "./bsp/types";
-
+import { useSession, Point2D } from "./state/SessionContext";
+import { deriveApartmentStatuses } from "./lib/deriveStatus";
+import { GeoJsonPolygon } from "./lib/api";
+import * as api from "./lib/api";
 const METER_PX = 50; // base scale: 1m = 50px
+const SNAP_M = 0.01; // F1-04: snap do siatki co 1cm
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-interface CanvasEditorProps {
-  bspResult?: BspResult;
+function snap(value: number): number {
+  return Math.round(value / SNAP_M) * SNAP_M;
 }
 
-export default function CanvasEditor({ bspResult }: CanvasEditorProps) {
+function ringToPoints(geom: GeoJsonPolygon): Point2D[] {
+  const ring = geom.coordinates[0] ?? [];
+  return ring.slice(0, -1).map(([x, y]) => ({ x, y }));
+}
+
+const STATUS_COLORS: Record<string, { fill: string; stroke: string }> = {
+  ok: { fill: "rgba(74, 222, 128, 0.35)", stroke: "#22c55e" },
+  warning: { fill: "rgba(250, 204, 21, 0.35)", stroke: "#eab308" },
+  error: { fill: "rgba(248, 113, 113, 0.4)", stroke: "#ef4444" },
+};
+
+interface SharedLine {
+  id: string;
+  aptAId: string;
+  aptBId: string;
+  p1: Point2D;
+  p2: Point2D;
+  orientation: "vertical" | "horizontal";
+}
+
+function findSharedLines(apartments: any[]): SharedLine[] {
+  const list: SharedLine[] = [];
+  const processed = new Set<string>();
+
+  for (let i = 0; i < apartments.length; i++) {
+    for (let j = i + 1; j < apartments.length; j++) {
+      const aptA = apartments[i];
+      const aptB = apartments[j];
+      
+      const ringA = (aptA.geometry.coordinates[0] ?? []).slice(0, -1).map(([x, y]: any) => ({ x, y }));
+      const ringB = (aptB.geometry.coordinates[0] ?? []).slice(0, -1).map(([x, y]: any) => ({ x, y }));
+
+      for (let idxA = 0; idxA < ringA.length; idxA++) {
+        const pA1 = ringA[idxA];
+        const pA2 = ringA[(idxA + 1) % ringA.length];
+
+        for (let idxB = 0; idxB < ringB.length; idxB++) {
+          const pB1 = ringB[idxB];
+          const pB2 = ringB[(idxB + 1) % ringB.length];
+
+          const dist1 = Math.hypot(pA1.x - pB2.x, pA1.y - pB2.y) + Math.hypot(pA2.x - pB1.x, pA2.y - pB1.y);
+          const dist2 = Math.hypot(pA1.x - pB1.x, pA1.y - pB1.y) + Math.hypot(pA2.x - pB2.x, pA2.y - pB2.y);
+          
+          if (dist1 < 0.1 || dist2 < 0.1) {
+            const dx = Math.abs(pA1.x - pA2.x);
+            const dy = Math.abs(pA1.y - pA2.y);
+            const orientation = dx < dy ? "vertical" : "horizontal";
+
+            const key = [aptA.id, aptB.id, pA1.x.toFixed(2), pA1.y.toFixed(2), pA2.x.toFixed(2), pA2.y.toFixed(2)].sort().join("-");
+            if (!processed.has(key)) {
+              processed.add(key);
+              list.push({
+                id: key,
+                aptAId: aptA.id,
+                aptBId: aptB.id,
+                p1: pA1,
+                p2: pA2,
+                orientation,
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+  return list;
+}
+
+function moveSharedLine(
+  sharedLine: SharedLine,
+  newValue: number,
+  apartments: any[]
+): any[] {
+  return apartments.map((apt) => {
+    if (apt.id !== sharedLine.aptAId && apt.id !== sharedLine.aptBId) {
+      return apt;
+    }
+
+    const ring = (apt.geometry.coordinates[0] ?? []).slice(0, -1).map(([x, y]: any) => ({ x, y }));
+    const updatedRing = ring.map((p: Point2D) => {
+      if (sharedLine.orientation === "vertical") {
+        const closeX = Math.abs(p.x - sharedLine.p1.x) < 0.05;
+        const inY = p.y >= Math.min(sharedLine.p1.y, sharedLine.p2.y) - 0.05 && p.y <= Math.max(sharedLine.p1.y, sharedLine.p2.y) + 0.05;
+        if (closeX && inY) {
+          return { x: newValue, y: p.y };
+        }
+      } else {
+        const closeY = Math.abs(p.y - sharedLine.p1.y) < 0.05;
+        const inX = p.x >= Math.min(sharedLine.p1.x, sharedLine.p2.x) - 0.05 && p.x <= Math.max(sharedLine.p1.x, sharedLine.p2.x) + 0.05;
+        if (closeY && inX) {
+          return { x: p.x, y: newValue };
+        }
+      }
+      return p;
+    });
+
+    const coords = updatedRing.map((p: Point2D) => [p.x, p.y]);
+    coords.push([coords[0][0], coords[0][1]]);
+
+    return {
+      ...apt,
+      geometry: {
+        ...apt.geometry,
+        coordinates: [coords],
+      },
+    };
+  });
+}
+
+export default function CanvasEditor() {
+  const { state, addDrawPoint, removeLastDrawPoint, finishDrawing, updateVertex, selectApartment, updateApartmentsAndValidate, dispatch } = useSession();
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType>(null);
 
   const [size, setSize] = useState({ width: 800, height: 600 });
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  
+  // Stan do tooltipa
+  const [hoveredFacade, setHoveredFacade] = useState<{ x: number, y: number, text: string } | null>(null);
 
-  // Set initial position to center of a 20x20m drawing area.
-  const drawingAreaMeters = { width: 20, height: 20 };
-  const originPx = {
-    x: drawingAreaMeters.width * METER_PX,
-    y: drawingAreaMeters.height * METER_PX,
+  const footprint = state.footprint;
+  const apartments = useMemo(() => state.layoutResult?.apartments ?? [], [state.layoutResult]);
+  const circulationParts = useMemo(() => state.layoutResult?.circulation_parts ?? [], [state.layoutResult]);
+  const cageGeometries = useMemo(() => state.layoutResult?.cage_geometries ?? [], [state.layoutResult]);
+
+  const apartmentStatuses = useMemo(
+    () => deriveApartmentStatuses(state.layoutResult, state.validation),
+    [state.layoutResult, state.validation]
+  );
+  const sharedLines = useMemo(() => findSharedLines(apartments), [apartments]);
+
+  const worldToMeters = (canvasX: number, canvasY: number): Point2D => {
+    const worldPxX = (canvasX - position.x) / scale;
+    const worldPxY = (canvasY - position.y) / scale;
+    return { x: snap(worldPxX / METER_PX), y: snap(-worldPxY / METER_PX) };
   };
 
-  const footprint = bspResult?.footprint;
-  const areas = bspResult?.areas ?? [];
-
   const dataBounds = useMemo(() => {
-    const allPoints: { x: number; y: number }[] = [];
+    const allPoints: Point2D[] = [];
     if (footprint) allPoints.push(...footprint);
-    areas.forEach((a) => allPoints.push(...a.points));
+    if (state.drawingPoints.length) allPoints.push(...state.drawingPoints);
     if (allPoints.length === 0) return null;
     const xs = allPoints.map((p) => p.x * METER_PX);
     const ys = allPoints.map((p) => -p.y * METER_PX);
@@ -47,14 +171,11 @@ export default function CanvasEditor({ bspResult }: CanvasEditorProps) {
       minY: Math.min(...ys),
       maxY: Math.max(...ys),
     };
-  }, [footprint, areas]);
+  }, [footprint, state.drawingPoints]);
 
   const boundsCenter = useMemo(() => {
-    if (!dataBounds) return { x: originPx.x, y: originPx.y };
-    return {
-      x: (dataBounds.minX + dataBounds.maxX) / 2,
-      y: (dataBounds.minY + dataBounds.maxY) / 2,
-    };
+    if (!dataBounds) return { x: 0, y: 0 };
+    return { x: (dataBounds.minX + dataBounds.maxX) / 2, y: (dataBounds.minY + dataBounds.maxY) / 2 };
   }, [dataBounds]);
 
   useEffect(() => {
@@ -69,39 +190,27 @@ export default function CanvasEditor({ bspResult }: CanvasEditorProps) {
   }, []);
 
   const initialCentered = useMemo(() => {
-    const x = size.width / 2 - boundsCenter.x;
-    const y = size.height / 2 - boundsCenter.y;
-    return { x, y };
+    return { x: size.width / 2 - boundsCenter.x, y: size.height / 2 - boundsCenter.y };
   }, [size.width, size.height, boundsCenter.x, boundsCenter.y]);
 
-  // Center on first mount / when container size becomes known.
   useEffect(() => {
     setPosition(initialCentered);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialCentered.x, initialCentered.y]);
 
-  const onWheel = (e: {
-    evt: { preventDefault: () => void; deltaY: number; clientX: number; clientY: number };
-  }) => {
+  const onWheel = (e: KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
     const stage = stageRef.current;
     if (!stage) return;
-
     const pointer = stage.getPointerPosition();
     if (!pointer) return;
 
     const oldScale = scale;
     const newScale = clamp(oldScale * (e.evt.deltaY < 0 ? 1.1 : 0.9), 0.1, 20);
-
-    const mousePointTo = {
-      x: (pointer.x - position.x) / oldScale,
-      y: (pointer.y - position.y) / oldScale,
-    };
+    const mousePointTo = { x: (pointer.x - position.x) / oldScale, y: (pointer.y - position.y) / oldScale };
 
     setScale(newScale);
-    setPosition({
-      x: pointer.x - mousePointTo.x * newScale,
-      y: pointer.y - mousePointTo.y * newScale,
-    });
+    setPosition({ x: pointer.x - mousePointTo.x * newScale, y: pointer.y - mousePointTo.y * newScale });
   };
 
   const fitToScreen = () => {
@@ -120,10 +229,7 @@ export default function CanvasEditor({ bspResult }: CanvasEditorProps) {
     }
     const newScale = clamp(Math.min(availW / boundsW, availH / boundsH), 0.05, 20);
     setScale(newScale);
-    setPosition({
-      x: size.width / 2 - boundsCenter.x * newScale,
-      y: size.height / 2 - boundsCenter.y * newScale,
-    });
+    setPosition({ x: size.width / 2 - boundsCenter.x * newScale, y: size.height / 2 - boundsCenter.y * newScale });
   };
 
   const resetView = () => {
@@ -137,8 +243,8 @@ export default function CanvasEditor({ bspResult }: CanvasEditorProps) {
     const step = METER_PX;
     const half = worldSize / 2;
     for (let i = -half; i <= half; i += step) {
-      lines.push([-half, i, half, i]); // horizontal
-      lines.push([i, -half, i, half]); // vertical
+      lines.push([-half, i, half, i]);
+      lines.push([i, -half, i, half]);
     }
     return lines;
   }, []);
@@ -148,61 +254,116 @@ export default function CanvasEditor({ bspResult }: CanvasEditorProps) {
     [0, -worldSize / 2, 0, worldSize / 2],
   ];
 
-  const footprintPoints = useMemo(() => {
-    if (!footprint || footprint.length < 3) return [];
-    return footprint.flatMap((p) => [p.x * METER_PX, -p.y * METER_PX]);
-  }, [footprint]);
+  const toCanvasPoints = (points: Point2D[]) => points.flatMap((p) => [p.x * METER_PX, -p.y * METER_PX]);
 
-  const areaRenderData = useMemo(
-    () =>
-      areas.map((area) => {
-        const pts = area.points.flatMap((p) => [p.x * METER_PX, -p.y * METER_PX]);
-        return {
-          ...area,
-          points: pts,
-          fill:
-            area.type === "apartment"
-              ? getApartmentFill(area.apartmentType)
-              : BSP_COLORS[area.type].fill,
-          stroke:
-            area.type === "apartment"
-              ? getApartmentStroke(area.apartmentType)
-              : BSP_COLORS[area.type].stroke,
-        };
-      }),
-    [areas]
-  );
+  const footprintCanvasPoints = footprint ? toCanvasPoints(footprint) : [];
+  const drawingCanvasPoints = toCanvasPoints(state.drawingPoints);
 
-  const labelCenter = (points: number[]) => {
-    const xs = points.filter((_, i) => i % 2 === 0);
-    const ys = points.filter((_, i) => i % 2 === 1);
-    if (xs.length === 0 || ys.length === 0) return null;
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const minY = Math.min(...ys);
-    const maxY = Math.max(...ys);
-    return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  // (przeniesione wyżej)
+
+  const handleStageClick = () => {
+    if (state.mode !== "draw") return;
+    const stage = stageRef.current;
+    const pointer = stage?.getPointerPosition();
+    if (!pointer) return;
+    const rawPx = worldToMeters(pointer.x, pointer.y);
+    const px = { x: snap(rawPx.x), y: snap(rawPx.y) };
+    
+    // Ignoruj kolejne punkty z-snapowane w tym samym miejscu
+    if (state.drawingPoints.length > 0) {
+      const last = state.drawingPoints[state.drawingPoints.length - 1];
+      if (last.x === px.x && last.y === px.y) {
+         return; 
+      }
+    }
+
+    if (state.drawingPoints.length >= 3) {
+      const p0 = state.drawingPoints[0];
+      const dist = Math.hypot(p0.x - px.x, p0.y - px.y);
+      if (dist < 1.5) { 
+        void finishDrawing();
+        return;
+      }
+    }
+    
+    addDrawPoint(px);
   };
 
+  const handleStageDblClick = () => {
+    if (state.mode !== "draw") return;
+    // Ponieważ kliknięcie w to samo miejsce jest odrzucane przez handleStageClick, 
+    // drugi klik nie stwarza zduplikowanego węzła po użyciu 'snap'. Nie usuwamy już węzłów.
+    void finishDrawing();
+  };
+
+  const cursor =
+    state.mode === "draw"
+      ? "crosshair"
+      : state.mode === "edit-vertices"
+        ? "pointer"
+        : state.mode === "edit-lines"
+          ? "move"
+          : isPanning
+            ? "grabbing"
+            : "grab";
+
   return (
-    <div ref={containerRef} className="relative h-full w-full">
+    <div
+      ref={containerRef}
+      className="relative h-full w-full"
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        const file = e.dataTransfer.files?.[0];
+        if (!file || !file.name.toLowerCase().endsWith(".dxf")) {
+          dispatch({ type: "SET_ERROR", error: "Przeciągnij poprawny plik .dxf" });
+          return;
+        }
+        dispatch({ type: "SET_LOADING", loading: true });
+        api.footprintImportDxf(file)
+          .then((res) => {
+            if (res.valid && res.polygon) {
+              const ring = res.polygon.coordinates[0];
+              const points = ring.slice(0, -1).map(([x, y]) => ({ x, y }));
+              dispatch({ type: "SET_FOOTPRINT", footprint: points });
+              dispatch({ type: "SET_ERROR", error: null });
+            } else {
+              dispatch({
+                type: "SET_ERROR",
+                error: "Błąd importu DXF: " + res.errors.map((err) => err.message).join(", "),
+              });
+            }
+          })
+          .catch((err) => {
+            dispatch({ type: "SET_ERROR", error: "Błąd sieci: " + (err as Error).message });
+          })
+          .finally(() => {
+            dispatch({ type: "SET_LOADING", loading: false });
+          });
+      }}
+    >
       <div className="pointer-events-none absolute left-4 top-4 z-10 flex flex-col gap-1 text-xs text-neutral-300">
         <div>scale: {scale.toFixed(2)}x</div>
-        <div>pan: drag</div>
-        <div>zoom: mouse wheel</div>
+        <div>
+          tryb:{" "}
+          {state.mode === "draw"
+            ? "rysowanie (klik = punkt, dwuklik = zamknij)"
+            : state.mode === "edit-vertices"
+              ? "edycja wierzchołków obrysu"
+              : state.mode === "edit-lines"
+                ? "przeciąganie linii podziału mieszkań"
+                : "przesuń: drag / zoom: kółko"}
+        </div>
       </div>
 
       <div className="absolute right-4 top-4 z-10 flex gap-2">
-        <button
-          onClick={fitToScreen}
-          className="rounded bg-neutral-700 px-3 py-1.5 text-sm text-white hover:bg-neutral-600 active:bg-neutral-500"
-        >
+        <button onClick={fitToScreen} className="rounded bg-neutral-700 px-3 py-1.5 text-sm text-white hover:bg-neutral-600 active:bg-neutral-500">
           Fit to screen
         </button>
-        <button
-          onClick={resetView}
-          className="rounded bg-neutral-700 px-3 py-1.5 text-sm text-white hover:bg-neutral-600 active:bg-neutral-500"
-        >
+        <button onClick={resetView} className="rounded bg-neutral-700 px-3 py-1.5 text-sm text-white hover:bg-neutral-600 active:bg-neutral-500">
           Reset
         </button>
       </div>
@@ -215,23 +376,19 @@ export default function CanvasEditor({ bspResult }: CanvasEditorProps) {
         scaleY={scale}
         x={position.x}
         y={position.y}
-        draggable
+        draggable={state.mode === "idle"}
         onWheel={onWheel}
-        onDragStart={() => setIsDragging(true)}
+        onClick={handleStageClick}
+        onDblClick={handleStageDblClick}
+        onDragStart={() => setIsPanning(true)}
         onDragEnd={(e) => {
-          setIsDragging(false);
+          setIsPanning(false);
           setPosition({ x: e.target.x(), y: e.target.y() });
         }}
-        style={{ cursor: isDragging ? "grabbing" : "grab" }}
+        style={{ cursor }}
       >
         <Layer>
-          <Rect
-            x={-worldSize / 2}
-            y={-worldSize / 2}
-            width={worldSize}
-            height={worldSize}
-            fill="#171717"
-          />
+          <Rect x={-worldSize / 2} y={-worldSize / 2} width={worldSize} height={worldSize} fill="#171717" />
         </Layer>
 
         <Layer>
@@ -245,48 +402,408 @@ export default function CanvasEditor({ bspResult }: CanvasEditorProps) {
             <Line key={`a-${i}`} points={points} stroke="#666666" strokeWidth={2 / scale} />
           ))}
           <Text x={8 / scale} y={4 / scale} text="0,0" fontSize={12 / scale} fill="#999" />
-          <Text x={worldSize / 2 - 30 / scale} y={4 / scale} text="x" fontSize={14 / scale} fill="#999" />
-          <Text x={8 / scale} y={-worldSize / 2 + 4 / scale} text="y" fontSize={14 / scale} fill="#999" />
         </Layer>
 
         <Layer>
-          {footprintPoints.length > 0 && (
+          {/* Obrys */}
+          {footprintCanvasPoints.length > 0 && (
             <Line
-              points={footprintPoints}
+              points={footprintCanvasPoints}
               closed
               stroke="#ffffff"
               strokeWidth={2 / scale}
-              fill="rgba(255,255,255,0.05)"
+              fill={apartments.length === 0 ? "rgba(255,255,255,0.05)" : undefined}
             />
           )}
-          {areaRenderData.map((area) => (
+
+          {/* Edycja wierzchołków */}
+          {state.mode === "edit-vertices" && footprint?.map((p, i) => (
+            <Circle
+              key={`vert-${i}`}
+              x={p.x * METER_PX}
+              y={-p.y * METER_PX}
+              radius={6 / scale}
+              fill="#ffffff"
+              stroke="#3b82f6"
+              strokeWidth={2 / scale}
+              draggable
+              onDragMove={(e) => {
+                const mx = snap(e.target.x() / METER_PX);
+                const my = snap(-e.target.y() / METER_PX);
+                e.target.x(mx * METER_PX);
+                e.target.y(-my * METER_PX);
+              }}
+              onDragEnd={(e) => {
+                const mx = snap(e.target.x() / METER_PX);
+                const my = snap(-e.target.y() / METER_PX);
+                updateVertex(i, { x: mx, y: my });
+              }}
+              onMouseEnter={(e) => {
+                const container = e.target.getStage()?.container();
+                if (container) container.style.cursor = "move";
+              }}
+              onMouseLeave={(e) => {
+                const container = e.target.getStage()?.container();
+                if (container) container.style.cursor = cursor;
+              }}
+            />
+          ))}
+
+          {/* Rysowanie w toku */}
+          {/* Przesuwanie linii (edit-lines) */}
+          {state.mode === "edit-lines" && sharedLines.map((sl, i) => {
+            const isVert = sl.orientation === "vertical";
+            const points = [sl.p1.x * METER_PX, -sl.p1.y * METER_PX, sl.p2.x * METER_PX, -sl.p2.y * METER_PX];
+            return (
+              <Group
+                key={sl.id}
+                draggable
+                onDragEnd={(e) => {
+                  const node = e.target;
+                  const dx = node.x();
+                  const dy = node.y();
+                  node.position({ x: 0, y: 0 }); // reset Konva transform
+                  
+                  let newValue = isVert ? sl.p1.x + dx / METER_PX : sl.p1.y - dy / METER_PX;
+                  newValue = snap(newValue);
+                  
+                  const updatedApartments = moveSharedLine(sl, newValue, apartments);
+                  updateApartmentsAndValidate(updatedApartments);
+                }}
+                onMouseEnter={(e) => {
+                  const container = e.target.getStage()?.container();
+                  if (container) container.style.cursor = isVert ? "col-resize" : "row-resize";
+                }}
+                onMouseLeave={(e) => {
+                  const container = e.target.getStage()?.container();
+                  if (container) container.style.cursor = cursor;
+                }}
+              >
+                <Line
+                  points={points}
+                  stroke="#3b82f6"
+                  strokeWidth={6 / scale}
+                  hitStrokeWidth={20 / scale}
+                />
+              </Group>
+            );
+          })}
+
+          {drawingCanvasPoints.length > 0 && (
+            <Line 
+              points={drawingCanvasPoints} 
+              closed={state.drawingPoints.length >= 3} 
+              stroke="#60a5fa" 
+              strokeWidth={2 / scale} 
+              dash={[6 / scale, 4 / scale]} 
+            />
+          )}
+          {state.drawingPoints.map((p, i) => (
+            <Circle key={`draw-pt-${i}`} x={p.x * METER_PX} y={-p.y * METER_PX} radius={4 / scale} fill="#60a5fa" />
+          ))}
+
+          {/* Korytarz (jasnoszary) */}
+          {circulationParts.map((geom, i) => (
             <Line
-              key={area.id}
-              points={area.points}
+              key={`corridor-${i}`}
+              points={toCanvasPoints(ringToPoints(geom))}
               closed
-              fill={area.fill}
-              stroke={area.stroke}
+              fill="rgba(211,211,211,0.5)"
+              stroke="#999999"
+              strokeWidth={1 / scale}
+            />
+          ))}
+
+          {/* Klatka (szary) */}
+          {cageGeometries.map((geom, i) => (
+            <Line
+              key={`cage-${i}`}
+              points={toCanvasPoints(ringToPoints(geom))}
+              closed
+              fill="rgba(128,128,128,0.7)"
+              stroke="#4a4a4a"
               strokeWidth={1.5 / scale}
             />
           ))}
-          {areaRenderData.map((area) => {
-            const center = labelCenter(area.points);
-            if (!center) return null;
+
+          {/* Mieszkania — kolor wg statusu walidacji (F3-06) lub Solara (F4) */}
+          {apartments.map((apt) => {
+            let colors;
+            const hasSolarData = !!state.solarResult;
+            if (hasSolarData) {
+              const solFa = state.solarResult!.facades.filter(f => f.apartment_id === apt.id);
+              if (solFa.length > 0) {
+                const isPassing = solFa.some(f => f.meets_wt);
+                colors = isPassing ? { fill: "rgba(249, 115, 22, 0.3)", stroke: "#f97316" } : { fill: "rgba(75, 85, 99, 0.3)", stroke: "#4b5563" };
+              } else {
+                colors = { fill: "rgba(255,255,255,0.1)", stroke: "#666" };
+              }
+            } else {
+              const status = apartmentStatuses.get(apt.id) ?? "ok";
+              colors = STATUS_COLORS[status];
+            }
+            
+            const isSelected = state.selectedApartmentId === apt.id;
+            const pts = toCanvasPoints(ringToPoints(apt.geometry));
+            const center = ringToPoints(apt.geometry).reduce(
+              (acc, p) => ({ x: acc.x + p.x / apt.geometry.coordinates[0].length, y: acc.y + p.y / apt.geometry.coordinates[0].length }),
+              { x: 0, y: 0 }
+            );
             return (
-              <Text
-                key={`label-${area.id}`}
-                x={center.x}
-                y={center.y - 6 / scale}
-                text={area.name}
-                align="center"
-                width={0}
-                offsetX={0}
-                fontSize={10 / scale}
-                fill="#111827"
-                listening={false}
+              <Line
+                key={apt.id}
+                points={pts}
+                closed
+                fill={colors.fill}
+                stroke={isSelected ? "#3b82f6" : colors.stroke}
+                strokeWidth={(isSelected ? 3 : 1.5) / scale}
+                onClick={(e) => {
+                  e.cancelBubble = true;
+                  selectApartment(isSelected ? null : apt.id);
+                }}
+                onMouseEnter={(e) => {
+                  const container = e.target.getStage()?.container();
+                  if (container) container.style.cursor = "pointer";
+                }}
+                onMouseLeave={(e) => {
+                  const container = e.target.getStage()?.container();
+                  if (container) container.style.cursor = cursor;
+                }}
+                data-center-x={center.x}
+                data-center-y={center.y}
               />
             );
           })}
+
+          {/* Etykiety mieszkań: ID, typ, m² (F2-12) */}
+          {apartments.map((apt) => {
+            const ring = ringToPoints(apt.geometry);
+            const xs = ring.map((p) => p.x * METER_PX);
+            const ys = ring.map((p) => -p.y * METER_PX);
+            const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+            const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+            const hasSolarData = !!state.solarResult;
+            let labelText = `${apt.type}\n${apt.area_m2.toFixed(1)} m²`;
+            if (hasSolarData) {
+              const maxHours = Math.max(...state.solarResult!.facades.filter(f => f.apartment_id === apt.id).map(f => f.hours_total), 0);
+              labelText = `${apt.type}\nSłońce: ${maxHours.toFixed(1)}h`;
+            }
+
+            return (
+              <Text
+                key={`label-${apt.id}`}
+                x={cx}
+                y={cy - 12 / scale}
+                text={labelText}
+                align="center"
+                fontSize={10 / scale}
+                fill="#111827"
+                listening={false}
+                offsetX={20}
+              />
+            );
+          })}
+
+          {/* Krawędzie zewnętrzne ze słońcem */}
+          {!!state.solarResult && apartments.flatMap(apt => {
+            const facades = state.solarResult!.facades.filter(f => f.apartment_id === apt.id);
+            if (!facades.length) return [];
+            
+            const ring = ringToPoints(apt.geometry);
+            const segments = [];
+            for (let i = 0; i < ring.length; i++) {
+              const p1 = ring[i];
+              const p2 = ring[(i + 1) % ring.length];
+              
+              const dx = p2.x - p1.x;
+              const dy = p2.y - p1.y;
+              let edgeAz = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+              const normalAz = (edgeAz + 90) % 360;
+
+              // znajdź fasadę
+              const facade = facades.find(f => {
+                let diff = Math.abs(f.azimuth_deg - normalAz);
+                if (diff > 180) diff = 360 - diff;
+                return diff < 8; // tolerance 8 stopni
+              });
+
+              if (facade) {
+                segments.push({
+                   aptId: apt.id,
+                   p1, p2, facade,
+                   cx: (p1.x + p2.x)/2,
+                   cy: (p1.y + p2.y)/2
+                });
+              }
+            }
+            return segments;
+          }).map((seg, i) => {
+            const x1 = seg.p1.x * METER_PX;
+            const y1 = -seg.p1.y * METER_PX;
+            const x2 = seg.p2.x * METER_PX;
+            const y2 = -seg.p2.y * METER_PX;
+            const ratio = Math.min(1, Math.max(0, seg.facade.hours_total / seg.facade.required_hours));
+            const hue = Math.floor(ratio * 120);
+            const strokeColor = `hsl(${hue}, 80%, 45%)`;
+            const cx = seg.cx * METER_PX;
+            const cy = -seg.cy * METER_PX;
+            
+            return (
+              <Group key={`facade-${seg.aptId}-${i}`}>
+                <Line
+                  points={[x1, y1, x2, y2]}
+                  stroke={strokeColor}
+                  strokeWidth={6 / scale}
+                  onMouseEnter={(e) => {
+                    const container = e.target.getStage()?.container();
+                    if (container) container.style.cursor = "help";
+                    const tooltipText = `Orientacja: ${seg.facade.orientation}\nDługość: ${seg.facade.length_m.toFixed(1)}m\nSłońce: ${seg.facade.hours_total.toFixed(1)}h\nWT: ${seg.facade.meets_wt ? 'OK' : 'Brak'}`;
+                    const stage = e.target.getStage();
+                    const pointer = stage?.getPointerPosition();
+                    if (pointer) {
+                      setHoveredFacade({ x: (pointer.x - position.x) / scale, y: (pointer.y - position.y) / scale, text: tooltipText });
+                    }
+                  }}
+                  onMouseMove={(e) => {
+                    const stage = e.target.getStage();
+                    const pointer = stage?.getPointerPosition();
+                    if (pointer) {
+                      const tooltipText = `Orientacja: ${seg.facade.orientation}\nDługość: ${seg.facade.length_m.toFixed(1)}m\nSłońce: ${seg.facade.hours_total.toFixed(1)}h\nWT: ${seg.facade.meets_wt ? 'OK' : 'Brak'}`;
+                      setHoveredFacade({ x: (pointer.x - position.x) / scale, y: (pointer.y - position.y) / scale, text: tooltipText });
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    const container = e.target.getStage()?.container();
+                    if (container) container.style.cursor = cursor;
+                    setHoveredFacade(null);
+                  }}
+                />
+                <Text
+                  x={cx}
+                  y={cy}
+                  text={`${seg.facade.hours_total.toFixed(1)}h`}
+                  fontSize={12 / scale}
+                  fill="#ffffff"
+                  fontStyle="bold"
+                  shadowColor="#000000"
+                  shadowBlur={4}
+                  shadowOffsetX={1/scale}
+                  shadowOffsetY={1/scale}
+                  listening={false}
+                  offsetX={6/scale}
+                  offsetY={6/scale}
+                />
+              </Group>
+            );
+          })}
+
+          {/* Współdzielone linie podziału mieszkań — draggable (F2-08) */}
+          {state.mode === "edit-lines" &&
+            sharedLines.map((line) => {
+              const x1 = line.p1.x * METER_PX;
+              const y1 = -line.p1.y * METER_PX;
+              const x2 = line.p2.x * METER_PX;
+              const y2 = -line.p2.y * METER_PX;
+              return (
+                <Line
+                  key={line.id}
+                  points={[x1, y1, x2, y2]}
+                  stroke="#60a5fa"
+                  strokeWidth={6 / scale}
+                  hitStrokeWidth={20}
+                  opacity={0.8}
+                  draggable
+                  onMouseEnter={(e) => {
+                    const container = e.target.getStage()?.container();
+                    if (container) container.style.cursor = line.orientation === "vertical" ? "ew-resize" : "ns-resize";
+                  }}
+                  onMouseLeave={(e) => {
+                    const container = e.target.getStage()?.container();
+                    if (container) container.style.cursor = cursor;
+                  }}
+                  onDragMove={(e) => {
+                    const node = e.target;
+                    if (line.orientation === "vertical") {
+                      node.y(0);
+                      const deltaX = node.x() / METER_PX;
+                      const newValue = snap(line.p1.x + deltaX);
+                      const updated = moveSharedLine(line, newValue, apartments);
+                      dispatch({ type: "UPDATE_APARTMENTS", apartments: updated });
+                    } else {
+                      node.x(0);
+                      const deltaY = -node.y() / METER_PX;
+                      const newValue = snap(line.p1.y + deltaY);
+                      const updated = moveSharedLine(line, newValue, apartments);
+                      dispatch({ type: "UPDATE_APARTMENTS", apartments: updated });
+                    }
+                  }}
+                  onDragEnd={(e) => {
+                    const node = e.target;
+                    let newValue = 0;
+                    if (line.orientation === "vertical") {
+                      const deltaX = node.x() / METER_PX;
+                      newValue = snap(line.p1.x + deltaX);
+                      node.x(0);
+                    } else {
+                      const deltaY = -node.y() / METER_PX;
+                      newValue = snap(line.p1.y + deltaY);
+                      node.y(0);
+                    }
+                    const updated = moveSharedLine(line, newValue, apartments);
+                    void updateApartmentsAndValidate(updated);
+                  }}
+                />
+              );
+            })}
+
+          {/* Wierzchołki obrysu — edytowalne (F1-06) */}
+          {state.mode === "edit-vertices" &&
+            footprint?.map((p, i) => (
+              <Circle
+                key={`vertex-${i}`}
+                x={p.x * METER_PX}
+                y={-p.y * METER_PX}
+                radius={6 / scale}
+                fill="#ffffff"
+                stroke="#2563eb"
+                strokeWidth={2 / scale}
+                draggable
+                onDragMove={(e) => {
+                  const node = e.target;
+                  const snapped = worldToMeters(
+                    node.x() * scale + position.x,
+                    node.y() * scale + position.y
+                  );
+                  node.x(snapped.x * METER_PX);
+                  node.y(-snapped.y * METER_PX);
+                }}
+                onDragEnd={(e) => {
+                  const snapped = worldToMeters(
+                    e.target.x() * scale + position.x,
+                    e.target.y() * scale + position.y
+                  );
+                  updateVertex(i, snapped);
+                }}
+              />
+            ))}
+
+          {/* Tooltip Render */}
+          {hoveredFacade && (
+            <Group x={hoveredFacade.x + 10 / scale} y={hoveredFacade.y + 10 / scale}>
+              <Rect
+                width={120 / scale}
+                height={60 / scale}
+                fill="rgba(0,0,0,0.8)"
+                cornerRadius={4 / scale}
+              />
+              <Text
+                text={hoveredFacade.text}
+                fill="#fff"
+                fontSize={10 / scale}
+                padding={6 / scale}
+              />
+            </Group>
+          )}
         </Layer>
       </Stage>
     </div>

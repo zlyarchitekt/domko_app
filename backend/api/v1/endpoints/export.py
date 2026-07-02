@@ -60,3 +60,22 @@ def export_dxf(request: dict[str, Any]) -> Response:
         media_type="application/dxf",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+@router.post("/pdf")
+def export_pdf(request: dict[str, Any]) -> Response:
+    """Return a PDF report of the project sun exposure and validation.
+
+    The request body mirrors the JSON export endpoint.
+    """
+    from services.export_pdf import export_project_pdf
+    try:
+        pdf_bytes = export_project_pdf(request)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid request or PDF generation failed: {exc}") from exc
+    filename = f"{request.get('project_name', 'project')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )

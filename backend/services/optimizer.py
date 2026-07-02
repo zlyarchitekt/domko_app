@@ -30,16 +30,16 @@ from services.layout import (
     ApartmentSpec,
     LayoutInput,
     LayoutResult,
-    generate_layout,
     azimuth_to_cardinal,
+    generate_layout,
     sunlight_adjustment_factor,
 )
 from services.solar_analysis import (
+    SolarAnalysisResult,
     analyze_solar_access,
     compute_sun_position_timeseries,
-    SolarAnalysisResult,
 )
-from services.wt_validation import validate_communication, validate_layout_wt, WTValidationResult
+from services.wt_validation import WTValidationResult, validate_communication, validate_layout_wt
 
 
 @dataclass
@@ -47,7 +47,7 @@ class OptimizerInput:
     """Normalized optimizer input."""
 
     footprint: Polygon
-    apartments: List[ApartmentSpec]
+    apartments: list[ApartmentSpec]
     latitude: float
     longitude: float
     analysis_date: date
@@ -83,7 +83,7 @@ class VariantMetrics:
     """F5-03: adjacency + Dijkstra reach + cage spacing (services.wt_validation.validate_communication).
     Hard constraint from plan.md §4.3 ("każde mieszkanie ma dostęp do klatki") — variants
     that fail this are heavily deprioritized in ranking, not silently scored the same."""
-    communication_issues: List[str] = field(default_factory=list)
+    communication_issues: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -95,7 +95,7 @@ class OptimizerVariant:
     solar_analysis: SolarAnalysisResult
     wt_validation: WTValidationResult
     metrics: VariantMetrics
-    config: Dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
     """Key parameters that distinguish this variant (e.g. corridor_width, cage_count)."""
 
 
@@ -103,7 +103,7 @@ class OptimizerVariant:
 class OptimizerResult:
     """Top-K optimizer result."""
 
-    variants: List[OptimizerVariant]
+    variants: list[OptimizerVariant]
     method: str
     footprint_is_concave: bool
     requested_cage_mode: str
@@ -171,7 +171,7 @@ def _normalize_solar(hours: float) -> float:
     return max(0.0, min(1.0, hours / 8.0))
 
 
-def _build_base_input(input: OptimizerInput, overrides: Dict[str, Any]) -> LayoutInput:
+def _build_base_input(input: OptimizerInput, overrides: dict[str, Any]) -> LayoutInput:
     """Build a LayoutInput from optimizer input + parameter overrides."""
     return LayoutInput(
         footprint=input.footprint,
@@ -187,7 +187,7 @@ def _build_base_input(input: OptimizerInput, overrides: Dict[str, Any]) -> Layou
 def _evaluate_variant(
     layout: LayoutResult,
     input: OptimizerInput,
-    config: Dict[str, Any],
+    config: dict[str, Any],
     solar_position_df=None,
 ) -> OptimizerVariant:
     """Compute solar, WT, and communication-constraint metrics for a generated layout.
@@ -260,7 +260,7 @@ def _apartment_wt_pass_rate(solar: SolarAnalysisResult, required_hours: float) -
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _run_lp_branch(input: OptimizerInput, solar_position_df=None) -> List[OptimizerVariant]:
+def _run_lp_branch(input: OptimizerInput, solar_position_df=None) -> list[OptimizerVariant]:
     """Use scipy MILP to choose discrete layout parameters.
 
     Decision variables (binary / bounded real):
@@ -276,7 +276,7 @@ def _run_lp_branch(input: OptimizerInput, solar_position_df=None) -> List[Optimi
     cage_options = [2.0, 2.5, 3.0]
 
     # Enumerate all combos and evaluate exactly; keep top-K via surrogate pre-filter.
-    candidates: List[Tuple[float, Dict[str, Any]]] = []
+    candidates: list[tuple[float, dict[str, Any]]] = []
     for cw in corridor_options:
         for cs in cage_options:
             for place in (True, False):
@@ -290,7 +290,7 @@ def _run_lp_branch(input: OptimizerInput, solar_position_df=None) -> List[Optimi
 
     # Take top 6 surrogate configs and evaluate exactly.
     candidates.sort(key=lambda x: x[0], reverse=True)
-    variants: List[OptimizerVariant] = []
+    variants: list[OptimizerVariant] = []
     for _, cfg in candidates[:6]:
         try:
             layout_input = _build_base_input(input, cfg)
@@ -309,7 +309,7 @@ def _run_lp_branch(input: OptimizerInput, solar_position_df=None) -> List[Optimi
     return variants
 
 
-def _surrogate_score(input: OptimizerInput, cfg: Dict[str, Any]) -> float:
+def _surrogate_score(input: OptimizerInput, cfg: dict[str, Any]) -> float:
     """Fast surrogate: weighted sunlight adjustment over exterior facade length.
 
     We approximate exterior facade length per orientation by intersecting the
@@ -343,7 +343,7 @@ def _surrogate_score(input: OptimizerInput, cfg: Dict[str, Any]) -> float:
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _run_ga_branch(input: OptimizerInput, solar_position_df=None) -> List[OptimizerVariant]:
+def _run_ga_branch(input: OptimizerInput, solar_position_df=None) -> list[OptimizerVariant]:
     """Run a small NSGA-II optimization over layout parameters.
 
     Variables (all real, later snapped):
@@ -402,7 +402,7 @@ def _run_ga_branch(input: OptimizerInput, solar_position_df=None) -> List[Optimi
 
     # Decode unique evaluated configs and re-evaluate the best non-dominated set.
     seen: set = set()
-    variants: List[OptimizerVariant] = []
+    variants: list[OptimizerVariant] = []
     if result.X is not None:
         for x in result.X:
             cfg = _decode_ga_vars(x)
@@ -431,7 +431,7 @@ def _run_ga_branch(input: OptimizerInput, solar_position_df=None) -> List[Optimi
     return variants
 
 
-def _decode_ga_vars(x: np.ndarray) -> Dict[str, Any]:
+def _decode_ga_vars(x: np.ndarray) -> dict[str, Any]:
     """Convert continuous GA variables to a discrete layout config."""
     x = np.asarray(x).flatten()
     corridor = float(np.clip(round(float(x[0]), 2), 1.0, 2.2))

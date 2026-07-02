@@ -65,6 +65,12 @@ class LayoutGenerateResponse(BaseModel):
     leftover: dict | None = None
     wt_validation: WTResult
     zones: list[dict]
+    circulation_parts: list[dict] = []
+    """Corridor+cage geometry, decomposed into individual Polygon parts (may be
+    a MultiPolygon internally — e.g. both sides of a double-loaded corridor),
+    for frontend rendering (F2-07)."""
+    cage_geometries: list[dict] = []
+    """Individual staircase cage polygons (may be empty), for frontend rendering (F2-07)."""
 
 
 @router.post("/generate", response_model=LayoutGenerateResponse)
@@ -139,6 +145,8 @@ def generate_layout_endpoint(request: LayoutGenerateRequest):
             {"name": z.name, "geometry": json.loads(json.dumps(z.polygon.__geo_interface__))}
             for z in layout.zones
         ],
+        circulation_parts=_decompose_to_polygons(layout.circulation_geometry),
+        cage_geometries=[json.loads(json.dumps(c.__geo_interface__)) for c in layout.cage_polygons],
     )
 
 
@@ -149,6 +157,21 @@ def _points_to_polygon(points: list[list[float]]) -> Polygon:
     if coords[0] != coords[-1]:
         coords.append(coords[0])
     return Polygon(coords)
+
+
+def _decompose_to_polygons(geom: Polygon | None) -> list[dict]:
+    """Split a (Multi)Polygon into a JSON-serializable list of Polygon geo-interfaces."""
+    if geom is None or geom.is_empty:
+        return []
+    if geom.geom_type == "Polygon":
+        return [json.loads(json.dumps(geom.__geo_interface__))]
+    if hasattr(geom, "geoms"):
+        return [
+            json.loads(json.dumps(part.__geo_interface__))
+            for part in geom.geoms
+            if part.geom_type == "Polygon"
+        ]
+    return []
 
 
 class SplitRequest(BaseModel):

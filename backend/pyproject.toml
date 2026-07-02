@@ -4,7 +4,7 @@ line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
-ignore = ["E501", "F401", "B904"]
+ignore = ["E501", "F401", "B904", "N803", "N806", "UP035", "B007"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection markers are meant to be called as argument

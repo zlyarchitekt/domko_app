@@ -40,12 +40,11 @@ def _make_payload(footprint: list[list[float]] | None = None):
 
 
 def _load_dxf(dxf_bytes: bytes):
-    tmp = tempfile.NamedTemporaryFile(suffix=".dxf", delete=False)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as tmp:
+        tmp.write(dxf_bytes)
+        tmp_name = tmp.name
     try:
-        with open(tmp.name, "wb") as f:
-            f.write(dxf_bytes)
-        return ezdxf.readfile(tmp.name)
+        return ezdxf.readfile(tmp_name)
     finally:
         if os.path.exists(tmp.name):
             os.unlink(tmp.name)

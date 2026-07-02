@@ -1,0 +1,14 @@
+{
+  "name": "domko-e2e",
+  "version": "1.0.0",
+  "description": "End-to-End tests for DOMKO_APP",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@types/node": "^20.0.0"
+  }
+}

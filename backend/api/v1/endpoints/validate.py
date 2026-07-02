@@ -7,8 +7,8 @@ from typing import List
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from services.layout import generate_layout, LayoutInput, ApartmentSpec
 from services.apartment_validation import validate_full_layout
+from services.layout import ApartmentSpec, LayoutInput, generate_layout
 from services.wt_validation import validate_communication
 
 router = APIRouter()
@@ -29,12 +29,28 @@ class CirculationSpec(BaseModel):
     cage_size_m: float = Field(default=2.5, gt=0)
 
 
+class ApartmentCellData(BaseModel):
+    id: str
+    type: str
+    geometry: dict
+
+
+class LayoutDataInput(BaseModel):
+    footprint: list[list[float]]
+    circulation_geometry: dict | None = None
+    cage_geometries: list[dict] = Field(default_factory=list)
+    corridor_width_m: float = 1.5
+    stair_width_m: float = 1.2
+    apartments: list[ApartmentCellData]
+
+
 class FullLayoutValidateRequest(BaseModel):
-    footprint: List[List[float]] = Field(..., min_length=3)
+    footprint: list[list[float]] = Field(..., min_length=3)
     circulation: CirculationSpec = Field(default_factory=CirculationSpec)
-    apartments: List[ApartmentProgram] = Field(default_factory=list)
+    apartments: list[ApartmentProgram] = Field(default_factory=list)
     local_law: str | None = Field(default=None)
     max_corridor_distance_m: float | None = Field(default=None, gt=0)
+    layout: LayoutDataInput | None = Field(default=None)
 
 
 class ApartmentValidationItem(BaseModel):
@@ -43,8 +59,8 @@ class ApartmentValidationItem(BaseModel):
     passed: bool
     area_m2: float
     min_width_m: float
-    errors: List[str]
-    warnings: List[str]
+    errors: list[str]
+    warnings: list[str]
 
 
 class WTRuleItem(BaseModel):
@@ -57,47 +73,105 @@ class WTRuleItem(BaseModel):
 class FullLayoutValidateResponse(BaseModel):
     passed: bool
     score: int
-    apartments: List[ApartmentValidationItem]
-    wt_rules: List[WTRuleItem]
+    apartments: list[ApartmentValidationItem]
+    wt_rules: list[WTRuleItem]
     communication_all_connected: bool
-    communication_issues: List[str]
-    errors: List[str]
-    warnings: List[str]
+    communication_issues: list[str]
+    errors: list[str]
+    warnings: list[str]
 
 
 @router.post("/full-layout", response_model=FullLayoutValidateResponse)
 def validate_full_layout_endpoint(request: FullLayoutValidateRequest):
-    try:
-        footprint = _points_to_polygon(request.footprint)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    from shapely.geometry import Polygon, shape
 
-    circulation = request.circulation
-    specs = [
-        ApartmentSpec(
-            type=a.type,
-            min_area_m2=a.min_area_m2,
-            target_count=a.target_count,
-            width_m=a.width_m,
-            depth_m=a.depth_m,
+    from services.layout import ApartmentCell, LayoutResult, _estimate_building_azimuth
+
+    if request.layout is not None:
+        try:
+            footprint = _points_to_polygon(request.layout.footprint)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid footprint: {exc}")
+
+        apartments: list[ApartmentCell] = []
+        for apt in request.layout.apartments:
+            try:
+                poly = shape(apt.geometry)
+                if not isinstance(poly, Polygon):
+                    if poly.geom_type == "MultiPolygon" and not poly.is_empty:
+                        poly = poly.geoms[0]
+                    else:
+                        raise ValueError(f"Geometry must be a Polygon, got {poly.geom_type}")
+                apartments.append(ApartmentCell(id=apt.id, type=apt.type, polygon=poly))
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid apartment geometry for {apt.id}: {exc}")
+
+        try:
+            circulation_geometry = shape(request.layout.circulation_geometry) if request.layout.circulation_geometry else Polygon()
+            if not isinstance(circulation_geometry, Polygon) and not hasattr(circulation_geometry, "geoms"):
+                circulation_geometry = Polygon()
+        except Exception:
+            circulation_geometry = Polygon()
+
+        cage_polygons: list[Polygon] = []
+        for cage in request.layout.cage_geometries:
+            try:
+                poly = shape(cage)
+                if isinstance(poly, Polygon):
+                    cage_polygons.append(poly)
+            except Exception:
+                pass
+
+        usable_area = sum(a.polygon.area for a in apartments)
+        circulation_area = circulation_geometry.area if not circulation_geometry.is_empty else 0.0
+        building_azimuth_deg = _estimate_building_azimuth(footprint)
+
+        layout = LayoutResult(
+            footprint=footprint,
+            footprint_area_m2=footprint.area,
+            circulation_area_m2=circulation_area,
+            usable_area_m2=usable_area,
+            apartments=apartments,
+            leftover=None,
+            zones=[],
+            building_azimuth_deg=building_azimuth_deg,
+            circulation_geometry=circulation_geometry if not circulation_geometry.is_empty else None,
+            cage_polygons=cage_polygons,
+            corridor_width_m=request.layout.corridor_width_m,
+            stair_width_m=request.layout.stair_width_m,
         )
-        for a in request.apartments
-    ]
+    else:
+        try:
+            footprint = _points_to_polygon(request.footprint)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
-    layout_input = LayoutInput(
-        footprint=footprint,
-        corridor_width_m=circulation.corridor_width_m,
-        stair_width_m=circulation.stair_width_m,
-        place_cage=circulation.place_cage,
-        cage_size_m=circulation.cage_size_m,
-        apartments=specs,
-        local_law=request.local_law,
-    )
+        circulation = request.circulation
+        specs = [
+            ApartmentSpec(
+                type=a.type,
+                min_area_m2=a.min_area_m2,
+                target_count=a.target_count,
+                width_m=a.width_m,
+                depth_m=a.depth_m,
+            )
+            for a in request.apartments
+        ]
 
-    try:
-        layout = generate_layout(layout_input)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Layout generation failed: {exc}")
+        layout_input = LayoutInput(
+            footprint=footprint,
+            corridor_width_m=circulation.corridor_width_m,
+            stair_width_m=circulation.stair_width_m,
+            place_cage=circulation.place_cage,
+            cage_size_m=circulation.cage_size_m,
+            apartments=specs,
+            local_law=request.local_law,
+        )
+
+        try:
+            layout = generate_layout(layout_input)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Layout generation failed: {exc}")
 
     spec_by_type = {a.type: a.min_area_m2 for a in request.apartments}
     result = validate_full_layout(
@@ -134,9 +208,9 @@ def validate_full_layout_endpoint(request: FullLayoutValidateRequest):
 
 
 class CommunicationValidateRequest(BaseModel):
-    footprint: List[List[float]] = Field(..., min_length=3)
+    footprint: list[list[float]] = Field(..., min_length=3)
     circulation: CirculationSpec = Field(default_factory=CirculationSpec)
-    apartments: List[ApartmentProgram] = Field(default_factory=list)
+    apartments: list[ApartmentProgram] = Field(default_factory=list)
     min_contact_length_m: float = Field(default=1.2, gt=0)
     max_corridor_distance_m: float = Field(default=30.0, gt=0)
     min_cage_spacing_m: float = Field(default=12.0, gt=0)
@@ -149,7 +223,7 @@ class CommunicationIssueItem(BaseModel):
 
 class CommunicationValidateResponse(BaseModel):
     all_connected: bool
-    issues: List[CommunicationIssueItem]
+    issues: list[CommunicationIssueItem]
 
 
 @router.post("/communication", response_model=CommunicationValidateResponse)
@@ -204,8 +278,8 @@ def validate_communication_endpoint(request: CommunicationValidateRequest):
 def validate_apartment_endpoint(item: dict):
     # Backwards-compatible single-apartment validation helper.
     # Kept minimal; /full-layout is the preferred aggregate endpoint.
-    errors: List[str] = []
-    warnings: List[str] = []
+    errors: list[str] = []
+    warnings: list[str] = []
     area = float(item.get("area_m2", 0))
     min_area = float(item.get("min_area_m2", 0))
     min_width = float(item.get("min_width_m", 0))
@@ -221,7 +295,7 @@ def validate_apartment_endpoint(item: dict):
     return {"valid": len(errors) == 0, "errors": errors, "warnings": warnings}
 
 
-def _points_to_polygon(points: List[List[float]]):
+def _points_to_polygon(points: list[list[float]]):
     from shapely.geometry import Polygon
 
     coords = [(float(p[0]), float(p[1])) for p in points]

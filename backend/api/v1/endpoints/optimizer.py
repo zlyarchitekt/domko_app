@@ -24,8 +24,8 @@ class ApartmentProgram(BaseModel):
 
 
 class OptimizerRunRequest(BaseModel):
-    footprint: List[List[float]] = Field(..., min_length=3)
-    apartments: List[ApartmentProgram] = Field(default_factory=list)
+    footprint: list[list[float]] = Field(..., min_length=3)
+    apartments: list[ApartmentProgram] = Field(default_factory=list)
     latitude: float = Field(..., ge=-90.0, le=90.0)
     longitude: float = Field(..., ge=-180.0, le=180.0)
     analysis_date: str | None = Field(
@@ -50,19 +50,19 @@ class MetricsModel(BaseModel):
     wt_rules_passed: int
     wt_rules_total: int
     communication_ok: bool
-    communication_issues: List[str]
+    communication_issues: list[str]
 
 
 class VariantModel(BaseModel):
     rank: int
-    config: Dict[str, Any]
+    config: dict[str, Any]
     metrics: MetricsModel
     building_azimuth_deg: float | None
     building_orientation: str | None
-    apartments: List[Dict[str, Any]]
-    solar_summary: Dict[str, Any]
+    apartments: list[dict[str, Any]]
+    solar_summary: dict[str, Any]
     wt_passed: bool
-    wt_issues: List[str]
+    wt_issues: list[str]
 
 
 class OptimizerRunResponse(BaseModel):
@@ -70,7 +70,7 @@ class OptimizerRunResponse(BaseModel):
     footprint_is_concave: bool
     requested_cage_mode: str
     effective_cage_mode: str
-    variants: List[VariantModel]
+    variants: list[VariantModel]
 
 
 @router.post("/run", response_model=OptimizerRunResponse)
@@ -153,7 +153,7 @@ def _variant_to_model(variant: OptimizerVariant) -> VariantModel:
     )
 
 
-def _points_to_polygon(points: List[List[float]]) -> Polygon:
+def _points_to_polygon(points: list[list[float]]) -> Polygon:
     coords = [(float(p[0]), float(p[1])) for p in points]
     if len(coords) < 3:
         raise ValueError("At least 3 points are required")

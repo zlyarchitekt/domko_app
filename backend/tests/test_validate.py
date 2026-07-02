@@ -117,3 +117,44 @@ def test_validate_communication_endpoint_l_shape_smoke():
     data = response.json()
     assert "all_connected" in data
     assert isinstance(data["issues"], list)
+
+
+def test_validate_full_layout_with_explicit_geometry():
+    footprint = [[0, 0], [10, 0], [10, 10], [0, 10]]
+    apt_geom = {
+        "type": "Polygon",
+        "coordinates": [[[0, 0], [5, 0], [5, 10], [0, 10], [0, 0]]]
+    }
+    circulation_geom = {
+        "type": "Polygon",
+        "coordinates": [[[5, 0], [10, 0], [10, 10], [5, 10], [5, 0]]]
+    }
+
+    response = client.post(
+        "/api/v1/validate/full-layout",
+        json={
+            "footprint": footprint,
+            "apartments": [{"type": "M2", "min_area_m2": 45, "target_count": 1}],
+            "layout": {
+                "footprint": footprint,
+                "circulation_geometry": circulation_geom,
+                "cage_geometries": [],
+                "corridor_width_m": 5.0,
+                "stair_width_m": 1.2,
+                "apartments": [
+                    {
+                        "id": "apt1",
+                        "type": "M2",
+                        "geometry": apt_geom
+                    }
+                ]
+            }
+        }
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert isinstance(data["score"], int)
+    assert len(data["apartments"]) == 1
+    assert data["apartments"][0]["apartment_id"] == "apt1"
+    assert data["apartments"][0]["area_m2"] == 50.0
+

@@ -32,7 +32,6 @@ from services.export_json import (
 from services.layout import ApartmentSpec, LayoutInput, LayoutResult, generate_layout
 from services.wt_validation import validate_layout_wt
 
-
 LAYER_OBRYS = "OBRYS"
 LAYER_MIESZKANIA = "MIESZKANIA"
 LAYER_KOMUNIKACJA = "KOMUNIKACJA"

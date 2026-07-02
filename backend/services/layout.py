@@ -137,6 +137,7 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
         # Tylko jedna klatka na budynek (na razie — wiele klatek to zakres
         # optymalizatora/cage_mode, poza tym prostym generatorem), i nigdy w
         # strefie "-cage" wyciętej wewnętrznie przez bsp_zones() — to tylko
+        local_cage = None
         # techniczny nibble (stały ~1m, niezależny od cage_size_m) używany do
         # rozbicia wklęsłego obrysu na strefy prostokątne, nie realna klatka.
         if input.place_cage and not cage_polygons and not zone.name.endswith("-cage"):
@@ -150,9 +151,10 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
                 circulation_geom = unary_union([circulation_geom, cage_polygon])
                 cage_polygons.append(cage_polygon)
                 zone = Zone(name=zone.name, polygon=zone.polygon.difference(cage_polygon))
+                local_cage = cage_polygon
 
         # 3. Korytarz wzdłuż osi dłuższego boku strefy
-        corridor = _build_corridor(zone.polygon, input.corridor_width_m)
+        corridor = _build_corridor(zone.polygon, input.corridor_width_m, local_cage)
         if corridor.area > 0:
             circulation_geom = unary_union([circulation_geom, corridor])
             zone = Zone(name=zone.name, polygon=zone.polygon.difference(corridor))
@@ -301,8 +303,9 @@ def _edge_cage(polygon: Polygon, size: float, longest: bool) -> Polygon | None:
     return clipped if not clipped.is_empty and clipped.area > 1e-6 else None
 
 
-def _build_corridor(polygon: Polygon, width: float) -> Polygon:
-    """Buduje korytarz wzdłuż osi dłuższego boku prostokątnego poligonu."""
+def _build_corridor(polygon: Polygon, width: float, cage_polygon: Polygon | None = None) -> Polygon:
+    """Buduje korytarz wzdłuż osi dłuższego boku prostokątnego poligonu,
+    uwzględniając wyrównanie do pozycji klatki schodowej (F2-04)."""
     bounds = polygon.bounds
     if len(bounds) != 4:
         return Polygon()
@@ -312,15 +315,25 @@ def _build_corridor(polygon: Polygon, width: float) -> Polygon:
 
     if w >= h:
         # korytarz poziomy wzdłuż osi X
-        mid_y = (miny + maxy) / 2.0
         half = width / 2.0
+        if cage_polygon:
+            cage_y = cage_polygon.centroid.y
+            mid_y = max(miny + half, min(maxy - half, cage_y))
+        else:
+            mid_y = (miny + maxy) / 2.0
+
         corridor = Polygon(
             [(minx, mid_y - half), (maxx, mid_y - half), (maxx, mid_y + half), (minx, mid_y + half)]
         )
     else:
         # korytarz pionowy wzdłuż osi Y
-        mid_x = (minx + maxx) / 2.0
         half = width / 2.0
+        if cage_polygon:
+            cage_x = cage_polygon.centroid.x
+            mid_x = max(minx + half, min(maxx - half, cage_x))
+        else:
+            mid_x = (minx + maxx) / 2.0
+
         corridor = Polygon(
             [(mid_x - half, miny), (mid_x + half, miny), (mid_x + half, maxy), (mid_x - half, maxy)]
         )

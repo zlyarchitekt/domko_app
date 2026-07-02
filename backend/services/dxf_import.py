@@ -122,12 +122,10 @@ def _bounding_dimensions(polygon: geom.Polygon) -> dict[str, float]:
 
 def import_footprint_from_dxf(file_bytes: bytes) -> DxfImportResult:
     """Parse DXF bytes and return the largest closed polygon as GeoJSON."""
-    tmp = tempfile.NamedTemporaryFile(suffix=".dxf", delete=False)
-    tmp_path = tmp.name
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
     try:
-        with open(tmp_path, "wb") as f:
-            f.write(file_bytes)
         try:
             doc = ezdxf.readfile(tmp_path)
         except (DXFStructureError, OSError, UnicodeDecodeError) as exc:

@@ -13,7 +13,6 @@ from shapely.geometry import LineString, Polygon
 
 from services.layout import ApartmentCell, LayoutResult, azimuth_to_cardinal
 
-
 # Thresholds for hourly sun status (matches frontend legend)
 SUN_STATUS_SUNNY = "słoneczne"
 SUN_STATUS_PARTIAL = "częściowe"
@@ -34,7 +33,7 @@ class FacadeSegment:
 
     apartment_id: str
     apartment_type: str
-    edge: Tuple[Tuple[float, float], Tuple[float, float]]
+    edge: tuple[tuple[float, float], tuple[float, float]]
     length_m: float
     azimuth_deg: float
     """Azimuth of the outward-pointing facade normal (0=N, 90=E, 180=S, 270=W)."""
@@ -64,7 +63,7 @@ class FacadeAnalysis:
     length_m: float
     hours_total: float
     hours_status: dict[str, float]
-    hourly: List[SunStatusHour]
+    hourly: list[SunStatusHour]
     meets_wt: bool
     required_hours: float
 
@@ -80,8 +79,8 @@ class SolarAnalysisResult:
     required_hours: float
     building_azimuth_deg: float | None
     building_orientation: str | None
-    facades: List[FacadeAnalysis]
-    apartments: List[dict]
+    facades: list[FacadeAnalysis]
+    apartments: list[dict]
     summary: dict = field(default_factory=dict)
 
 
@@ -129,7 +128,7 @@ def analyze_solar_access(
         else compute_sun_position_timeseries(latitude, longitude, analysis_date, timezone)
     )
 
-    analyzed: List[FacadeAnalysis] = []
+    analyzed: list[FacadeAnalysis] = []
     for facade in facades:
         hourly, hours_total, hours_status = _analyze_facade(facade, solar_df)
         meets_wt = hours_total >= required_hours
@@ -171,7 +170,7 @@ def analyze_solar_access(
     )
 
 
-def _extract_facade_segments(layout: LayoutResult) -> List[FacadeSegment]:
+def _extract_facade_segments(layout: LayoutResult) -> list[FacadeSegment]:
     """Extract exterior facade segments for all apartments.
 
     A facade segment is an edge of an apartment polygon that is collinear and
@@ -183,7 +182,7 @@ def _extract_facade_segments(layout: LayoutResult) -> List[FacadeSegment]:
         return []
 
     footprint_edges = _polygon_edges(footprint)
-    segments: List[FacadeSegment] = []
+    segments: list[FacadeSegment] = []
 
     for apt in layout.apartments:
         apt_edges = _polygon_edges(apt.polygon)
@@ -215,19 +214,19 @@ def _extract_facade_segments(layout: LayoutResult) -> List[FacadeSegment]:
     return _merge_facade_segments(segments)
 
 
-def _merge_facade_segments(segments: List[FacadeSegment]) -> List[FacadeSegment]:
+def _merge_facade_segments(segments: list[FacadeSegment]) -> list[FacadeSegment]:
     """Merge collinear overlapping fragments per apartment/orientation."""
     if not segments:
         return []
 
     # Group by apartment + rounded orientation (±22.5° already handled by cardinal).
-    groups: dict[Tuple[str, str], List[FacadeSegment]] = {}
+    groups: dict[tuple[str, str], list[FacadeSegment]] = {}
     for seg in segments:
         key = (seg.apartment_id, seg.orientation)
         groups.setdefault(key, []).append(seg)
 
-    merged: List[FacadeSegment] = []
-    for (apt_id, orientation), group in groups.items():
+    merged: list[FacadeSegment] = []
+    for (_apt_id, _orientation), group in groups.items():
         # Sort segments along their shared axis and merge contiguous/overlapping ones.
         first = group[0]
         axis = _segment_axis(first.edge)
@@ -255,14 +254,14 @@ def _merge_facade_segments(segments: List[FacadeSegment]) -> List[FacadeSegment]
     return merged
 
 
-def _segment_axis(edge: Tuple[Tuple[float, float], Tuple[float, float]]) -> str:
+def _segment_axis(edge: tuple[tuple[float, float], tuple[float, float]]) -> str:
     """Return 'x' if the edge is horizontal-ish, otherwise 'y'."""
     (x1, y1), (x2, y2) = edge
     return "x" if abs(x2 - x1) >= abs(y2 - y1) else "y"
 
 
 def _project_edge_mid(
-    edge: Tuple[Tuple[float, float], Tuple[float, float]], axis: str
+    edge: tuple[tuple[float, float], tuple[float, float]], axis: str
 ) -> float:
     (x1, y1), (x2, y2) = edge
     if axis == "x":
@@ -271,8 +270,8 @@ def _project_edge_mid(
 
 
 def _edges_collinear_and_contiguous(
-    a: Tuple[Tuple[float, float], Tuple[float, float]],
-    b: Tuple[Tuple[float, float], Tuple[float, float]],
+    a: tuple[tuple[float, float], tuple[float, float]],
+    b: tuple[tuple[float, float], tuple[float, float]],
     tol: float = 1e-6,
 ) -> bool:
     """Return True if two collinear axis-aligned edges touch or overlap."""
@@ -296,9 +295,9 @@ def _edges_collinear_and_contiguous(
 
 
 def _merge_two_edges(
-    a: Tuple[Tuple[float, float], Tuple[float, float]],
-    b: Tuple[Tuple[float, float], Tuple[float, float]],
-) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    a: tuple[tuple[float, float], tuple[float, float]],
+    b: tuple[tuple[float, float], tuple[float, float]],
+) -> tuple[tuple[float, float], tuple[float, float]]:
     """Return the bounding edge of two collinear edges."""
     pts = [a[0], a[1], b[0], b[1]]
     axis = _segment_axis(a)
@@ -333,12 +332,12 @@ def compute_sun_position_timeseries(
 def _analyze_facade(
     facade: FacadeSegment,
     solar_df: pd.DataFrame,
-) -> Tuple[List[SunStatusHour], float, dict[str, float]]:
+) -> tuple[list[SunStatusHour], float, dict[str, float]]:
     """Compute hourly status and total sunny hours for a facade segment."""
     normal_az_rad = math.radians(facade.azimuth_deg)
     normal = (math.sin(normal_az_rad), math.cos(normal_az_rad))
 
-    hourly: List[SunStatusHour] = []
+    hourly: list[SunStatusHour] = []
     hours_total = 0.0
     hours_status = {
         SUN_STATUS_SUNNY: 0.0,
@@ -375,7 +374,7 @@ def _analyze_facade(
 def _sun_dot_facade_normal(
     sun_elevation_deg: float,
     sun_azimuth_deg: float,
-    facade_normal: Tuple[float, float],
+    facade_normal: tuple[float, float],
 ) -> float:
     """Dot product of the sun direction unit vector and facade normal.
 
@@ -420,9 +419,9 @@ def _status_from_cos(cos_incidence: float, elevation_deg: float) -> str:
 
 
 def _summarize_apartments(
-    facades: List[FacadeAnalysis],
+    facades: list[FacadeAnalysis],
     required_hours: float,
-) -> List[dict]:
+) -> list[dict]:
     """Build per-apartment summary from facade results."""
     by_apt: dict[str, dict] = {}
     for f in facades:
@@ -461,7 +460,7 @@ def _summarize_apartments(
     return result
 
 
-def _polygon_edges(polygon: Polygon) -> List[Tuple[Tuple[float, float], Tuple[float, float]]]:
+def _polygon_edges(polygon: Polygon) -> list[tuple[tuple[float, float], tuple[float, float]]]:
     """Return exterior edges of a polygon as point pairs."""
     coords = list(polygon.exterior.coords)[:-1]
     n = len(coords)
@@ -471,7 +470,7 @@ def _polygon_edges(polygon: Polygon) -> List[Tuple[Tuple[float, float], Tuple[fl
 
 
 def _edge_normal_azimuth(
-    p1: Tuple[float, float], p2: Tuple[float, float], parent: Polygon
+    p1: tuple[float, float], p2: tuple[float, float], parent: Polygon
 ) -> float:
     """Return the outward-pointing normal azimuth for a polygon edge."""
     x1, y1 = p1
