@@ -9,7 +9,7 @@ import { deriveApartmentStatuses } from "./lib/deriveStatus";
 import { GeoJsonPolygon } from "./lib/api";
 import * as api from "./lib/api";
 const METER_PX = 50; // base scale: 1m = 50px
-const SNAP_M = 0.01; // F1-04: snap do siatki co 1cm
+const SNAP_M = 0.5; // snap do siatki co 0.5m (rysowanie, wierzchołki, linie podziału)
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -188,35 +188,29 @@ export default function CanvasEditor() {
 
   const boundsCenter = useMemo(() => centerOf(dataBounds), [dataBounds]);
 
-  // Footprint-only bounds drive the *automatic* re-centering effect below. It must NOT
-  // react to state.drawingPoints: recentering after every click while the user is
-  // mid-draw shifts `position`, which worldToMeters() reads on the next click — so the
-  // screen-to-world mapping drifts under the user's cursor and clicking back on the
-  // (now-moved) first point no longer lands within the closing distance. Keeping this
-  // tied to the committed `footprint` means the view still auto-fits on load/import, but
-  // stays put while a polygon is being drawn point-by-point.
-  const footprintBounds = useMemo(() => computeBounds(footprint ?? []), [footprint]);
-  const footprintCenter = useMemo(() => centerOf(footprintBounds), [footprintBounds]);
-
+  // The view is centered on the world origin exactly once, right after the container's
+  // real size is first measured. It deliberately does NOT react to footprint/layout
+  // changes afterward — auto-recentering on every edit was disorienting (it moved the
+  // view out from under whatever the user was doing) and is redundant with the explicit
+  // "Fit to screen" button below, which the user can invoke whenever they actually want
+  // the view to jump.
+  const hasCenteredRef = useRef(false);
   useEffect(() => {
     const update = () => {
       if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
-      setSize({ width: Math.max(1, rect.width), height: Math.max(1, rect.height) });
+      const width = Math.max(1, rect.width);
+      const height = Math.max(1, rect.height);
+      setSize({ width, height });
+      if (!hasCenteredRef.current) {
+        hasCenteredRef.current = true;
+        setPosition({ x: width / 2, y: height / 2 });
+      }
     };
     update();
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
   }, []);
-
-  const initialCentered = useMemo(() => {
-    return { x: size.width / 2 - footprintCenter.x, y: size.height / 2 - footprintCenter.y };
-  }, [size.width, size.height, footprintCenter.x, footprintCenter.y]);
-
-  useEffect(() => {
-    setPosition(initialCentered);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialCentered.x, initialCentered.y]);
 
   const onWheel = (e: KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
@@ -254,7 +248,7 @@ export default function CanvasEditor() {
 
   const resetView = () => {
     setScale(1);
-    setPosition(initialCentered);
+    setPosition({ x: size.width / 2, y: size.height / 2 });
   };
 
   const worldSize = 2000;
@@ -396,7 +390,7 @@ export default function CanvasEditor() {
         scaleY={scale}
         x={position.x}
         y={position.y}
-        draggable={state.mode === "idle"}
+        draggable={state.mode !== "draw"}
         onWheel={onWheel}
         onClick={handleStageClick}
         onDblClick={handleStageDblClick}

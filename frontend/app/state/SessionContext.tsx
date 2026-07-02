@@ -127,7 +127,14 @@ function reducer(state: SessionState, action: Action): SessionState {
       if (!state.footprint) return state;
       const next = [...state.footprint];
       next[action.index] = action.point;
-      return { ...state, footprint: next };
+      // Mirror SET_FOOTPRINT: layoutResult/validation were computed from the old
+      // outline shape, so they (and anything derived from them) are now stale.
+      // Without this, "Analiza solarna"/"Uruchom Optymalizator" stayed enabled
+      // (they only check layoutResult !== null) and silently sent the new
+      // footprint alongside apartment geometry that no longer matches it —
+      // the backend can't line facades up with apartments and returns empty
+      // results with no error, which looks like "re-analysis doesn't work".
+      return { ...state, footprint: next, layoutResult: null, validation: null };
     }
     case "SET_PROGRAM":
       return { ...state, program: action.program };

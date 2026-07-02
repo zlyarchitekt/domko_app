@@ -170,6 +170,20 @@ def analyze_solar_access(
     )
 
 
+FACADE_COLLINEAR_TOLERANCE_M = 0.02
+"""Max perpendicular distance (m) from an apartment-edge endpoint to a footprint
+edge's line for the two to be considered "running along the same wall". Needed
+because shapely/GEOS's `LineString.intersection()` is not reliable for exactly
+collinear segments — it commonly reports only the shared endpoint as a Point
+instead of the overlapping sub-segment as a LineString (a known GEOS numerical
+robustness gap, not a floating-point precision issue in our own coordinates:
+apartment edges produced by BSP splitting for a non-axis-aligned footprint were
+verified to be collinear with the footprint edge to ~1e-16m and still failed the
+old intersection-based check). We therefore compute the overlap ourselves via
+point-to-line distance and parametric projection instead of relying on
+`shapely.intersection()` for this specific collinear-overlap case."""
+
+
 def _extract_facade_segments(layout: LayoutResult) -> list[FacadeSegment]:
     """Extract exterior facade segments for all apartments.
 
@@ -187,15 +201,14 @@ def _extract_facade_segments(layout: LayoutResult) -> list[FacadeSegment]:
     for apt in layout.apartments:
         apt_edges = _polygon_edges(apt.polygon)
         for a1, a2 in apt_edges:
-            seg_apt = LineString([a1, a2])
-            if seg_apt.length < 1e-6:
+            if math.hypot(a2[0] - a1[0], a2[1] - a1[1]) < 1e-6:
                 continue
             for f1, f2 in footprint_edges:
-                seg_fp = LineString([f1, f2])
-                inter = seg_apt.intersection(seg_fp)
-                if inter.is_empty or inter.geom_type != "LineString":
+                overlap_edge = _collinear_overlap(a1, a2, f1, f2)
+                if overlap_edge is None:
                     continue
-                overlap = inter.length
+                p_lo, p_hi = overlap_edge
+                overlap = math.hypot(p_hi[0] - p_lo[0], p_hi[1] - p_lo[1])
                 if overlap < 1e-6:
                     continue
                 az = _edge_normal_azimuth(f1, f2, footprint)
@@ -203,7 +216,7 @@ def _extract_facade_segments(layout: LayoutResult) -> list[FacadeSegment]:
                     FacadeSegment(
                         apartment_id=apt.id,
                         apartment_type=apt.type,
-                        edge=(inter.coords[0], inter.coords[-1]),
+                        edge=(p_lo, p_hi),
                         length_m=overlap,
                         azimuth_deg=az,
                         orientation=azimuth_to_cardinal(az) or "?",
@@ -212,6 +225,40 @@ def _extract_facade_segments(layout: LayoutResult) -> list[FacadeSegment]:
 
     # Merge adjacent collinear segments belonging to the same apartment.
     return _merge_facade_segments(segments)
+
+
+def _collinear_overlap(
+    a1: tuple[float, float],
+    a2: tuple[float, float],
+    f1: tuple[float, float],
+    f2: tuple[float, float],
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """Return the overlapping sub-segment of footprint edge f1-f2 covered by
+    apartment edge a1-a2, or None if they don't run along the same line.
+
+    Both apartment-edge endpoints must lie within FACADE_COLLINEAR_TOLERANCE_M
+    of the (infinite) line through f1-f2; the overlap is then the intersection
+    of the apartment edge's projection onto that line with the footprint edge's
+    own [0, length] extent.
+    """
+    fdx, fdy = f2[0] - f1[0], f2[1] - f1[1]
+    fp_len = math.hypot(fdx, fdy)
+    if fp_len < 1e-9:
+        return None
+
+    for p in (a1, a2):
+        cross = abs(fdx * (p[1] - f1[1]) - fdy * (p[0] - f1[0]))
+        if cross / fp_len > FACADE_COLLINEAR_TOLERANCE_M:
+            return None
+
+    ux, uy = fdx / fp_len, fdy / fp_len
+    t1 = (a1[0] - f1[0]) * ux + (a1[1] - f1[1]) * uy
+    t2 = (a2[0] - f1[0]) * ux + (a2[1] - f1[1]) * uy
+    lo, hi = max(min(t1, t2), 0.0), min(max(t1, t2), fp_len)
+    if hi - lo < 1e-6:
+        return None
+
+    return ((f1[0] + ux * lo, f1[1] + uy * lo), (f1[0] + ux * hi, f1[1] + uy * hi))
 
 
 def _merge_facade_segments(segments: list[FacadeSegment]) -> list[FacadeSegment]:
