@@ -1,10 +1,8 @@
-import pytest
 from fastapi.testclient import TestClient
 from shapely.geometry import MultiPolygon, Polygon
 
 from main import app
 from services.bsp import (
-    bsp_zones,
     concave_vertices,
     corner_cage,
     is_concave,
@@ -39,15 +37,6 @@ def test_u_shape_three_concave():
     assert is_concave(poly) is True
     cv = concave_vertices(poly)
     assert len(cv) == 2
-
-
-def test_bsp_zones_for_l_shape():
-    poly = Polygon(L_SHAPE)
-    zones = bsp_zones(poly)
-    names = [z.name for z in zones]
-    assert "Z-cage" in names
-    total = sum(z.polygon.area for z in zones)
-    assert total == pytest.approx(poly.area)
 
 
 def test_corner_cage_l_shape():

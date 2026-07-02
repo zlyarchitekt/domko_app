@@ -254,33 +254,3 @@ def corner_cage(polygon: Polygon, corner: tuple[float, float], size: float = 1.0
     return best_cage
 
 
-def bsp_zones(polygon: Polygon, max_zone_area: float | None = None) -> list[Zone]:
-    """Rekurencyjnie dzieli poligon na strefy prostokątne; dla wklęsłych najpierw wycina klatkę w narożniku."""
-    zones: list[Zone] = []
-
-    def recurse(poly: Polygon, name_prefix: str):
-        if max_zone_area is not None and poly.area <= max_zone_area:
-            zones.append(Zone(name=name_prefix, polygon=poly))
-            return
-        cv = concave_vertices(poly)
-        if cv:
-            idx, x, y = cv[0]
-            cage = corner_cage(poly, (x, y))
-            if cage.area <= 0:
-                zones.append(Zone(name=name_prefix, polygon=poly))
-                return
-            remainder = poly.difference(cage)
-            if remainder.is_empty:
-                zones.append(Zone(name=f"{name_prefix}-cage", polygon=cage))
-                return
-            zones.append(Zone(name=f"{name_prefix}-cage", polygon=cage))
-            if remainder.geom_type == "Polygon":
-                recurse(remainder, f"{name_prefix}-r")
-            else:
-                for i, geom in enumerate(remainder.geoms):
-                    recurse(geom, f"{name_prefix}-r{i}")
-        else:
-            zones.append(Zone(name=name_prefix, polygon=poly))
-
-    recurse(polygon, "Z")
-    return zones

@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from shapely.geometry import Polygon
 
-from services.bsp import bsp_zones, concave_vertices, corner_cage
+from services.bsp import concave_vertices, corner_cage, rectangle_decompose
 
 router = APIRouter()
 
@@ -51,9 +51,12 @@ def bsp_zones_endpoint(request: PointListRequest):
         poly = points_to_polygon_coords(request.points)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    zones = bsp_zones(poly)
+    parts = rectangle_decompose(poly)
     return ZonesResponse(
-        zones=[ZoneItem(name=z.name, geometry=json.loads(json.dumps(z.polygon.__geo_interface__))) for z in zones]
+        zones=[
+            ZoneItem(name=f"Z{i}", geometry=json.loads(json.dumps(p.__geo_interface__)))
+            for i, p in enumerate(parts)
+        ]
     )
 
 

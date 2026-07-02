@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 from shapely.geometry import Polygon
 
-from services.bsp import bsp_zones, concave_vertices
+from services.bsp import concave_vertices
 from services.layout import (
     ApartmentSpec,
     LayoutInput,

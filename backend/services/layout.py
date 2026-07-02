@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import math
-import uuid
 from dataclasses import dataclass, field
 
 from shapely.geometry import LineString, Polygon
 from shapely.ops import split, unary_union
 
-from services.bsp import Zone, bsp_zones
+from services.bsp import Zone
 
 _CARDINAL_DIRECTIONS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 
@@ -124,58 +123,36 @@ class LayoutResult:
 
 
 def generate_layout(input: LayoutInput) -> LayoutResult:
-    """Generuje układ kondygnacji na podstawie obrysu."""
+    """Generuje układ kondygnacji na podstawie obrysu.
+
+    Wrapper nad dwoma jawnymi etapami (docs/superpowers/specs/2026-07-02-
+    layout-engine-redesign-design.md): place_circulation (klatka+korytarz
+    per prawie-prostokątna strefa) potem subdivide_units (dopasowanie
+    programu do pozostałości). Zachowany dla optimizer.py i /layout/generate
+    — oba etapy są też dostępne osobno (services.circulation.place_circulation,
+    services.unit_mix.subdivide_units) dla nowych endpointów /layout/circulation
+    i /layout/units."""
+    from services.circulation import place_circulation
+    from services.unit_mix import subdivide_units
+
     footprint = input.footprint
     footprint_area = footprint.area
 
-    # 1. Podział BSP na strefy prostokątne
-    zones = bsp_zones(footprint)
+    circulation = place_circulation(
+        footprint,
+        corridor_width_m=input.corridor_width_m,
+        stair_width_m=input.stair_width_m,
+        place_cage=input.place_cage,
+        cage_size_m=input.cage_size_m,
+        cage_position=input.cage_position,
+    )
 
-    apartments: list[ApartmentCell] = []
-    circulation_geom = Polygon()
-    cage_polygons: list[Polygon] = []
-    leftover = Polygon()
-
-    for zone in zones:
-        if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
-            continue
-
-        # 2. Klatka wg trybu pozycji (plan.md §4.3: 1a/1b/2/3/auto).
-        # Tylko jedna klatka na budynek (na razie — wiele klatek to zakres
-        # optymalizatora/cage_mode, poza tym prostym generatorem), i nigdy w
-        # strefie "-cage" wyciętej wewnętrznie przez bsp_zones() — to tylko
-        local_cage = None
-        # techniczny nibble (stały ~1m, niezależny od cage_size_m) używany do
-        # rozbicia wklęsłego obrysu na strefy prostokątne, nie realna klatka.
-        if input.place_cage and not cage_polygons and not zone.name.endswith("-cage"):
-            cage_polygon = _place_cage_by_mode(zone.polygon, input.cage_position, input.cage_size_m)
-            # Odrzuć klatkę, która pochłonęłaby (prawie) całą strefę — zbyt mała
-            # strefa względem cage_size_m nie ma miejsca na korytarz/mieszkania,
-            # lepiej nie stawiać klatki niż zwrócić pusty/zdegenerowany poligon.
-            if cage_polygon is not None and cage_polygon.area > zone.polygon.area * 0.9:
-                cage_polygon = None
-            if cage_polygon is not None and cage_polygon.area > 0:
-                circulation_geom = unary_union([circulation_geom, cage_polygon])
-                cage_polygons.append(cage_polygon)
-                zone = Zone(name=zone.name, polygon=zone.polygon.difference(cage_polygon))
-                local_cage = cage_polygon
-
-        # 3. Korytarz wzdłuż osi dłuższego boku strefy
-        corridor = _build_corridor(zone.polygon, input.corridor_width_m, local_cage)
-        if corridor.area > 0:
-            circulation_geom = unary_union([circulation_geom, corridor])
-            zone = Zone(name=zone.name, polygon=zone.polygon.difference(corridor))
-
-        # 4. Podział pozostałej strefy na mieszkania
-        zone_apartments, zone_leftover = _slice_apartments(
-            zone.polygon, input.apartments
-        )
-        apartments.extend(zone_apartments)
-        if zone_leftover and zone_leftover.area > 1e-6:
-            leftover = unary_union([leftover, zone_leftover])
+    apartments, leftover = subdivide_units(circulation.remainder, input.apartments)
 
     usable_area = sum(a.polygon.area for a in apartments)
-    circulation_area = circulation_geom.area if circulation_geom.is_valid else 0.0
+    circulation_area = (
+        circulation.circulation_geometry.area if circulation.circulation_geometry is not None else 0.0
+    )
 
     return LayoutResult(
         footprint=footprint,
@@ -183,11 +160,11 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
         circulation_area_m2=circulation_area,
         usable_area_m2=usable_area,
         apartments=apartments,
-        leftover=leftover if leftover.area > 1e-6 else None,
-        zones=zones,
+        leftover=leftover,
+        zones=circulation.zones,
         building_azimuth_deg=_estimate_building_azimuth(footprint),
-        circulation_geometry=circulation_geom if not circulation_geom.is_empty else None,
-        cage_polygons=cage_polygons,
+        circulation_geometry=circulation.circulation_geometry,
+        cage_polygons=circulation.cage_polygons,
         corridor_width_m=input.corridor_width_m,
         stair_width_m=input.stair_width_m,
     )

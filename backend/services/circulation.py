@@ -36,7 +36,12 @@ def _build_cage(
     return corner_cage(polygon, (x, y), size)
 
 
-def _place_cage_by_mode(polygon: Polygon, mode: str, size: float) -> Polygon | None:
+def _place_cage_by_mode(
+    polygon: Polygon,
+    mode: str,
+    size: float,
+    preferred_corner: tuple[float, float] | None = None,
+) -> Polygon | None:
     """Umieszcza klatkę wg trybu z plan.md §4.3.
 
     - "3"/"auto": narożnik wklęsły jeśli istnieje (jak dotychczas), inaczej
@@ -62,7 +67,7 @@ def _place_cage_by_mode(polygon: Polygon, mode: str, size: float) -> Polygon | N
             except ValueError:
                 return None
             return cage if cage.area > 1e-6 else None
-        return _corner_cage_convex(polygon, size)
+        return _corner_cage_convex(polygon, size, preferred=preferred_corner)
 
     if mode == "2":
         return _centered_cage(polygon, size)
@@ -71,12 +76,28 @@ def _place_cage_by_mode(polygon: Polygon, mode: str, size: float) -> Polygon | N
     return _edge_cage(polygon, size, longest=(mode == "1a"))
 
 
-def _corner_cage_convex(polygon: Polygon, size: float) -> Polygon | None:
-    """Klatka w narożniku bounding-boxa — dla obrysów wypukłych bez wierzchołka wklęsłego."""
+def _corner_cage_convex(
+    polygon: Polygon, size: float, preferred: tuple[float, float] | None = None
+) -> Polygon | None:
+    """Klatka w narożniku bounding-boxa — dla stref bez własnego wierzchołka wklęsłego.
+
+    Domyślnie narożnik (minx,miny). Jeśli `preferred` pokrywa się z jednym z
+    czterech narożników bbox (patrz `place_circulation`'s `_find_preferred_
+    corner` — strefa po `rectangle_decompose` traci swój wklęsły wierzchołek,
+    ale ten wierzchołek staje się zwykłym narożnikiem JEDNEJ z sąsiadujących
+    prostokątnych stref), użyj go zamiast (minx,miny) — przywraca sens trybu
+    "3"/"auto" (klatka schowana w narożniku wewnętrznym) po dekompozycji."""
     minx, miny, maxx, maxy = polygon.bounds
-    candidate = Polygon(
-        [(minx, miny), (minx + size, miny), (minx + size, miny + size), (minx, miny + size)]
-    )
+    corners = [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]
+    ax, ay = corners[0]
+    if preferred is not None:
+        for cx, cy in corners:
+            if abs(cx - preferred[0]) < 1e-6 and abs(cy - preferred[1]) < 1e-6:
+                ax, ay = cx, cy
+                break
+    sx = size if ax == minx else -size
+    sy = size if ay == miny else -size
+    candidate = Polygon([(ax, ay), (ax + sx, ay), (ax + sx, ay + sy), (ax, ay + sy)])
     clipped = candidate.intersection(polygon)
     return clipped if not clipped.is_empty and clipped.area > 1e-6 else None
 
@@ -172,6 +193,22 @@ def _build_corridor(polygon: Polygon, width: float, cage_polygon: Polygon | None
     return corridor.intersection(polygon)
 
 
+def _find_matching_corner(
+    zone_polygon: Polygon, candidates: list[tuple[float, float]]
+) -> tuple[float, float] | None:
+    """Zwraca pierwszy narożnik bbox strefy pokrywający się z jednym z
+    `candidates` (wklęsłych wierzchołków oryginalnego obrysu), albo None."""
+    if not candidates:
+        return None
+    minx, miny, maxx, maxy = zone_polygon.bounds
+    corners = [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]
+    for corner in corners:
+        for cand in candidates:
+            if abs(corner[0] - cand[0]) < 1e-6 and abs(corner[1] - cand[1]) < 1e-6:
+                return corner
+    return None
+
+
 @dataclass
 class CirculationResult:
     """Wynik Etapu 1: strefy (po rectangle_decompose), zunifikowana
@@ -197,28 +234,60 @@ def place_circulation(
     umieszcza klatkę i korytarz w każdej, zwraca zunifikowany wynik."""
     zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
 
+    # rectangle_decompose() rozwiązuje każdy wklęsły wierzchołek OBRYSU na
+    # rzecz dwóch sąsiadujących prostokątnych stref — żadna pojedyncza strefa
+    # nie ma już wierzchołka wklęsłego, więc _place_cage_by_mode's "3"/"auto"
+    # (klatka w narożniku wklęsłym) nigdy by go nie znalazło. Wykrywamy
+    # wklęsłe wierzchołki oryginalnego obrysu raz i dla każdej strefy
+    # sprawdzamy, czy jeden z jej 4 narożników bbox się z którymś pokrywa —
+    # jeśli tak, to jest to dokładnie ten sam punkt, tylko teraz jako zwykły
+    # narożnik strefy (patrz _corner_cage_convex).
+    original_concave = [(x, y) for _, x, y in concave_vertices_in_zone(footprint)]
+
+    # Tylko jedna klatka na budynek (jak dawne generate_layout() — wiele
+    # klatek to zakres optymalizatora/cage_mode, nie tego prostego
+    # generatora, patrz services/optimizer.py's effective_cage_mode). Kolejność
+    # prób: jeśli tryb "3"/"auto", najpierw strefy, których narożnik bbox
+    # pokrywa się z oryginalnym wklęsłym wierzchołkiem (przywraca sens trybu
+    # po rectangle_decompose), potem zwykła kolejność stref.
+    cage_zone_order = list(range(len(zones)))
+    if place_cage and cage_position in ("3", "auto") and original_concave:
+        matching = [
+            i for i in cage_zone_order if _find_matching_corner(zones[i].polygon, original_concave) is not None
+        ]
+        if matching:
+            remaining = [i for i in cage_zone_order if i not in matching]
+            cage_zone_order = matching + remaining
+
+    local_cages: dict[int, Polygon] = {}
     circulation_geom = Polygon()
     cage_polygons: list[Polygon] = []
-    remainder_parts: list[Polygon] = []
 
-    for zone in zones:
-        if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
-            continue
-
-        local_cage: Polygon | None = None
-        if place_cage:
-            cage_polygon = _place_cage_by_mode(zone.polygon, cage_position, cage_size_m)
+    if place_cage:
+        for i in cage_zone_order:
+            zone = zones[i]
+            if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
+                continue
+            preferred_corner = _find_matching_corner(zone.polygon, original_concave)
+            cage_polygon = _place_cage_by_mode(
+                zone.polygon, cage_position, cage_size_m, preferred_corner=preferred_corner
+            )
             if cage_polygon is not None and cage_polygon.area > zone.polygon.area * 0.9:
                 cage_polygon = None
             if cage_polygon is not None and cage_polygon.area > 0:
                 circulation_geom = unary_union([circulation_geom, cage_polygon])
                 cage_polygons.append(cage_polygon)
-                zone_remaining = zone.polygon.difference(cage_polygon)
-                local_cage = cage_polygon
-            else:
-                zone_remaining = zone.polygon
-        else:
-            zone_remaining = zone.polygon
+                local_cages[i] = cage_polygon
+                break
+
+    remainder_parts: list[Polygon] = []
+
+    for i, zone in enumerate(zones):
+        if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
+            continue
+
+        local_cage = local_cages.get(i)
+        zone_remaining = zone.polygon.difference(local_cage) if local_cage is not None else zone.polygon
 
         corridor = _build_corridor(zone_remaining, corridor_width_m, local_cage)
         if corridor.area > 0:
