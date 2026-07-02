@@ -3,6 +3,21 @@
 @tailwind utilities;
 
 @layer base {
+  html {
+    /* Without this, browsers render NATIVE form-control chrome (checkbox
+       tick, <input type="date"> calendar popup, <select> dropdown list,
+       OS-level scrollbar) according to the OS/browser dark-mode preference,
+       completely ignoring our custom `.light`-class theming -- on a system
+       with OS dark mode on, this made those controls look "stuck dark"
+       even though every element we actually paint ourselves was correctly
+       light. color-scheme is the only way to tell the browser which palette
+       to use for the parts it renders itself. */
+    color-scheme: dark;
+  }
+  html.light {
+    color-scheme: light;
+  }
+
   * {
     font-variant-numeric: tabular-nums;
   }
