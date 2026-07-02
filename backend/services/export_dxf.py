@@ -67,7 +67,7 @@ def _geojson_polygon_to_points(geometry: dict[str, Any]) -> list[tuple[float, fl
     """Extract exterior ring coordinates from a GeoJSON Polygon dict."""
     if not isinstance(geometry, dict):
         return []
-    coords = geometry.get("coordinates") or geometry.get(" exterior", [])
+    coords = geometry.get("coordinates") or geometry.get("exterior", [])
     if not coords:
         return []
     ring = coords[0] if isinstance(coords[0], list) else coords

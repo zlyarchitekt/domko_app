@@ -430,39 +430,6 @@ export default function CanvasEditor() {
             />
           )}
 
-          {/* Edycja wierzchołków */}
-          {state.mode === "edit-vertices" && footprint?.map((p, i) => (
-            <Circle
-              key={`vert-${i}`}
-              x={p.x * METER_PX}
-              y={-p.y * METER_PX}
-              radius={6 / scale}
-              fill="#ffffff"
-              stroke="#3b82f6"
-              strokeWidth={2 / scale}
-              draggable
-              onDragMove={(e) => {
-                const mx = snap(e.target.x() / METER_PX);
-                const my = snap(-e.target.y() / METER_PX);
-                e.target.x(mx * METER_PX);
-                e.target.y(-my * METER_PX);
-              }}
-              onDragEnd={(e) => {
-                const mx = snap(e.target.x() / METER_PX);
-                const my = snap(-e.target.y() / METER_PX);
-                updateVertex(i, { x: mx, y: my });
-              }}
-              onMouseEnter={(e) => {
-                const container = e.target.getStage()?.container();
-                if (container) container.style.cursor = "move";
-              }}
-              onMouseLeave={(e) => {
-                const container = e.target.getStage()?.container();
-                if (container) container.style.cursor = cursor;
-              }}
-            />
-          ))}
-
           {/* Rysowanie w toku */}
           {/* Przesuwanie linii (edit-lines) */}
           {state.mode === "edit-lines" && sharedLines.map((sl, i) => {
