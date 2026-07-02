@@ -173,6 +173,33 @@ export function generateLayout(req: LayoutGenerateRequest): Promise<LayoutGenera
   return postJson("/layout/generate", req);
 }
 
+// ── Circulation / Units (Etap 1 / Etap 2 osobno, redesign 2026-07-02) ──
+
+export interface CirculationResponse {
+  circulation_geometry: GeoJsonPolygon | null;
+  cage_geometries: GeoJsonPolygon[];
+  remainder: GeoJsonPolygon; // może być Polygon lub MultiPolygon (patrz backend CirculationResult.remainder)
+}
+
+export function placeCirculation(
+  footprint: Point[],
+  circulation: CirculationSpecInput
+): Promise<CirculationResponse> {
+  return postJson("/layout/circulation", { footprint, circulation });
+}
+
+export interface UnitsResponse {
+  apartments: ApartmentResult[];
+  leftover: GeoJsonPolygon | null;
+}
+
+export function subdivideUnits(
+  remainder: GeoJsonPolygon,
+  apartments: ApartmentProgramInput[]
+): Promise<UnitsResponse> {
+  return postJson("/layout/units", { remainder, apartments });
+}
+
 export interface SplitResponse {
   polygons: GeoJsonPolygon[];
   areas: number[];
