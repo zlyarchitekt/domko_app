@@ -57,3 +57,35 @@ def test_interior_wall_bands_between_two_adjacent_rectangles():
     assert abs((maxx - minx) - 0.20) < 1e-6
     assert abs(minx - 4.90) < 1e-6
     assert abs(maxx - 5.10) < 1e-6
+
+
+def test_interior_wall_bands_disconnected_returns_multipolygon():
+    """With 3+ cells the residual wall frame can be topologically
+    disconnected -- Shapely's difference() then returns a MultiPolygon,
+    not a Polygon. Three cells side by side tile the whole footprint,
+    leaving two separated 0.20m gaps (around x=10 and x=20) that are far
+    enough apart (10.10 < 19.90) to never touch each other."""
+    footprint = Polygon([(0, 0), (30, 0), (30, 6), (0, 6)])
+    cell_a = Polygon([(0, 0), (10, 0), (10, 6), (0, 6)])
+    cell_b = Polygon([(10, 0), (20, 0), (20, 6), (10, 6)])
+    cell_c = Polygon([(20, 0), (30, 0), (30, 6), (20, 6)])
+    bands = interior_wall_bands(footprint, [cell_a, cell_b, cell_c])
+
+    assert bands.geom_type == "MultiPolygon"
+    parts = list(bands.geoms)
+    assert len(parts) >= 2
+
+    parts_by_x = sorted(parts, key=lambda p: p.bounds[0])
+    first, second = parts_by_x[0], parts_by_x[1]
+
+    fminx, fminy, fmaxx, fmaxy = first.bounds
+    assert abs(fminx - 9.90) < 1e-6
+    assert abs(fmaxx - 10.10) < 1e-6
+    assert abs(fminy - 0.10) < 1e-6
+    assert abs(fmaxy - 5.90) < 1e-6
+
+    sminx, sminy, smaxx, smaxy = second.bounds
+    assert abs(sminx - 19.90) < 1e-6
+    assert abs(smaxx - 20.10) < 1e-6
+    assert abs(sminy - 0.10) < 1e-6
+    assert abs(smaxy - 5.90) < 1e-6

@@ -7,7 +7,7 @@ zostaje nietknięty (spec §2)."""
 
 from __future__ import annotations
 
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import unary_union
 
 WALL_EXTERIOR_THICKNESS_M = 0.40
@@ -43,11 +43,13 @@ def exterior_wall_band(footprint: Polygon) -> Polygon:
     return exterior_envelope.difference(interior_envelope)
 
 
-def interior_wall_bands(footprint: Polygon, cells: list[Polygon]) -> Polygon:
+def interior_wall_bands(footprint: Polygon, cells: list[Polygon]) -> Polygon | MultiPolygon:
     """Pasy ścian wewnętrznych między wszystkimi podanymi komórkami (i
     między komórkami a licem wewnętrznym obrysu) -- spec §3. `cells`
     powinno zawierać wszystkie ApartmentCell.polygon + circulation_geometry,
-    świadomie BEZ LayoutResult.leftover (spec §3)."""
+    świadomie BEZ LayoutResult.leftover (spec §3). Z 3+ komórkami
+    pozostała ramka ścian może być topologicznie rozłączona -- wtedy
+    Shapely zwraca MultiPolygon, nie Polygon (zob. test poniżej)."""
     interior_envelope = footprint.buffer(-WALL_EXTERIOR_AXIS_TO_INTERIOR_FACE_M, join_style="mitre")
     nets = [net_polygon(c) for c in cells if c is not None and not c.is_empty]
     nets = [n for n in nets if not n.is_empty]
