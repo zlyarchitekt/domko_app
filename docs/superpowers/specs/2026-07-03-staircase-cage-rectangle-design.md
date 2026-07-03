@@ -66,9 +66,10 @@ Kluczowe decyzje z iteracji wizualnych (żeby nie zgadywać ponownie):
 - **Dolny rząd: "spocznik + korytarz razem"**, 400×150, pełna szerokość —
   łączy dolny spocznik biegów z fragmentem korytarza przed windą w jedną
   strefę (użytkownik: *"korytarz i górny spocznik razem"* — połączenie, nie
-  osobne cienkie pasy). Głębokość tej strefy = istniejący parametr
-  `corridor_width_m` (domyślnie 1.5m), nie nowa stała — unika duplikowania
-  źródła prawdy o szerokości korytarza.
+  osobne cienkie pasy). Nominalna głębokość 150cm (zbieżna z domyślnym
+  `corridor_width_m=1.5`), ale wliczona NA SZTYWNO w `CAGE_DEPTH_M` z §4.1 —
+  nakładka frontendowa etykietuje ten pas jako stronę korytarza, nie zmienia
+  rozmiaru wraz z parametrem `corridor_width_m` (czysto wizualne, patrz §2).
 
 ## 4. Architektura
 
