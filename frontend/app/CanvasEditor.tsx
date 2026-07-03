@@ -730,6 +730,9 @@ export default function CanvasEditor() {
                   strokeWidth={2 / scale}
                 />
               ))}
+              {cageGeometries.flatMap((geom, i) =>
+                cageSubdivisionShapes(geom, `edit-cage-sub-${i}`, scale, canvasColors.axis, canvasColors.axisText)
+              )}
             </Group>
           )}
 
