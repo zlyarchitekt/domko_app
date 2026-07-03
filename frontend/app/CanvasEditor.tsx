@@ -401,21 +401,55 @@ export default function CanvasEditor() {
     setPosition({ x: size.width / 2, y: size.height / 2 });
   };
 
-  const worldSize = 2000;
-  const gridLines = useMemo(() => {
-    const lines: number[][] = [];
-    const step = METER_PX;
-    const half = worldSize / 2;
-    for (let i = -half; i <= half; i += step) {
-      lines.push([-half, i, half, i]);
-      lines.push([i, -half, i, half]);
-    }
-    return lines;
-  }, []);
+  // Siatka i osie liczone względem aktualnie widocznego obszaru (position/scale/size),
+  // nie stałego rozmiaru świata -- dzięki temu "ciągną się w nieskończoność" przy
+  // panning/zoom zamiast kończyć się na sztywnej granicy.
+  const viewBounds = useMemo(() => {
+    const pad = METER_PX * 4; // margines, żeby kropki nie znikały tuż przed re-renderem
+    return {
+      minX: -position.x / scale - pad,
+      maxX: (size.width - position.x) / scale + pad,
+      minY: -position.y / scale - pad,
+      maxY: (size.height - position.y) / scale + pad,
+    };
+  }, [position, scale, size]);
 
+  const gridDots = useMemo(() => {
+    const rangeX = viewBounds.maxX - viewBounds.minX;
+    const rangeY = viewBounds.maxY - viewBounds.minY;
+    // Odstęp kropek to 1m, ale przy bardzo dużym oddaleniu (mały scale) liczba
+    // kropek w widoku eksploduje -- pogrubiamy siatkę (5m/10m/...) tylko wtedy,
+    // żeby utrzymać rozsądną liczbę węzłów Konva do wyrenderowania.
+    const levelsM = [1, 2, 5, 10, 20, 50, 100];
+    let stepM = levelsM[levelsM.length - 1];
+    for (const lvl of levelsM) {
+      const count = (rangeX / (lvl * METER_PX)) * (rangeY / (lvl * METER_PX));
+      if (count <= 4000) {
+        stepM = lvl;
+        break;
+      }
+    }
+    const step = stepM * METER_PX;
+    const startX = Math.floor(viewBounds.minX / step) * step;
+    const startY = Math.floor(viewBounds.minY / step) * step;
+    const dots: { x: number; y: number }[] = [];
+    for (let x = startX; x <= viewBounds.maxX; x += step) {
+      for (let y = startY; y <= viewBounds.maxY; y += step) {
+        dots.push({ x, y });
+      }
+    }
+    return dots;
+  }, [viewBounds]);
+
+  const axisExtent = Math.max(
+    Math.abs(viewBounds.minX),
+    Math.abs(viewBounds.maxX),
+    Math.abs(viewBounds.minY),
+    Math.abs(viewBounds.maxY)
+  );
   const axisLines = [
-    [-worldSize / 2, 0, worldSize / 2, 0],
-    [0, -worldSize / 2, 0, worldSize / 2],
+    [-axisExtent, 0, axisExtent, 0],
+    [0, -axisExtent, 0, axisExtent],
   ];
 
   const toCanvasPoints = (points: Point2D[]) => points.flatMap((p) => [p.x * METER_PX, -p.y * METER_PX]);
@@ -564,12 +598,18 @@ export default function CanvasEditor() {
         style={{ cursor }}
       >
         <Layer>
-          <Rect x={-worldSize / 2} y={-worldSize / 2} width={worldSize} height={worldSize} fill={canvasColors.bg} />
+          <Rect
+            x={viewBounds.minX}
+            y={viewBounds.minY}
+            width={viewBounds.maxX - viewBounds.minX}
+            height={viewBounds.maxY - viewBounds.minY}
+            fill={canvasColors.bg}
+          />
         </Layer>
 
-        <Layer>
-          {gridLines.map((points, i) => (
-            <Line key={`g-${i}`} points={points} stroke={canvasColors.grid} strokeWidth={1 / scale} />
+        <Layer listening={false}>
+          {gridDots.map((d, i) => (
+            <Circle key={`gd-${i}`} x={d.x} y={d.y} radius={1.2 / scale} fill={canvasColors.grid} />
           ))}
         </Layer>
 
