@@ -196,11 +196,20 @@ def rectangle_decompose(poly: Polygon | MultiPolygon) -> list[Polygon]:
     return [poly]
 
 
-def corner_cage(polygon: Polygon, corner: tuple[float, float], size: float = 1.0) -> Polygon:
-    """Generuje kwadratową klatkę w narożniku (przy wierzchołku wklęsłym) o boku `size`.
+def corner_cage(
+    polygon: Polygon,
+    corner: tuple[float, float],
+    width: float = 1.0,
+    depth: float = 1.0,
+) -> Polygon:
+    """Generuje prostokątną klatkę w narożniku (przy wierzchołku wklęsłym).
 
-    Klatka jest orientowana tak, by leżeć wewnątrz poligonu wzdłuż dwóch krawędzi
-    przylegających do danego wierzchołka.
+    Rozpiętość wzdłuż każdej z dwóch krawędzi przylegających do narożnika:
+    `width` gdy krawędź jest bardziej pozioma (|dx| >= |dy|), `depth` gdy
+    bardziej pionowa — spec 2026-07-03 (staircase-cage-rectangle) §4.2,
+    reguła deterministyczna dla prostokąta zamiast dawnego kwadratu o boku
+    `size`. Klatka jest orientowana tak, by leżeć wewnątrz poligonu wzdłuż
+    dwóch krawędzi przylegających do danego wierzchołka.
     """
     coords = list(polygon.exterior.coords)[:-1]
     n = len(coords)
@@ -223,19 +232,24 @@ def corner_cage(polygon: Polygon, corner: tuple[float, float], size: float = 1.0
             return (0.0, 0.0)
         return (v[0] / length, v[1] / length)
 
+    def extent(e: tuple[float, float]) -> float:
+        return width if abs(e[0]) >= abs(e[1]) else depth
+
     e1 = unit((prev[0] - corner[0], prev[1] - corner[1]))
     e2 = unit((nxt[0] - corner[0], nxt[1] - corner[1]))
+    s1 = extent(e1)
+    s2 = extent(e2)
 
     def make_cage(sign: int) -> Polygon:
         return Polygon(
             [
                 (corner[0], corner[1]),
-                (corner[0] + sign * e1[0] * size, corner[1] + sign * e1[1] * size),
+                (corner[0] + sign * e1[0] * s1, corner[1] + sign * e1[1] * s1),
                 (
-                    corner[0] + sign * (e1[0] + e2[0]) * size,
-                    corner[1] + sign * (e1[1] + e2[1]) * size,
+                    corner[0] + sign * (e1[0] * s1 + e2[0] * s2),
+                    corner[1] + sign * (e1[1] * s1 + e2[1] * s2),
                 ),
-                (corner[0] + sign * e2[0] * size, corner[1] + sign * e2[1] * size),
+                (corner[0] + sign * e2[0] * s2, corner[1] + sign * e2[1] * s2),
             ]
         )
 

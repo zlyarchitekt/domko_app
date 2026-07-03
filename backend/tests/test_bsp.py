@@ -41,7 +41,7 @@ def test_u_shape_three_concave():
 
 def test_corner_cage_l_shape():
     poly = Polygon(L_SHAPE)
-    cage = corner_cage(poly, (5.0, 5.0))
+    cage = corner_cage(poly, (5.0, 5.0), width=1.0, depth=1.0)
     assert cage.area > 0
     assert poly.contains(cage)
 
@@ -141,3 +141,23 @@ def test_rectangle_decompose_multipolygon_handles_each_part():
     parts = rectangle_decompose(MultiPolygon([a, b]))
     assert len(parts) == 2
     assert abs(sum(p.area for p in parts) - 50.0) < 1e-6
+
+
+def test_corner_cage_builds_rectangle_with_width_and_depth():
+    """Spec 2026-07-03 (staircase-cage-rectangle) §4.2: cage is a width x depth
+    rectangle, not a square. For an axis-aligned concave corner the extent
+    along the horizontal adjacent edge must be `width` and along the vertical
+    adjacent edge `depth`."""
+    from services.bsp import corner_cage
+
+    # L-shape with a concave vertex at (6, 6); its adjacent edges run
+    # horizontally (toward (12, 6)) and vertically (toward (6, 12)).
+    l_shape = Polygon([(0, 0), (12, 0), (12, 6), (6, 6), (6, 12), (0, 12)])
+    cage = corner_cage(l_shape, (6, 6), width=4.0, depth=5.5)
+
+    minx, miny, maxx, maxy = cage.bounds
+    w = maxx - minx
+    h = maxy - miny
+    assert abs(w - 4.0) < 1e-6, f"expected width 4.0 along X, got {w}"
+    assert abs(h - 5.5) < 1e-6, f"expected depth 5.5 along Y, got {h}"
+    assert cage.area > 1e-6
