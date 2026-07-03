@@ -25,6 +25,104 @@ function ringToPoints(geom: GeoJsonPolygon): Point2D[] {
   return ring.slice(0, -1).map(([x, y]) => ({ x, y }));
 }
 
+/** Dekoracyjny podział klatki schodowej (spec 2026-07-03 staircase-cage-rectangle §3/§4.3):
+ *  rzędy od strony minY ("strona wejścia/korytarza"): spocznik+korytarz (150/550),
+ *  2 biegi 120x250 + winda 160x250 (250/550), spocznik 240x150 + szacht 160x150 (150/550).
+ *  Frakcje liczone z bbox konkretnego poligonu, nie zahardkodowane w px. Czysto
+ *  wizualne -- zero wpływu na geometrię/WT, listening=false na wszystkim. */
+function cageSubdivisionShapes(
+  geom: GeoJsonPolygon,
+  keyPrefix: string,
+  scale: number,
+  lineColor: string,
+  textColor: string
+): React.ReactNode[] {
+  const ring = ringToPoints(geom);
+  if (ring.length < 3) return [];
+  const xs = ring.map((p) => p.x);
+  const ys = ring.map((p) => p.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const w = maxX - minX;
+  const h = maxY - minY;
+  if (w < 1e-6 || h < 1e-6) return [];
+
+  // Zone fractions of the approved 400x550 layout.
+  const fx = (f: number) => (minX + f * w) * METER_PX;
+  const fy = (f: number) => -(minY + f * h) * METER_PX; // canvas Y is flipped
+  const X_FLIGHT1 = 120 / 400;
+  const X_FLIGHTS = 240 / 400;
+  const Y_BOTTOM = 150 / 550; // landing+corridor strip (entrance side = minY)
+  const Y_MID_TOP = 400 / 550; // top of flights/elevator band
+
+  const sw = 1 / scale;
+  const nodes: React.ReactNode[] = [];
+
+  // Row separators (full width) + column separators.
+  nodes.push(
+    <Line key={`${keyPrefix}-row-b`} points={[fx(0), fy(Y_BOTTOM), fx(1), fy(Y_BOTTOM)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
+    <Line key={`${keyPrefix}-row-t`} points={[fx(0), fy(Y_MID_TOP), fx(1), fy(Y_MID_TOP)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
+    <Line key={`${keyPrefix}-col-f`} points={[fx(X_FLIGHT1), fy(Y_BOTTOM), fx(X_FLIGHT1), fy(Y_MID_TOP)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
+    <Line key={`${keyPrefix}-col-e`} points={[fx(X_FLIGHTS), fy(Y_BOTTOM), fx(X_FLIGHTS), fy(1)]} stroke={lineColor} strokeWidth={sw} listening={false} />
+  );
+
+  // Stair-flight tread hatching: 6 lines per flight across both flights' band.
+  for (let i = 1; i <= 6; i++) {
+    const t = Y_BOTTOM + (i / 7) * (Y_MID_TOP - Y_BOTTOM);
+    nodes.push(
+      <Line key={`${keyPrefix}-tread-${i}`} points={[fx(0), fy(t), fx(X_FLIGHTS), fy(t)]} stroke={lineColor} strokeWidth={sw} listening={false} />
+    );
+  }
+
+  // Direction arrows: left flight up, right flight down (shaft + head marks).
+  const arrow = (key: string, xf: number, fromT: number, toT: number) => {
+    const head = 0.03 * (toT > fromT ? 1 : -1);
+    return [
+      <Line key={`${key}-shaft`} points={[fx(xf), fy(fromT), fx(xf), fy(toT)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
+      <Line
+        key={`${key}-head`}
+        points={[fx(xf - 0.02), fy(toT - head), fx(xf), fy(toT), fx(xf + 0.02), fy(toT - head)]}
+        stroke={lineColor}
+        strokeWidth={sw}
+        listening={false}
+      />,
+    ];
+  };
+  nodes.push(...arrow(`${keyPrefix}-arr-l`, X_FLIGHT1 / 2, Y_BOTTOM + 0.03, Y_MID_TOP - 0.03));
+  nodes.push(...arrow(`${keyPrefix}-arr-r`, (X_FLIGHT1 + X_FLIGHTS) / 2, Y_MID_TOP - 0.03, Y_BOTTOM + 0.03));
+
+  // Elevator X (diagonals across the elevator cell only).
+  nodes.push(
+    <Line key={`${keyPrefix}-el-1`} points={[fx(X_FLIGHTS), fy(Y_BOTTOM), fx(1), fy(Y_MID_TOP)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
+    <Line key={`${keyPrefix}-el-2`} points={[fx(1), fy(Y_BOTTOM), fx(X_FLIGHTS), fy(Y_MID_TOP)]} stroke={lineColor} strokeWidth={sw} listening={false} />
+  );
+
+  // Labels (tiny, theme-following).
+  const label = (key: string, xf: number, yf: number, text: string) => (
+    <Text
+      key={key}
+      x={fx(xf)}
+      y={fy(yf)}
+      text={text}
+      fontSize={10 / scale}
+      fill={textColor}
+      listening={false}
+      offsetX={14 / scale}
+      offsetY={5 / scale}
+    />
+  );
+  nodes.push(
+    label(`${keyPrefix}-lb-sp`, X_FLIGHTS / 2, (Y_MID_TOP + 1) / 2, "spocznik"),
+    label(`${keyPrefix}-lb-sz`, (X_FLIGHTS + 1) / 2, (Y_MID_TOP + 1) / 2, "szacht"),
+    label(`${keyPrefix}-lb-wd`, (X_FLIGHTS + 1) / 2, (Y_BOTTOM + Y_MID_TOP) / 2, "winda"),
+    label(`${keyPrefix}-lb-ko`, 0.5, Y_BOTTOM / 2, "korytarz")
+  );
+
+  return nodes;
+}
+
 interface Bounds {
   minX: number;
   maxX: number;
@@ -510,6 +608,11 @@ export default function CanvasEditor() {
               strokeWidth={1.5 / scale}
             />
           ))}
+
+          {/* Podział klatki: biegi/spoczniki/winda/szacht (dekoracja, spec 2026-07-03) */}
+          {cageGeometries.flatMap((geom, i) =>
+            cageSubdivisionShapes(geom, `cage-sub-${i}`, scale, canvasColors.axis, canvasColors.axisText)
+          )}
 
           {/* Linia środkowa korytarza — kolor wg progu odległości do klatki (F2-04-bis) */}
           {state.circulationResult?.centerline?.map((seg, i) => (
