@@ -178,8 +178,11 @@ export function generateLayout(req: LayoutGenerateRequest): Promise<LayoutGenera
 export interface CorridorCenterlineSegment {
   points: [Point, Point];
   loading: "single" | "double";
-  distance_start_m: number;
-  distance_end_m: number;
+  // null gdy nie ma klatki schodowej (backend zamienia float('inf') na null,
+  // patrz backend/api/v1/endpoints/layout.py's _finite_or_none) -- final-review
+  // Finding 1, 2026-07-03.
+  distance_start_m: number | null;
+  distance_end_m: number | null;
   max_distance_m: number;
   exceeds_max: boolean;
 }

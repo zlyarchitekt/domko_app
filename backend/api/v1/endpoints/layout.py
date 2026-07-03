@@ -1,4 +1,5 @@
 import json
+import math
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -188,13 +189,23 @@ def _decompose_to_polygons(geom: Polygon | None) -> list[dict]:
     return []
 
 
+def _finite_or_none(x: float) -> float | None:
+    """Odległości wzdłuż centerline są float('inf') gdy nie ma klatki
+    schodowej (patrz services.circulation._distances_along_centerline) --
+    Starlette's default JSONResponse używa allow_nan=False i rzuca 500 przy
+    próbie serializacji Infinity. None jest bezpieczne: frontend czyta tylko
+    `exceeds_max` do kolorowania, nie te pola bezpośrednio (final-review
+    Finding 1, 2026-07-03)."""
+    return x if math.isfinite(x) else None
+
+
 def _serialize_centerline(segments) -> list["CenterlineSegmentResult"]:
     return [
         CenterlineSegmentResult(
             points=[list(seg.points[0]), list(seg.points[1])],
             loading=seg.loading,
-            distance_start_m=seg.distance_start_m,
-            distance_end_m=seg.distance_end_m,
+            distance_start_m=_finite_or_none(seg.distance_start_m),
+            distance_end_m=_finite_or_none(seg.distance_end_m),
             max_distance_m=seg.max_distance_m,
             exceeds_max=seg.exceeds_max,
         )
@@ -205,8 +216,8 @@ def _serialize_centerline(segments) -> list["CenterlineSegmentResult"]:
 class CenterlineSegmentResult(BaseModel):
     points: list[list[float]]
     loading: str
-    distance_start_m: float
-    distance_end_m: float
+    distance_start_m: float | None
+    distance_end_m: float | None
     max_distance_m: float
     exceeds_max: bool
 
@@ -372,7 +383,10 @@ def reshape_circulation_endpoint(request: ReshapeCirculationRequest):
         ((seg.points[0][0], seg.points[0][1]), (seg.points[1][0], seg.points[1][1]))
         for seg in request.centerline
     ]
-    cage_polygons = [_shape(g) for g in request.cage_geometries]
+    try:
+        cage_polygons = [_shape(g) for g in request.cage_geometries]
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid cage geometry: {exc}")
 
     result = reshape_circulation(footprint, centerline_points, request.corridor_width_m, cage_polygons)
 

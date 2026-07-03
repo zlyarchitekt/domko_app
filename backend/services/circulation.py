@@ -387,6 +387,31 @@ class CorridorCenterlineSegment:
     exceeds_max: bool
 
 
+def _make_centerline_segment(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    loading: str,
+    d_start: float,
+    d_end: float,
+) -> CorridorCenterlineSegment:
+    """Buduje CorridorCenterlineSegment z odległości i klasyfikacji już policzonych
+    przez wywołującego -- wspólne dla place_circulation() i reshape_circulation(),
+    żeby uniknąć rozjazdu semantyki jak w naprawionym Finding 2 (final-review)."""
+    max_dist = (
+        CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M
+        if loading == "double"
+        else CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M
+    )
+    return CorridorCenterlineSegment(
+        points=(p1, p2),
+        loading=loading,
+        distance_start_m=d_start,
+        distance_end_m=d_end,
+        max_distance_m=max_dist,
+        exceeds_max=bool(max(d_start, d_end) > max_dist) if math.isfinite(max(d_start, d_end)) else False,
+    )
+
+
 def place_circulation(
     footprint: Polygon,
     corridor_width_m: float,
@@ -486,22 +511,8 @@ def place_circulation(
             footprint,
         )
         loading = _classify_segment_loading(containing_zone, (p1, p2), corridor_width_m)
-        max_dist = (
-            CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M
-            if loading == "double"
-            else CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M
-        )
         d_start, d_end = arc_distances[i], arc_distances[i + 1]
-        centerline.append(
-            CorridorCenterlineSegment(
-                points=(p1, p2),
-                loading=loading,
-                distance_start_m=d_start,
-                distance_end_m=d_end,
-                max_distance_m=max_dist,
-                exceeds_max=bool(max(d_start, d_end) > max_dist) if math.isfinite(max(d_start, d_end)) else False,
-            )
-        )
+        centerline.append(_make_centerline_segment(p1, p2, loading, d_start, d_end))
 
     return CirculationResult(
         zones=zones,
@@ -533,28 +544,24 @@ def reshape_circulation(
 
     remainder = footprint.difference(circulation_geom)
 
+    # Ścieżka edytowanych odcinków jest ciągła (koniec segmentu i = początek
+    # segmentu i+1, patrz frontend), więc liczymy _distances_along_centerline()
+    # RAZ na całej złączonej ścieżce (jak place_circulation()), zamiast per-
+    # segment -- inaczej LineString.project() przycina rzut klatki do końców
+    # pojedynczego segmentu i zaniża odległość na dalszych odcinkach (Finding 2,
+    # final-review 2026-07-03).
+    flat_path: list[tuple[float, float]] = [centerline_points[0][0]]
+    for _, p2 in centerline_points:
+        flat_path.append(p2)
+
     cage_points = [(c.centroid.x, c.centroid.y) for c in cage_polygons]
+    arc_distances = _distances_along_centerline(flat_path, cage_points)
 
     centerline: list[CorridorCenterlineSegment] = []
-    for p1, p2 in centerline_points:
-        arc_distances = _distances_along_centerline([p1, p2], cage_points)
-        loading = _classify_segment_loading(footprint, (p1, p2), corridor_width_m)
-        max_dist = (
-            CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M
-            if loading == "double"
-            else CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M
-        )
-        d_start, d_end = arc_distances[0], arc_distances[1]
-        centerline.append(
-            CorridorCenterlineSegment(
-                points=(p1, p2),
-                loading=loading,
-                distance_start_m=d_start,
-                distance_end_m=d_end,
-                max_distance_m=max_dist,
-                exceeds_max=bool(max(d_start, d_end) > max_dist) if math.isfinite(max(d_start, d_end)) else False,
-            )
-        )
+    for i, (p1, p2) in enumerate(centerline_points):
+        loading = _classify_segment_loading(remainder, (p1, p2), corridor_width_m)
+        d_start, d_end = arc_distances[i], arc_distances[i + 1]
+        centerline.append(_make_centerline_segment(p1, p2, loading, d_start, d_end))
 
     return CirculationResult(
         zones=[],
