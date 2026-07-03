@@ -10,8 +10,35 @@ export type EditorMode = "idle" | "draw" | "edit-vertices" | "edit-lines" | "edi
 export interface ProgramRow {
   id: string;
   type: string;
-  min_area_m2: number;
+  /** Udział w łącznej liczbie mieszkań (0-100), np. 40 = 40%. */
+  percentage: number;
+  area_min_m2: number;
+  area_max_m2: number;
+  /** Pochodne, przeliczane w reducerze z percentage/area_min/area_max/totalUnits
+   * — nigdy nie edytowane bezpośrednio. Trzymane na ProgramRow (nie liczone
+   * dopiero w komponencie), bo tak wyglądał kontrakt zanim doszła "struktura
+   * mieszkań" (%/zakres) i wszystkie call sites (buildRequest, eksport,
+   * optymalizator, walidacja) już czytają te dwie nazwy pól wprost. */
   target_count: number;
+  min_area_m2: number;
+}
+
+/** Zaokrągla `percentage`% z `totalUnits` do liczby całkowitej mieszkań i
+ * ustawia `min_area_m2` na środek zakresu [area_min_m2, area_max_m2] —
+ * to jedyne miejsce, które liczy pochodne pola ProgramRow, wołane po
+ * KAŻDEJ zmianie wierszy programu lub totalUnits, żeby te dwa źródła
+ * prawdy (struktura % + zakres, kontrakt API płaski count+area) nigdy się
+ * nie rozjechały. Odchył "kilka procent" dla liczby mieszkań jest
+ * naturalnym skutkiem zaokrąglania (np. 17 mieszkań × 10% = 1.7 → 2, czyli
+ * faktycznie 11.8% zamiast 10%) — nie ma osobnego parametru tolerancji.
+ * Odchył dla metrażu to sam zakres [area_min_m2, area_max_m2] plus
+ * istniejąca ±3% tolerancja dopasowania w unit_mix.py. */
+function recomputeDerivedProgram(rows: ProgramRow[], totalUnits: number): ProgramRow[] {
+  return rows.map((row) => ({
+    ...row,
+    target_count: Math.max(0, Math.round((totalUnits * row.percentage) / 100)),
+    min_area_m2: (row.area_min_m2 + row.area_max_m2) / 2,
+  }));
 }
 
 interface SessionState {
@@ -19,6 +46,7 @@ interface SessionState {
   drawingPoints: Point2D[];
   mode: EditorMode;
   program: ProgramRow[];
+  totalUnits: number;
   circulation: api.CirculationSpecInput;
   circulationResult: api.CirculationResponse | null;
   layoutResult: api.LayoutGenerateResponse | null;
@@ -46,11 +74,25 @@ const initialCirculation: api.CirculationSpecInput = {
   cage_position: "auto",
 };
 
+const INITIAL_TOTAL_UNITS = 10;
+
+// Domyślna struktura mieszkań: M1 10% (25-32m²) / M2 40% (38-48m²) /
+// M3 40% (58-70m²) / M4 10% (72-90m²) — przy 10 mieszkaniach daje dokładnie
+// 1/4/4/1 bez zaokrągleń.
 const initialState: SessionState = {
   footprint: null,
   drawingPoints: [],
   mode: "idle",
-  program: [{ id: crypto.randomUUID(), type: "M2", min_area_m2: 45, target_count: 2 }],
+  program: recomputeDerivedProgram(
+    [
+      { id: crypto.randomUUID(), type: "M1", percentage: 10, area_min_m2: 25, area_max_m2: 32, target_count: 0, min_area_m2: 0 },
+      { id: crypto.randomUUID(), type: "M2", percentage: 40, area_min_m2: 38, area_max_m2: 48, target_count: 0, min_area_m2: 0 },
+      { id: crypto.randomUUID(), type: "M3", percentage: 40, area_min_m2: 58, area_max_m2: 70, target_count: 0, min_area_m2: 0 },
+      { id: crypto.randomUUID(), type: "M4", percentage: 10, area_min_m2: 72, area_max_m2: 90, target_count: 0, min_area_m2: 0 },
+    ],
+    INITIAL_TOTAL_UNITS
+  ),
+  totalUnits: INITIAL_TOTAL_UNITS,
   circulation: initialCirculation,
   circulationResult: null,
   layoutResult: null,
@@ -81,6 +123,7 @@ type Action =
   | { type: "ADD_PROGRAM_ROW" }
   | { type: "UPDATE_PROGRAM_ROW"; id: string; patch: Partial<ProgramRow> }
   | { type: "REMOVE_PROGRAM_ROW"; id: string }
+  | { type: "SET_TOTAL_UNITS"; totalUnits: number }
   | { type: "SET_CIRCULATION"; patch: Partial<api.CirculationSpecInput> }
   | { type: "SET_CIRCULATION_RESULT"; result: api.CirculationResponse | null }
   | { type: "SET_LAYOUT_RESULT"; result: api.LayoutGenerateResponse | null }
@@ -145,22 +188,35 @@ function reducer(state: SessionState, action: Action): SessionState {
       return { ...state, footprint: next, layoutResult: null, validation: null, circulationResult: null };
     }
     case "SET_PROGRAM":
-      return { ...state, program: action.program };
+      return { ...state, program: recomputeDerivedProgram(action.program, state.totalUnits) };
     case "ADD_PROGRAM_ROW":
       return {
         ...state,
-        program: [
-          ...state.program,
-          { id: crypto.randomUUID(), type: "M2", min_area_m2: 45, target_count: 1 },
-        ],
+        // 0% domyślnie, żeby nowy wiersz nie zaburzył istniejącej struktury
+        // dopóki użytkownik sam nie ustawi udziału.
+        program: recomputeDerivedProgram(
+          [
+            ...state.program,
+            { id: crypto.randomUUID(), type: "M2", percentage: 0, area_min_m2: 38, area_max_m2: 48, target_count: 0, min_area_m2: 0 },
+          ],
+          state.totalUnits
+        ),
       };
     case "UPDATE_PROGRAM_ROW":
       return {
         ...state,
-        program: state.program.map((row) => (row.id === action.id ? { ...row, ...action.patch } : row)),
+        program: recomputeDerivedProgram(
+          state.program.map((row) => (row.id === action.id ? { ...row, ...action.patch } : row)),
+          state.totalUnits
+        ),
       };
     case "REMOVE_PROGRAM_ROW":
-      return { ...state, program: state.program.filter((row) => row.id !== action.id) };
+      return {
+        ...state,
+        program: recomputeDerivedProgram(state.program.filter((row) => row.id !== action.id), state.totalUnits),
+      };
+    case "SET_TOTAL_UNITS":
+      return { ...state, totalUnits: action.totalUnits, program: recomputeDerivedProgram(state.program, action.totalUnits) };
     case "SET_CIRCULATION":
       return { ...state, circulation: { ...state.circulation, ...action.patch } };
     case "SET_CIRCULATION_RESULT":
@@ -265,6 +321,7 @@ interface SessionContextValue {
   updateProgramRow: (id: string, patch: Partial<ProgramRow>) => void;
   addProgramRow: () => void;
   removeProgramRow: (id: string) => void;
+  setTotalUnits: (totalUnits: number) => void;
   setCirculation: (patch: Partial<api.CirculationSpecInput>) => void;
   selectApartment: (id: string | null) => void;
   regenerate: () => Promise<void>;
@@ -369,6 +426,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   );
   const addProgramRow = useCallback(() => dispatch({ type: "ADD_PROGRAM_ROW" }), []);
   const removeProgramRow = useCallback((id: string) => dispatch({ type: "REMOVE_PROGRAM_ROW", id }), []);
+  const setTotalUnits = useCallback((totalUnits: number) => dispatch({ type: "SET_TOTAL_UNITS", totalUnits }), []);
   const setCirculation = useCallback(
     (patch: Partial<api.CirculationSpecInput>) => dispatch({ type: "SET_CIRCULATION", patch }),
     []
@@ -635,6 +693,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       updateProgramRow,
       addProgramRow,
       removeProgramRow,
+      setTotalUnits,
       setCirculation,
       selectApartment,
       regenerate,
@@ -663,6 +722,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       updateProgramRow,
       addProgramRow,
       removeProgramRow,
+      setTotalUnits,
       setCirculation,
       selectApartment,
       regenerate,

@@ -16,55 +16,92 @@ function polygonArea(points: { x: number; y: number }[]): number {
 }
 
 export default function ProgramSection() {
-  const { state, updateProgramRow, addProgramRow, removeProgramRow } = useSession();
+  const { state, updateProgramRow, addProgramRow, removeProgramRow, setTotalUnits } = useSession();
 
   const footprintArea = state.footprint ? polygonArea(state.footprint) : 0;
+  // min_area_m2/target_count są pochodne (środek zakresu × zaokrąglony udział %
+  // z totalUnits — patrz recomputeDerivedProgram w SessionContext.tsx), więc ta
+  // suma automatycznie odzwierciedla aktualną strukturę %.
   const programArea = state.program.reduce((sum, row) => sum + row.min_area_m2 * row.target_count, 0);
   const balance = footprintArea > 0 ? (programArea / footprintArea) * 100 : 0;
+  const percentageSum = state.program.reduce((sum, row) => sum + row.percentage, 0);
+  const totalPlacedUnits = state.program.reduce((sum, row) => sum + row.target_count, 0);
 
   return (
     <section className="space-y-2.5 rounded-xl border border-zinc-800/70 bg-zinc-950/40 p-3 light:border-zinc-200 light:bg-white">
-      <h2 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Program mieszkań</h2>
+      <h2 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Struktura mieszkań</h2>
+
+      <label className="flex items-center justify-between text-xs text-zinc-400">
+        Łączna liczba mieszkań
+        <input
+          type="number"
+          min={1}
+          value={state.totalUnits}
+          onChange={(e) => setTotalUnits(Math.max(1, Number(e.target.value)))}
+          className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+        />
+      </label>
 
       <div className="space-y-1.5">
         {state.program.map((row) => (
-          <div key={row.id} className="flex items-center gap-1.5">
-            <select
-              value={row.type}
-              onChange={(e) => updateProgramRow(row.id, { type: e.target.value })}
-              className="rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-1.5 py-1 text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
-            >
-              {APARTMENT_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-            <input
-              type="number"
-              min={0}
-              value={row.target_count}
-              onChange={(e) => updateProgramRow(row.id, { target_count: Number(e.target.value) })}
-              title="Liczba"
-              className="w-14 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-1.5 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
-            />
-            <span className="text-xs text-zinc-600">×</span>
-            <input
-              type="number"
-              min={1}
-              value={row.min_area_m2}
-              onChange={(e) => updateProgramRow(row.id, { min_area_m2: Number(e.target.value) })}
-              title="Docelowa powierzchnia m²"
-              className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-1.5 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
-            />
-            <span className="text-xs text-zinc-600">m²</span>
-            <button
-              onClick={() => removeProgramRow(row.id)}
-              className="ml-auto rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-red-500/10 hover:text-red-400"
-              aria-label="Usuń"
-            >
-              <X size={13} />
-            </button>
+          <div key={row.id} className="rounded-lg border border-zinc-800/60 p-2 light:border-zinc-200">
+            <div className="flex items-center gap-1.5">
+              <select
+                value={row.type}
+                onChange={(e) => updateProgramRow(row.id, { type: e.target.value })}
+                className="rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-1.5 py-1 text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+              >
+                {APARTMENT_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={row.percentage}
+                onChange={(e) => updateProgramRow(row.id, { percentage: Number(e.target.value) })}
+                title="Udział w łącznej liczbie mieszkań"
+                className="w-14 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-1.5 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+              />
+              <span className="text-xs text-zinc-600">%</span>
+              <span
+                className="ml-auto shrink-0 rounded-md bg-accent-500/15 px-1.5 py-0.5 font-mono text-[11px] text-accent-400"
+                title="Wyliczona liczba mieszkań tego typu (udział% × łączna liczba, zaokrąglone)"
+              >
+                ≈{row.target_count} szt.
+              </span>
+              <button
+                onClick={() => removeProgramRow(row.id)}
+                className="shrink-0 rounded-lg p-1 text-zinc-600 transition-colors hover:bg-red-500/10 hover:text-red-400"
+                aria-label="Usuń"
+              >
+                <X size={13} />
+              </button>
+            </div>
+            <div className="mt-1.5 flex items-center gap-1.5 text-xs text-zinc-500">
+              <span className="shrink-0">Metraż</span>
+              <input
+                type="number"
+                min={1}
+                value={row.area_min_m2}
+                onChange={(e) => updateProgramRow(row.id, { area_min_m2: Number(e.target.value) })}
+                title="Metraż od (m²)"
+                className="w-14 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-1.5 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+              />
+              <span>–</span>
+              <input
+                type="number"
+                min={1}
+                value={row.area_max_m2}
+                onChange={(e) => updateProgramRow(row.id, { area_max_m2: Number(e.target.value) })}
+                title="Metraż do (m²)"
+                className="w-14 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-1.5 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+              />
+              <span>m²</span>
+            </div>
           </div>
         ))}
       </div>
@@ -78,6 +115,18 @@ export default function ProgramSection() {
       </button>
 
       <div className="space-y-1 rounded-lg bg-zinc-900/70 px-3 py-2.5 text-xs light:bg-zinc-100">
+        <div className="flex justify-between text-zinc-400">
+          <span>Suma udziałów</span>
+          <span className={`font-mono ${Math.round(percentageSum) === 100 ? "text-zinc-200 light:text-zinc-800" : "text-amber-400"}`}>
+            {percentageSum.toFixed(0)}%{Math.round(percentageSum) !== 100 && " ⚠"}
+          </span>
+        </div>
+        <div className="flex justify-between text-zinc-400">
+          <span>Mieszkania (wyliczone)</span>
+          <span className="font-mono text-zinc-200 light:text-zinc-800">
+            {totalPlacedUnits} / {state.totalUnits}
+          </span>
+        </div>
         <div className="flex justify-between text-zinc-400">
           <span>Program</span>
           <span className="font-mono text-zinc-200 light:text-zinc-800">{programArea.toFixed(1)} m²</span>
