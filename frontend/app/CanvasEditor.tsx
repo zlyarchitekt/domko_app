@@ -149,7 +149,7 @@ function moveSharedLine(
 }
 
 export default function CanvasEditor() {
-  const { state, addDrawPoint, removeLastDrawPoint, finishDrawing, updateVertex, selectApartment, updateApartmentsAndValidate, dispatch } = useSession();
+  const { state, addDrawPoint, removeLastDrawPoint, finishDrawing, updateVertex, selectApartment, updateApartmentsAndValidate, runReshapeCirculation, dispatch } = useSession();
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType>(null);
 
@@ -343,7 +343,7 @@ export default function CanvasEditor() {
   const cursor =
     state.mode === "draw"
       ? "crosshair"
-      : state.mode === "edit-vertices"
+      : state.mode === "edit-vertices" || state.mode === "edit-corridor-centerline"
         ? "pointer"
         : state.mode === "edit-lines" || state.mode === "edit-circulation"
           ? "move"
@@ -510,6 +510,82 @@ export default function CanvasEditor() {
               strokeWidth={1.5 / scale}
             />
           ))}
+
+          {/* Linia środkowa korytarza — kolor wg progu odległości do klatki (F2-04-bis) */}
+          {state.circulationResult?.centerline?.map((seg, i) => (
+            <Line
+              key={`centerline-${i}`}
+              points={toCanvasPoints(seg.points.map(([x, y]) => ({ x, y })))}
+              stroke={seg.exceeds_max ? "#ef4444" : "#22c55e"}
+              strokeWidth={3 / scale}
+              listening={false}
+            />
+          ))}
+
+          {/* Wierzchołki linii korytarza — edytowalne (F2-04-bis) */}
+          {state.mode === "edit-corridor-centerline" &&
+            state.circulationResult?.centerline &&
+            (() => {
+              // Flatten segment endpoints into a de-duplicated vertex list so shared
+              // endpoints between adjacent segments render (and drag) as one point.
+              const verts: { x: number; y: number }[] = [];
+              for (const seg of state.circulationResult.centerline) {
+                for (const [x, y] of seg.points) {
+                  if (!verts.some((v) => Math.abs(v.x - x) < 1e-6 && Math.abs(v.y - y) < 1e-6)) {
+                    verts.push({ x, y });
+                  }
+                }
+              }
+              return verts.map((v, i) => (
+                <Circle
+                  key={`centerline-vertex-${i}`}
+                  x={v.x * METER_PX}
+                  y={-v.y * METER_PX}
+                  radius={6 / scale}
+                  fill="#ffffff"
+                  stroke="#22c55e"
+                  strokeWidth={2 / scale}
+                  draggable
+                  onDragStart={(e) => {
+                    e.cancelBubble = true;
+                  }}
+                  onDragMove={(e) => {
+                    const node = e.target;
+                    const snapped = worldToMeters(
+                      node.x() * scale + position.x,
+                      node.y() * scale + position.y
+                    );
+                    node.x(snapped.x * METER_PX);
+                    node.y(-snapped.y * METER_PX);
+                  }}
+                  onDragEnd={(e) => {
+                    // Same Konva bubbling issue as every other draggable node in this
+                    // Stage (footprint vertices, shared lines, edit-circulation Group)
+                    // — without cancelBubble the Stage's own onDragEnd reads this
+                    // node's raw coordinates and snaps the whole pannable view.
+                    e.cancelBubble = true;
+                    const snapped = worldToMeters(
+                      e.target.x() * scale + position.x,
+                      e.target.y() * scale + position.y
+                    );
+                    const movedFrom = v;
+                    const newSegments: [Point2D, Point2D][] = state.circulationResult!.centerline.map((seg) => {
+                      const [p1, p2] = seg.points;
+                      const newP1 =
+                        Math.abs(p1[0] - movedFrom.x) < 1e-6 && Math.abs(p1[1] - movedFrom.y) < 1e-6
+                          ? { x: snapped.x, y: snapped.y }
+                          : { x: p1[0], y: p1[1] };
+                      const newP2 =
+                        Math.abs(p2[0] - movedFrom.x) < 1e-6 && Math.abs(p2[1] - movedFrom.y) < 1e-6
+                          ? { x: snapped.x, y: snapped.y }
+                          : { x: p2[0], y: p2[1] };
+                      return [newP1, newP2];
+                    });
+                    void runReshapeCirculation(newSegments);
+                  }}
+                />
+              ));
+            })()}
 
           {/* Przesuwanie korytarza/klatki jako sztywnej bryły (edit-circulation) */}
           {state.mode === "edit-circulation" && state.circulationResult && (
