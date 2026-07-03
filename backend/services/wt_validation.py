@@ -162,7 +162,7 @@ def _rule_corridor_width(layout: LayoutResult) -> WTRule:
 
 
 def _rule_stair_width(layout: LayoutResult) -> WTRule:
-    """§68 ust. 1 — min. szerokość biegu schodowego / klatki (uproszczony model kwadratowej klatki)."""
+    """§68 ust. 1 — min. szerokość biegu schodowego / klatki (uproszczony model prostokątnej klatki)."""
     if not layout.cage_polygons:
         return WTRule(
             code="§68 ust.1",

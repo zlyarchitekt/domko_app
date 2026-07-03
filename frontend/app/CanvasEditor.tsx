@@ -49,12 +49,31 @@ function cageSubdivisionShapes(
   const h = maxY - minY;
   if (w < 1e-6 || h < 1e-6) return [];
 
-  // Zone fractions of the approved 400x550 layout.
-  const fx = (f: number) => (minX + f * w) * METER_PX;
-  const fy = (f: number) => -(minY + f * h) * METER_PX; // canvas Y is flipped
+  // Zone fractions of the approved 400(width)x550(depth) layout, authored
+  // assuming a PORTRAIT cage (depth = long axis = world Y). `_edge_cage`
+  // (modes "1a"/"1b") can legitimately place a LANDSCAPE cage instead (long
+  // axis horizontal) -- detect which world axis is actually longer and map
+  // width/depth fractions onto *that* one, instead of hardcoding
+  // width=X/depth=Y. "Entrance side" stays a simplification: the min-value
+  // end of the depth axis, same convention as before, just generalized to
+  // whichever world axis that now is (spec 2026-07-03 §4.3 already accepts
+  // this as an approximation, not exact).
+  const isPortrait = h >= w;
+  // Scalar accessors along whichever world axis width/depth ended up on.
+  // Canvas Y is flipped (screen Y grows downward); canvas X is not -- the
+  // flip must follow the accessor that maps to true world Y in each branch.
+  const depthCoord = (f: number) => (isPortrait ? -(minY + f * h) * METER_PX : (minX + f * w) * METER_PX);
+  const widthCoord = (f: number) => (isPortrait ? (minX + f * w) * METER_PX : -(minY + f * h) * METER_PX);
+  // A layout-space point (width-fraction, depth-fraction) always resolves to
+  // a canvas [x, y] pair -- which accessor lands in which slot flips with
+  // orientation, so every shape built from `pt()` re-orients as a rigid
+  // transform instead of stretching.
+  const pt = (wf: number, df: number): [number, number] =>
+    isPortrait ? [widthCoord(wf), depthCoord(df)] : [depthCoord(df), widthCoord(wf)];
+
   const X_FLIGHT1 = 120 / 400;
   const X_FLIGHTS = 240 / 400;
-  const Y_BOTTOM = 150 / 550; // landing+corridor strip (entrance side = minY)
+  const Y_BOTTOM = 150 / 550; // landing+corridor strip (entrance side = min end of depth axis)
   const Y_MID_TOP = 400 / 550; // top of flights/elevator band
 
   const sw = 1 / scale;
@@ -62,17 +81,17 @@ function cageSubdivisionShapes(
 
   // Row separators (full width) + column separators.
   nodes.push(
-    <Line key={`${keyPrefix}-row-b`} points={[fx(0), fy(Y_BOTTOM), fx(1), fy(Y_BOTTOM)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
-    <Line key={`${keyPrefix}-row-t`} points={[fx(0), fy(Y_MID_TOP), fx(1), fy(Y_MID_TOP)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
-    <Line key={`${keyPrefix}-col-f`} points={[fx(X_FLIGHT1), fy(Y_BOTTOM), fx(X_FLIGHT1), fy(Y_MID_TOP)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
-    <Line key={`${keyPrefix}-col-e`} points={[fx(X_FLIGHTS), fy(Y_BOTTOM), fx(X_FLIGHTS), fy(1)]} stroke={lineColor} strokeWidth={sw} listening={false} />
+    <Line key={`${keyPrefix}-row-b`} points={[...pt(0, Y_BOTTOM), ...pt(1, Y_BOTTOM)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
+    <Line key={`${keyPrefix}-row-t`} points={[...pt(0, Y_MID_TOP), ...pt(1, Y_MID_TOP)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
+    <Line key={`${keyPrefix}-col-f`} points={[...pt(X_FLIGHT1, Y_BOTTOM), ...pt(X_FLIGHT1, Y_MID_TOP)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
+    <Line key={`${keyPrefix}-col-e`} points={[...pt(X_FLIGHTS, Y_BOTTOM), ...pt(X_FLIGHTS, 1)]} stroke={lineColor} strokeWidth={sw} listening={false} />
   );
 
   // Stair-flight tread hatching: 6 lines per flight across both flights' band.
   for (let i = 1; i <= 6; i++) {
     const t = Y_BOTTOM + (i / 7) * (Y_MID_TOP - Y_BOTTOM);
     nodes.push(
-      <Line key={`${keyPrefix}-tread-${i}`} points={[fx(0), fy(t), fx(X_FLIGHTS), fy(t)]} stroke={lineColor} strokeWidth={sw} listening={false} />
+      <Line key={`${keyPrefix}-tread-${i}`} points={[...pt(0, t), ...pt(X_FLIGHTS, t)]} stroke={lineColor} strokeWidth={sw} listening={false} />
     );
   }
 
@@ -80,10 +99,10 @@ function cageSubdivisionShapes(
   const arrow = (key: string, xf: number, fromT: number, toT: number) => {
     const head = 0.03 * (toT > fromT ? 1 : -1);
     return [
-      <Line key={`${key}-shaft`} points={[fx(xf), fy(fromT), fx(xf), fy(toT)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
+      <Line key={`${key}-shaft`} points={[...pt(xf, fromT), ...pt(xf, toT)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
       <Line
         key={`${key}-head`}
-        points={[fx(xf - 0.02), fy(toT - head), fx(xf), fy(toT), fx(xf + 0.02), fy(toT - head)]}
+        points={[...pt(xf - 0.02, toT - head), ...pt(xf, toT), ...pt(xf + 0.02, toT - head)]}
         stroke={lineColor}
         strokeWidth={sw}
         listening={false}
@@ -95,24 +114,27 @@ function cageSubdivisionShapes(
 
   // Elevator X (diagonals across the elevator cell only).
   nodes.push(
-    <Line key={`${keyPrefix}-el-1`} points={[fx(X_FLIGHTS), fy(Y_BOTTOM), fx(1), fy(Y_MID_TOP)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
-    <Line key={`${keyPrefix}-el-2`} points={[fx(1), fy(Y_BOTTOM), fx(X_FLIGHTS), fy(Y_MID_TOP)]} stroke={lineColor} strokeWidth={sw} listening={false} />
+    <Line key={`${keyPrefix}-el-1`} points={[...pt(X_FLIGHTS, Y_BOTTOM), ...pt(1, Y_MID_TOP)]} stroke={lineColor} strokeWidth={sw} listening={false} />,
+    <Line key={`${keyPrefix}-el-2`} points={[...pt(1, Y_BOTTOM), ...pt(X_FLIGHTS, Y_MID_TOP)]} stroke={lineColor} strokeWidth={sw} listening={false} />
   );
 
   // Labels (tiny, theme-following).
-  const label = (key: string, xf: number, yf: number, text: string) => (
-    <Text
-      key={key}
-      x={fx(xf)}
-      y={fy(yf)}
-      text={text}
-      fontSize={10 / scale}
-      fill={textColor}
-      listening={false}
-      offsetX={14 / scale}
-      offsetY={5 / scale}
-    />
-  );
+  const label = (key: string, xf: number, yf: number, text: string) => {
+    const [x, y] = pt(xf, yf);
+    return (
+      <Text
+        key={key}
+        x={x}
+        y={y}
+        text={text}
+        fontSize={10 / scale}
+        fill={textColor}
+        listening={false}
+        offsetX={14 / scale}
+        offsetY={5 / scale}
+      />
+    );
+  };
   nodes.push(
     label(`${keyPrefix}-lb-sp`, X_FLIGHTS / 2, (Y_MID_TOP + 1) / 2, "spocznik"),
     label(`${keyPrefix}-lb-sz`, (X_FLIGHTS + 1) / 2, (Y_MID_TOP + 1) / 2, "szacht"),

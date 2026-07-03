@@ -94,15 +94,19 @@ export default function CirculationSection() {
         Umieść klatkę schodową
       </label>
 
-      <label className="flex items-center justify-between text-xs text-zinc-400">
-        Wymiar klatki (m)
+      <label
+        className="flex items-center justify-between text-xs text-zinc-400"
+        title="Klatka schodowa ma teraz stały rozmiar 4.0×5.5m (spec 2026-07-03) — to pole nie wpływa na geometrię."
+      >
+        Wymiar klatki: 4.0×5.5m (stałe)
         <input
           type="number"
           step={0.1}
           min={1}
           value={state.circulation.cage_size_m}
           onChange={(e) => setCirculation({ cage_size_m: Number(e.target.value) })}
-          className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 font-mono text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+          disabled
+          className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 font-mono text-zinc-100 focus:border-accent-500/60 focus:outline-none disabled:cursor-not-allowed disabled:opacity-40 light:border-zinc-300 light:bg-white light:text-zinc-900"
         />
       </label>
 

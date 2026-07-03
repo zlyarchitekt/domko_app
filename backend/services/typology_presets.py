@@ -13,6 +13,10 @@ services.layout.LayoutInput yet — the BSP algorithm only consumes
 corridor_width_m/cage_size_m/place_cage today. `to_layout_defaults()` maps
 what is consumable now; the rest is exposed on the preset for F2-04 to wire
 up when the cage-position-mode rework lands (see zadania-kanban.md F2-04).
+`cage_size_m` is accepted here and forwarded like any other consumed field,
+but as of the 2026-07-03 staircase-cage-rectangle change it is no longer
+consumed by the cage geometry itself — cage dimensions are fixed at
+CAGE_WIDTH_M/CAGE_DEPTH_M (see services/circulation.py).
 """
 
 from __future__ import annotations
