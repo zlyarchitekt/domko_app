@@ -56,6 +56,7 @@ class FacadeAnalysisModel(BaseModel):
     apartment_type: str
     orientation: str
     azimuth_deg: float
+    edge: list[list[float]]
     length_m: float
     hours_total: float
     hours_status: dict[str, float]
@@ -196,6 +197,7 @@ def analyze_solar_endpoint(request: SolarAnalyzeRequest):
                 apartment_type=f.apartment_type,
                 orientation=f.orientation,
                 azimuth_deg=f.azimuth_deg,
+                edge=[list(f.edge[0]), list(f.edge[1])],
                 length_m=f.length_m,
                 hours_total=f.hours_total,
                 hours_status=f.hours_status,

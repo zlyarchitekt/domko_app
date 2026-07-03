@@ -60,6 +60,14 @@ class FacadeAnalysis:
     apartment_type: str
     orientation: str
     azimuth_deg: float
+    edge: tuple[tuple[float, float], tuple[float, float]]
+    """The actual exterior wall segment this result applies to (world
+    coordinates) -- consumers MUST render/match using this, not by
+    re-deriving apartment edges and matching on azimuth alone. An apartment
+    polygon routinely has a redundant collinear vertex along a wall (BSP
+    splitting artifact); azimuth-only matching then paints this facade's
+    color/hours onto every ring edge sharing that direction, including
+    interior ones that were never selected as a facade here."""
     length_m: float
     hours_total: float
     hours_status: dict[str, float]
@@ -138,6 +146,7 @@ def analyze_solar_access(
                 apartment_type=facade.apartment_type,
                 orientation=facade.orientation,
                 azimuth_deg=facade.azimuth_deg,
+                edge=facade.edge,
                 length_m=facade.length_m,
                 hours_total=hours_total,
                 hours_status=hours_status,

@@ -708,52 +708,25 @@ export default function CanvasEditor() {
             );
           })}
 
-          {/* Krawędzie zewnętrzne ze słońcem */}
-          {!!state.solarResult && apartments.flatMap(apt => {
-            const facades = state.solarResult!.facades.filter(f => f.apartment_id === apt.id);
-            if (!facades.length) return [];
-            
-            const ring = ringToPoints(apt.geometry);
-            const segments = [];
-            for (let i = 0; i < ring.length; i++) {
-              const p1 = ring[i];
-              const p2 = ring[(i + 1) % ring.length];
-              
-              const dx = p2.x - p1.x;
-              const dy = p2.y - p1.y;
-              let edgeAz = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
-              const normalAz = (edgeAz + 90) % 360;
-
-              // znajdź fasadę
-              const facade = facades.find(f => {
-                let diff = Math.abs(f.azimuth_deg - normalAz);
-                if (diff > 180) diff = 360 - diff;
-                return diff < 8; // tolerance 8 stopni
-              });
-
-              if (facade) {
-                segments.push({
-                   aptId: apt.id,
-                   p1, p2, facade,
-                   cx: (p1.x + p2.x)/2,
-                   cy: (p1.y + p2.y)/2
-                });
-              }
-            }
-            return segments;
-          }).map((seg, i) => {
-            const x1 = seg.p1.x * METER_PX;
-            const y1 = -seg.p1.y * METER_PX;
-            const x2 = seg.p2.x * METER_PX;
-            const y2 = -seg.p2.y * METER_PX;
-            const ratio = Math.min(1, Math.max(0, seg.facade.hours_total / seg.facade.required_hours));
+          {/* Krawędzie zewnętrzne ze słońcem — rysowane bezpośrednio z facade.edge
+              (backend już wybrał właściwy, wyłącznie zewnętrzny odcinek ściany;
+              nie zgadujemy go tu ponownie po azymucie, bo poligon mieszkania
+              często ma nadmiarowy współliniowy wierzchołek na tej samej ścianie
+              — dopasowanie po samym azymucie kolorowało wtedy też odcinek
+              wewnętrzny o tym samym kierunku, patrz test_solar.py regression). */}
+          {!!state.solarResult && state.solarResult.facades.map((facade, i) => {
+            const x1 = facade.edge[0][0] * METER_PX;
+            const y1 = -facade.edge[0][1] * METER_PX;
+            const x2 = facade.edge[1][0] * METER_PX;
+            const y2 = -facade.edge[1][1] * METER_PX;
+            const ratio = Math.min(1, Math.max(0, facade.hours_total / facade.required_hours));
             const hue = Math.floor(ratio * 120);
             const strokeColor = `hsl(${hue}, 80%, 45%)`;
-            const cx = seg.cx * METER_PX;
-            const cy = -seg.cy * METER_PX;
-            
+            const cx = ((facade.edge[0][0] + facade.edge[1][0]) / 2) * METER_PX;
+            const cy = -((facade.edge[0][1] + facade.edge[1][1]) / 2) * METER_PX;
+
             return (
-              <Group key={`facade-${seg.aptId}-${i}`}>
+              <Group key={`facade-${facade.apartment_id}-${i}`}>
                 <Line
                   points={[x1, y1, x2, y2]}
                   stroke={strokeColor}
@@ -761,7 +734,7 @@ export default function CanvasEditor() {
                   onMouseEnter={(e) => {
                     const container = e.target.getStage()?.container();
                     if (container) container.style.cursor = "help";
-                    const tooltipText = `Orientacja: ${seg.facade.orientation}\nDługość: ${seg.facade.length_m.toFixed(1)}m\nSłońce: ${seg.facade.hours_total.toFixed(1)}h\nWT: ${seg.facade.meets_wt ? 'OK' : 'Brak'}`;
+                    const tooltipText = `Orientacja: ${facade.orientation}\nDługość: ${facade.length_m.toFixed(1)}m\nSłońce: ${facade.hours_total.toFixed(1)}h\nWT: ${facade.meets_wt ? 'OK' : 'Brak'}`;
                     const stage = e.target.getStage();
                     const pointer = stage?.getPointerPosition();
                     if (pointer) {
@@ -772,7 +745,7 @@ export default function CanvasEditor() {
                     const stage = e.target.getStage();
                     const pointer = stage?.getPointerPosition();
                     if (pointer) {
-                      const tooltipText = `Orientacja: ${seg.facade.orientation}\nDługość: ${seg.facade.length_m.toFixed(1)}m\nSłońce: ${seg.facade.hours_total.toFixed(1)}h\nWT: ${seg.facade.meets_wt ? 'OK' : 'Brak'}`;
+                      const tooltipText = `Orientacja: ${facade.orientation}\nDługość: ${facade.length_m.toFixed(1)}m\nSłońce: ${facade.hours_total.toFixed(1)}h\nWT: ${facade.meets_wt ? 'OK' : 'Brak'}`;
                       setHoveredFacade({ x: (pointer.x - position.x) / scale, y: (pointer.y - position.y) / scale, text: tooltipText });
                     }
                   }}
@@ -785,7 +758,7 @@ export default function CanvasEditor() {
                 <Text
                   x={cx}
                   y={cy}
-                  text={`${seg.facade.hours_total.toFixed(1)}h`}
+                  text={`${facade.hours_total.toFixed(1)}h`}
                   fontSize={12 / scale}
                   fill="#ffffff"
                   fontStyle="bold"

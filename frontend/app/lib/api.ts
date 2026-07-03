@@ -351,6 +351,7 @@ export interface FacadeAnalysisModel {
   apartment_type: string;
   orientation: string;
   azimuth_deg: number;
+  edge: [Point, Point];
   length_m: number;
   hours_total: number;
   hours_status: Record<string, number>;
