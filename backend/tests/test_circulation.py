@@ -1,32 +1,58 @@
 from shapely.geometry import Polygon
 
-from services.circulation import _place_cage_by_mode
+from services.circulation import CAGE_DEPTH_M, CAGE_WIDTH_M, _place_cage_by_mode
 
 
 def test_place_cage_auto_convex_uses_bbox_corner():
-    rect = Polygon([(0, 0), (10, 0), (10, 6), (0, 6)])
-    cage = _place_cage_by_mode(rect, "auto", 2.0)
+    rect = Polygon([(0, 0), (20, 0), (20, 12), (0, 12)])
+    cage = _place_cage_by_mode(rect, "auto", CAGE_WIDTH_M, CAGE_DEPTH_M)
     assert cage is not None
     assert cage.area > 0
     minx, miny, maxx, maxy = cage.bounds
     assert minx == 0.0 and miny == 0.0  # anchored at the (0,0) corner
+    # Rectangle, not square: width along X, depth along Y (spec §4.2).
+    assert abs((maxx - minx) - CAGE_WIDTH_M) < 1e-6
+    assert abs((maxy - miny) - CAGE_DEPTH_M) < 1e-6
 
 
-def test_place_cage_mode_2_centered():
-    rect = Polygon([(0, 0), (10, 0), (10, 6), (0, 6)])
-    cage = _place_cage_by_mode(rect, "2", 2.0)
+def test_place_cage_mode_2_centered_rectangle():
+    rect = Polygon([(0, 0), (20, 0), (20, 12), (0, 12)])
+    cage = _place_cage_by_mode(rect, "2", CAGE_WIDTH_M, CAGE_DEPTH_M)
     assert cage is not None
     cx, cy = cage.centroid.x, cage.centroid.y
-    assert abs(cx - 5.0) < 0.5 and abs(cy - 3.0) < 0.5
+    assert abs(cx - 10.0) < 0.5 and abs(cy - 6.0) < 0.5
+    minx, miny, maxx, maxy = cage.bounds
+    assert abs((maxx - minx) - CAGE_WIDTH_M) < 1e-6
+    assert abs((maxy - miny) - CAGE_DEPTH_M) < 1e-6
+
+
+def test_place_cage_mode_1a_width_along_edge_depth_inward():
+    # Longest edge is the bottom one (30m, horizontal): width runs along it,
+    # depth extends inward (up).
+    rect = Polygon([(0, 0), (30, 0), (30, 12), (0, 12)])
+    cage = _place_cage_by_mode(rect, "1a", CAGE_WIDTH_M, CAGE_DEPTH_M)
+    assert cage is not None
+    minx, miny, maxx, maxy = cage.bounds
+    assert abs((maxx - minx) - CAGE_WIDTH_M) < 1e-6
+    assert abs((maxy - miny) - CAGE_DEPTH_M) < 1e-6
+    assert abs(miny - 0.0) < 1e-6  # flush with the facade edge
 
 
 def test_place_cage_invalid_mode_raises():
     rect = Polygon([(0, 0), (10, 0), (10, 6), (0, 6)])
     try:
-        _place_cage_by_mode(rect, "bogus", 2.0)
+        _place_cage_by_mode(rect, "bogus", CAGE_WIDTH_M, CAGE_DEPTH_M)
         raise AssertionError("expected ValueError")
     except ValueError:
         pass
+
+
+def test_cage_constants_match_spec():
+    """Spec 2026-07-03 (staircase-cage-rectangle) §4.1 -- pins the exact
+    approved dimensions (400x550cm) so a drive-by edit can't silently shrink
+    or grow the cage."""
+    assert CAGE_WIDTH_M == 4.0
+    assert CAGE_DEPTH_M == 5.5
 
 
 def test_place_circulation_simple_rectangle():

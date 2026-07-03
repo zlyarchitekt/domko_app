@@ -29,16 +29,23 @@ def test_mode_1a_places_cage_on_longest_edge():
     layout = _generate(RECT_WIDE, place_cage=True, cage_position="1a", cage_size_m=2.0)
     assert layout.cage_polygons
     cage = layout.cage_polygons[0]
-    # Longest edges are the horizontal ones (y=0 and y=10); cage should hug one of them.
-    assert cage.centroid.y < 2.5 or cage.centroid.y > 7.5
+    # Longest edges are the horizontal ones (y=0 and y=10); cage should hug one
+    # of them flush (dimension-agnostic: the fixed 4.0x5.5 rectangle no longer
+    # respects cage_size_m, see spec 2026-07-03 §6, so centroid-distance
+    # thresholds tuned for the old cage_size_m=2.0 square no longer apply).
+    minx, miny, maxx, maxy = cage.bounds
+    assert miny == pytest.approx(0.0, abs=1e-6) or maxy == pytest.approx(10.0, abs=1e-6)
 
 
 def test_mode_1b_places_cage_on_shortest_edge():
     layout = _generate(RECT_WIDE, place_cage=True, cage_position="1b", cage_size_m=2.0)
     assert layout.cage_polygons
     cage = layout.cage_polygons[0]
-    # Shortest edges are the vertical ones (x=0 and x=40); cage should hug one of them.
-    assert cage.centroid.x < 2.5 or cage.centroid.x > 37.5
+    # Shortest edges are the vertical ones (x=0 and x=40); cage should hug one
+    # of them flush (see comment in test_mode_1a above re: dimension-agnostic
+    # assertion after the cage became a fixed-size rectangle).
+    minx, miny, maxx, maxy = cage.bounds
+    assert minx == pytest.approx(0.0, abs=1e-6) or maxx == pytest.approx(40.0, abs=1e-6)
 
 
 def test_mode_2_centers_the_cage():
@@ -53,9 +60,14 @@ def test_mode_3_uses_concave_corner_when_available():
     layout = _generate(L_SHAPE, place_cage=True, cage_position="3", cage_size_m=2.5)
     assert layout.cage_polygons
     cage = layout.cage_polygons[0]
-    # The reflex corner sits at (8, 8) — the cage should be anchored near it.
-    assert cage.centroid.x == pytest.approx(8.0, abs=2.0)
-    assert cage.centroid.y == pytest.approx(8.0, abs=2.0)
+    # The reflex corner sits at (8, 8) -- the cage should be anchored AT it (one
+    # of the cage's own bbox corners), not merely have its centroid nearby.
+    # Centroid-distance thresholds tuned for the old cage_size_m=2.5 square no
+    # longer hold now that the cage is a fixed 4.0x5.5 rectangle (spec 2026-07-03
+    # §6) whose far corner sits much further from the anchor.
+    minx, miny, maxx, maxy = cage.bounds
+    bbox_corners = [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]
+    assert any(abs(cx - 8.0) < 1e-6 and abs(cy - 8.0) < 1e-6 for cx, cy in bbox_corners)
 
 
 def test_invalid_cage_position_mode_raises():

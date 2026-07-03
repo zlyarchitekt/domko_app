@@ -25,6 +25,14 @@ osobne od wt_validation.py's DEFAULT_MAX_CORRIDOR_DISTANCE_M (inny moduł,
 inny punkt cyklu życia layoutu; duplikacja dwóch float jest tańsza niż
 sprzężenie Etapu 1 z walidacją post-Etap-2)."""
 
+CAGE_WIDTH_M = 4.0
+CAGE_DEPTH_M = 5.5
+"""Rzeczywisty obrys klatki schodowej 400x550cm (spec 2026-07-03
+staircase-cage-rectangle §3/§4.1): 2 biegi 120x250 + winda 160x250 +
+spoczniki/korytarz 150 na górze i dole. Zastępuje dawny kwadrat o boku
+`cage_size_m` -- ten parametr pozostaje w API (CirculationSpec,
+place_circulation), ale geometria już go nie używa (spec §6)."""
+
 
 def concave_vertices_in_zone(polygon: Polygon) -> list[tuple[int, float, float]]:
     """Wykrywa wierzchołki wklęsłe w pojedynczej strefie."""
@@ -34,19 +42,20 @@ def concave_vertices_in_zone(polygon: Polygon) -> list[tuple[int, float, float]]
 
 
 def _build_cage(
-    polygon: Polygon, corner_data: tuple[int, float, float], size: float
+    polygon: Polygon, corner_data: tuple[int, float, float], width: float, depth: float
 ) -> Polygon:
-    """Buduje kwadratową klatkę w narożniku."""
+    """Buduje prostokątną klatkę w narożniku."""
     from services.bsp import corner_cage
 
     idx, x, y = corner_data
-    return corner_cage(polygon, (x, y), size)
+    return corner_cage(polygon, (x, y), width=width, depth=depth)
 
 
 def _place_cage_by_mode(
     polygon: Polygon,
     mode: str,
-    size: float,
+    width: float,
+    depth: float,
     preferred_corner: tuple[float, float] | None = None,
 ) -> Polygon | None:
     """Umieszcza klatkę wg trybu z plan.md §4.3.
@@ -70,21 +79,21 @@ def _place_cage_by_mode(
         cv = concave_vertices_in_zone(polygon)
         if cv:
             try:
-                cage = _build_cage(polygon, cv[0], size)
+                cage = _build_cage(polygon, cv[0], width, depth)
             except ValueError:
                 return None
             return cage if cage.area > 1e-6 else None
-        return _corner_cage_convex(polygon, size, preferred=preferred_corner)
+        return _corner_cage_convex(polygon, width, depth, preferred=preferred_corner)
 
     if mode == "2":
-        return _centered_cage(polygon, size)
+        return _centered_cage(polygon, width, depth)
 
     # "1a" / "1b"
-    return _edge_cage(polygon, size, longest=(mode == "1a"))
+    return _edge_cage(polygon, width, depth, longest=(mode == "1a"))
 
 
 def _corner_cage_convex(
-    polygon: Polygon, size: float, preferred: tuple[float, float] | None = None
+    polygon: Polygon, width: float, depth: float, preferred: tuple[float, float] | None = None
 ) -> Polygon | None:
     """Klatka w narożniku bounding-boxa — dla stref bez własnego wierzchołka wklęsłego.
 
@@ -102,30 +111,31 @@ def _corner_cage_convex(
             if abs(cx - preferred[0]) < 1e-6 and abs(cy - preferred[1]) < 1e-6:
                 ax, ay = cx, cy
                 break
-    sx = size if ax == minx else -size
-    sy = size if ay == miny else -size
+    sx = width if ax == minx else -width
+    sy = depth if ay == miny else -depth
     candidate = Polygon([(ax, ay), (ax + sx, ay), (ax + sx, ay + sy), (ax, ay + sy)])
     clipped = candidate.intersection(polygon)
     return clipped if not clipped.is_empty and clipped.area > 1e-6 else None
 
 
-def _centered_cage(polygon: Polygon, size: float) -> Polygon | None:
+def _centered_cage(polygon: Polygon, width: float, depth: float) -> Polygon | None:
     """Klatka wyśrodkowana w strefie (tryb 2 — punktowiec)."""
     center = polygon.centroid
-    half = size / 2.0
+    half_w = width / 2.0
+    half_d = depth / 2.0
     candidate = Polygon(
         [
-            (center.x - half, center.y - half),
-            (center.x + half, center.y - half),
-            (center.x + half, center.y + half),
-            (center.x - half, center.y + half),
+            (center.x - half_w, center.y - half_d),
+            (center.x + half_w, center.y - half_d),
+            (center.x + half_w, center.y + half_d),
+            (center.x - half_w, center.y + half_d),
         ]
     )
     clipped = candidate.intersection(polygon)
     return clipped if not clipped.is_empty and clipped.area > 1e-6 else None
 
 
-def _edge_cage(polygon: Polygon, size: float, longest: bool) -> Polygon | None:
+def _edge_cage(polygon: Polygon, width: float, depth: float, longest: bool) -> Polygon | None:
     """Klatka wzdłuż najdłuższej (tryb 1a) lub najkrótszej (tryb 1b) krawędzi, skierowana do wnętrza."""
     coords = list(polygon.exterior.coords)[:-1]
     n = len(coords)
@@ -152,11 +162,11 @@ def _edge_cage(polygon: Polygon, size: float, longest: bool) -> Polygon | None:
     if normal_x * (centroid.x - mid_x) + normal_y * (centroid.y - mid_y) < 0:
         normal_x, normal_y = -normal_x, -normal_y
 
-    half = size / 2.0
+    half = width / 2.0
     p_a = (mid_x - ux * half, mid_y - uy * half)
     p_b = (mid_x + ux * half, mid_y + uy * half)
-    p_c = (p_b[0] + normal_x * size, p_b[1] + normal_y * size)
-    p_d = (p_a[0] + normal_x * size, p_a[1] + normal_y * size)
+    p_c = (p_b[0] + normal_x * depth, p_b[1] + normal_y * depth)
+    p_d = (p_a[0] + normal_x * depth, p_a[1] + normal_y * depth)
 
     candidate = Polygon([p_a, p_b, p_c, p_d])
     clipped = candidate.intersection(polygon)
@@ -421,7 +431,10 @@ def place_circulation(
     cage_position: str,
 ) -> CirculationResult:
     """Etap 1: dzieli obrys na prawie-prostokątne strefy (rectangle_decompose),
-    umieszcza klatkę i korytarz w każdej, zwraca zunifikowany wynik."""
+    umieszcza klatkę i korytarz w każdej, zwraca zunifikowany wynik.
+
+    `cage_size_m` jest przyjmowany dla zgodności API, ale geometria klatki
+    używa stałych CAGE_WIDTH_M x CAGE_DEPTH_M (spec 2026-07-03 §6)."""
     zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
 
     # rectangle_decompose() rozwiązuje każdy wklęsły wierzchołek OBRYSU na
@@ -460,7 +473,7 @@ def place_circulation(
                 continue
             preferred_corner = _find_matching_corner(zone.polygon, original_concave)
             cage_polygon = _place_cage_by_mode(
-                zone.polygon, cage_position, cage_size_m, preferred_corner=preferred_corner
+                zone.polygon, cage_position, CAGE_WIDTH_M, CAGE_DEPTH_M, preferred_corner=preferred_corner
             )
             if cage_polygon is not None and cage_polygon.area > zone.polygon.area * 0.9:
                 cage_polygon = None
