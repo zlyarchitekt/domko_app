@@ -193,6 +193,41 @@ def _build_corridor(polygon: Polygon, width: float, cage_polygon: Polygon | None
     return corridor.intersection(polygon)
 
 
+def _corridor_centerline(
+    polygon: Polygon, width: float, cage_polygon: Polygon | None = None
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """Oś korytarza strefy jako 2-punktowy odcinek — ta sama oś, ten sam
+    warunek wyrównania do klatki co _build_corridor(), tylko zwrócona jako
+    linia zamiast wypełnionego prostokąta (spec §3.1). None gdy korytarz
+    o zadanej szerokości nie mieści się w strefie."""
+    bounds = polygon.bounds
+    if len(bounds) != 4:
+        return None
+    minx, miny, maxx, maxy = bounds
+    w = maxx - minx
+    h = maxy - miny
+    half = width / 2.0
+
+    if w >= h:
+        if width >= h:
+            return None
+        if cage_polygon:
+            cage_y = cage_polygon.centroid.y
+            mid_y = max(miny + half, min(maxy - half, cage_y))
+        else:
+            mid_y = (miny + maxy) / 2.0
+        return ((minx, mid_y), (maxx, mid_y))
+    else:
+        if width >= w:
+            return None
+        if cage_polygon:
+            cage_x = cage_polygon.centroid.x
+            mid_x = max(minx + half, min(maxx - half, cage_x))
+        else:
+            mid_x = (minx + maxx) / 2.0
+        return ((mid_x, miny), (mid_x, maxy))
+
+
 def _find_matching_corner(
     zone_polygon: Polygon, candidates: list[tuple[float, float]]
 ) -> tuple[float, float] | None:

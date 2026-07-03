@@ -79,3 +79,47 @@ def test_place_circulation_concave_u_shape_no_area_lost():
     from services.bsp import concave_vertices
     for zone in result.zones:
         assert not concave_vertices(zone.polygon), "zone still concave after rectangle_decompose"
+
+
+def test_corridor_centerline_horizontal_zone():
+    from services.circulation import _corridor_centerline
+
+    zone = Polygon([(0, 0), (20, 0), (20, 4), (0, 4)])
+    seg = _corridor_centerline(zone, width=1.5)
+    assert seg is not None
+    (x1, y1), (x2, y2) = seg
+    assert abs(y1 - 2.0) < 1e-6 and abs(y2 - 2.0) < 1e-6  # centered on mid_y
+    assert {round(x1), round(x2)} == {0, 20}
+
+
+def test_corridor_centerline_vertical_zone():
+    from services.circulation import _corridor_centerline
+
+    zone = Polygon([(0, 0), (4, 0), (4, 20), (0, 20)])
+    seg = _corridor_centerline(zone, width=1.5)
+    assert seg is not None
+    (x1, y1), (x2, y2) = seg
+    assert abs(x1 - 2.0) < 1e-6 and abs(x2 - 2.0) < 1e-6  # centered on mid_x
+    assert {round(y1), round(y2)} == {0, 20}
+
+
+def test_corridor_centerline_aligns_to_cage():
+    from services.circulation import _corridor_centerline
+
+    zone = Polygon([(0, 0), (20, 0), (20, 6), (0, 6)])
+    # centroid.y = 5.8 -- deliberately close to maxy(6) so the clamp
+    # (mid_y <= maxy - half) actually engages instead of just passing
+    # cage_y through unclamped.
+    cage = Polygon([(0, 5.6), (2, 5.6), (2, 6), (0, 6)])
+    seg = _corridor_centerline(zone, width=1.5, cage_polygon=cage)
+    assert seg is not None
+    (_, y1), (_, y2) = seg
+    assert abs(y1 - 5.25) < 1e-6 and abs(y2 - 5.25) < 1e-6  # mid_y clamped to maxy(6) - half(0.75)
+
+
+def test_corridor_centerline_none_when_too_narrow():
+    from services.circulation import _corridor_centerline
+
+    zone = Polygon([(0, 0), (1.0, 0), (1.0, 20), (0, 20)])  # width 1.0m < corridor 1.5m
+    seg = _corridor_centerline(zone, width=1.5)
+    assert seg is None
