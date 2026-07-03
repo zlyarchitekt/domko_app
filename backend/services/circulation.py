@@ -510,3 +510,56 @@ def place_circulation(
         remainder=remainder,
         centerline=centerline,
     )
+
+
+def reshape_circulation(
+    footprint: Polygon,
+    centerline_points: list[tuple[tuple[float, float], tuple[float, float]]],
+    corridor_width_m: float,
+    cage_polygons: list[Polygon],
+) -> CirculationResult:
+    """Przelicza geometrię korytarza + klasyfikację/odległości segmentów po
+    edycji linii środkowej przez użytkownika (spec §3.6). Buduje geometrię
+    jako bufor (cap_style="flat") wokół każdego edytowanego odcinka, zamiast
+    ponownie dzielić footprint na strefy -- edytowana linia już nie jest
+    przywiązana do rectangle_decompose()'s stref."""
+    half = corridor_width_m / 2.0
+    buffered_parts = [
+        LineString([p1, p2]).buffer(half, cap_style="flat")
+        for p1, p2 in centerline_points
+    ]
+    circulation_geom = unary_union(buffered_parts).intersection(footprint)
+    circulation_geom = unary_union([circulation_geom] + cage_polygons)
+
+    remainder = footprint.difference(circulation_geom)
+
+    cage_points = [(c.centroid.x, c.centroid.y) for c in cage_polygons]
+
+    centerline: list[CorridorCenterlineSegment] = []
+    for p1, p2 in centerline_points:
+        arc_distances = _distances_along_centerline([p1, p2], cage_points)
+        loading = _classify_segment_loading(footprint, (p1, p2), corridor_width_m)
+        max_dist = (
+            CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M
+            if loading == "double"
+            else CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M
+        )
+        d_start, d_end = arc_distances[0], arc_distances[1]
+        centerline.append(
+            CorridorCenterlineSegment(
+                points=(p1, p2),
+                loading=loading,
+                distance_start_m=d_start,
+                distance_end_m=d_end,
+                max_distance_m=max_dist,
+                exceeds_max=(max(d_start, d_end) > max_dist) if math.isfinite(max(d_start, d_end)) else False,
+            )
+        )
+
+    return CirculationResult(
+        zones=[],
+        circulation_geometry=circulation_geom if not circulation_geom.is_empty else None,
+        cage_polygons=cage_polygons,
+        remainder=remainder,
+        centerline=centerline,
+    )

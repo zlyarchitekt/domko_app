@@ -339,3 +339,49 @@ def split_polygon_endpoint(request: SplitRequest):
         polygons=[json.loads(json.dumps(p.__geo_interface__)) for p in parts],
         areas=[round(p.area, 6) for p in parts],
     )
+
+
+class ReshapeSegmentInput(BaseModel):
+    points: list[list[float]] = Field(..., min_length=2, max_length=2)
+
+
+class ReshapeCirculationRequest(BaseModel):
+    footprint: list[list[float]] = Field(..., min_length=3)
+    centerline: list[ReshapeSegmentInput] = Field(..., min_length=1)
+    corridor_width_m: float = Field(..., gt=0)
+    cage_geometries: list[dict] = Field(default_factory=list)
+
+
+class ReshapeCirculationResponse(BaseModel):
+    circulation_geometry: dict | None = None
+    remainder: dict
+    centerline: list[CenterlineSegmentResult] = []
+
+
+@router.post("/circulation/reshape", response_model=ReshapeCirculationResponse)
+def reshape_circulation_endpoint(request: ReshapeCirculationRequest):
+    """Przelicza korytarz po edycji linii środkowej przez użytkownika (F2-04-bis)."""
+    from services.circulation import reshape_circulation
+
+    try:
+        footprint = _points_to_polygon(request.footprint)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    centerline_points = [
+        ((seg.points[0][0], seg.points[0][1]), (seg.points[1][0], seg.points[1][1]))
+        for seg in request.centerline
+    ]
+    cage_polygons = [_shape(g) for g in request.cage_geometries]
+
+    result = reshape_circulation(footprint, centerline_points, request.corridor_width_m, cage_polygons)
+
+    return ReshapeCirculationResponse(
+        circulation_geometry=(
+            json.loads(json.dumps(result.circulation_geometry.__geo_interface__))
+            if result.circulation_geometry is not None
+            else None
+        ),
+        remainder=json.loads(json.dumps(result.remainder.__geo_interface__)),
+        centerline=_serialize_centerline(result.centerline),
+    )
