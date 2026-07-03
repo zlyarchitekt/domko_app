@@ -188,10 +188,34 @@ def _decompose_to_polygons(geom: Polygon | None) -> list[dict]:
     return []
 
 
+def _serialize_centerline(segments) -> list["CenterlineSegmentResult"]:
+    return [
+        CenterlineSegmentResult(
+            points=[list(seg.points[0]), list(seg.points[1])],
+            loading=seg.loading,
+            distance_start_m=seg.distance_start_m,
+            distance_end_m=seg.distance_end_m,
+            max_distance_m=seg.max_distance_m,
+            exceeds_max=seg.exceeds_max,
+        )
+        for seg in segments
+    ]
+
+
+class CenterlineSegmentResult(BaseModel):
+    points: list[list[float]]
+    loading: str
+    distance_start_m: float
+    distance_end_m: float
+    max_distance_m: float
+    exceeds_max: bool
+
+
 class CirculationResponse(BaseModel):
     circulation_geometry: dict | None = None
     cage_geometries: list[dict] = []
     remainder: dict
+    centerline: list[CenterlineSegmentResult] = []
 
 
 @router.post("/circulation", response_model=CirculationResponse)
@@ -226,6 +250,7 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
         ),
         cage_geometries=[json.loads(json.dumps(c.__geo_interface__)) for c in result.cage_polygons],
         remainder=json.loads(json.dumps(result.remainder.__geo_interface__)),
+        centerline=_serialize_centerline(result.centerline),
     )
 
 
