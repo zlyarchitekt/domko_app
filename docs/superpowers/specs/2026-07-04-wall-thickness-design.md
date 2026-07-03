@@ -26,14 +26,19 @@ Ustalone w rozmowie (patrz §7 dla pełnej mapy odłożonych tematów):
 
 **Świadomie POZA zakresem tej fazy** (silnik tylko DOKŁADA nową, pochodną
 warstwę — nie zmienia niczego, co dziś istnieje):
-- WT §94 (min. powierzchnia/szerokość pokoju) nadal liczone na osiach, jak
-  dziś. Reguła nie wie o ścianach.
+- WT §94 ust.1 (min. powierzchnia mieszkania, 25m² — to JEDYNA rzecz, którą
+  faktycznie reguluje ten przepis) nadal liczone na osiach, jak dziś.
+  Reguła nie wie o ścianach.
+- `MIN_ROOM_WIDTH_M = 2.4` (dziś błędnie oznaczone w kodzie jako "WT §94
+  ust.2") to NIE jest wymóg WT — to była własna wiedza projektowa
+  użytkownika, nie przepis. Poprawka tej fałszywej cytaty w kodzie to
+  osobna, szybka sprawa (patrz §9), nie część tej fazy.
 - `unit_mix.py`'s `fit_program_to_rectangles()` nadal celuje w `min_area_m2`
   na osiach — nie dokłada kompensacji za przyszłe skurczenie do netto.
-- `corridor_width_m` i wymiary klatki (`CAGE_WIDTH_M`/`CAGE_DEPTH_M`,
-  4.0×5.5m) **pozostają wymiarami osiowymi bez zmian** w tej fazie — patrz
-  §6 dla wyjaśnienia tej świadomej niespójności z wcześniejszą decyzją
-  "corridor_width_m = w świetle".
+- `corridor_width_m` **pozostaje wymiarem osiowym bez zmian** w tej fazie —
+  patrz §6 dla wyjaśnienia tej świadomej niespójności z wcześniejszą decyzją
+  "corridor_width_m = w świetle". Wymiary klatki (`CAGE_WIDTH_M`/
+  `CAGE_DEPTH_M`) NIE są tu wyjątkiem — patrz poprawka w §6.
 - Analiza słoneczna (`solar_analysis.py`) nadal wykrywa fasady na
   krawędziach-osiach, nie na rzeczywistym licu zewnętrznym.
 - Eksport PDF/DXF — nie dodaję tam nowych pól w tej fazie.
@@ -145,30 +150,43 @@ istnieje w tym pliku), liczone raz w `layout_result_to_response()` z gotowego
   mieszkaniu naraz, żeby nie zaśmiecać rysunku — spójne z tym, że dziś też
   tylko zaznaczone mieszkanie ma wyróżniony kontur).
 
-## 6. Świadoma niespójność: `corridor_width_m` dalej osiowe
+## 6. Klatka DOSTAJE przeliczenie na w świetle teraz; korytarz — nie
 
-Wcześniej w tej rozmowie ustalone: `corridor_width_m` ma docelowo oznaczać
-szerokość **w świetle** (użytkownik: *"1.5m = w świetle"*), z systemem
-dokładającym połowę grubości ściany z każdej strony do rozstawu osi. **Ta
-faza tego nie robi** — `_build_corridor()`/`_corridor_centerline()` w
-`circulation.py` zostają nietknięte, `corridor_width_m` nadal jest
-interpretowane jako rozstaw osi, tak jak dziś. Po dodaniu tej fazy,
-faktyczna szerokość korytarza w świetle będzie o ok. 20cm mniejsza niż
-wpisana wartość (ściana z każdej strony zjada po 10cm) — to samo dotyczy
-wymiarów klatki (4.0×5.5m to nadal wymiary osiowe, nie w świetle).
+Poprawka użytkownika: *"z klatką to nie jest tak jak z korytarzem, powinniśmy
+doliczyć 20cm ściany od podanych wymiarów na zewnątrz"*.
 
-**Dlaczego to świadomy wybór, nie przeoczenie:** przeliczenie osi na w
-świetle dla korytarza/klatki wymaga wiedzy, KTÓRE boki stykają się z jakim
-typem ściany (klatka w narożniku może stykać się z 2 elewacjami =
-zewnętrzna 40cm, korytarz zawsze między dwoma mieszkaniami = wewnętrzna
-20cm) — to jest dokładnie zakres kolejnego, osobnego projektu
-("dopracowanie lokalizowania klatek i korytarzy"), który i tak już posiada
-`_build_corridor`/`_place_cage_by_mode`. Robienie tego tutaj rozjeżdżałoby
-się z ustaloną kolejnością prac. Ten silnik (`wall_geometry.py`) jest
-napisany tak, żeby kolejny projekt mógł z niego skorzystać wprost (np.
-`_build_corridor` policzy potrzebny rozstaw osi jako
-`żądana_szerokość_w_świetle + 2 * NET_SHRINK_M`), ale samo dołożenie tej
-logiki do `circulation.py` zostaje odłożone.
+Matematyka jest identyczna dla obu (§3: każda własna krawędź komórki to
+10cm od osi do lica — więc żądany wymiar w świetle + 20cm z dwóch stron =
+potrzebny rozstaw osi, niezależnie od tego czy dana strona styka się z
+elewacją czy z sąsiadem). Różnica jest w tym, GDZIE trzeba to wpiąć:
+
+- **Klatka**: `CAGE_WIDTH_M`/`CAGE_DEPTH_M` (`services/circulation.py`) to
+  dwie stałe modułowe konsumowane wprost przez `_place_cage_by_mode`/
+  `_corner_cage_convex`/`_centered_cage`/`_edge_cage` jako gotowy rozmiar
+  prostokąta — same funkcje umieszczające klatkę nie wiedzą i nie muszą
+  wiedzieć, że to teraz wymiar "w świetle + zapas na ścianę". **Robimy to w
+  tej fazie**: podane w spec 2026-07-03 (staircase-cage-rectangle) 4.0×5.5m
+  to wymiary W ŚWIETLE; stałe w kodzie rosną o 20cm każda:
+  `CAGE_WIDTH_M = 4.2`, `CAGE_DEPTH_M = 5.7`. Zero zmian w logice
+  umieszczania — tylko dwie liczby.
+- **Korytarz**: `corridor_width_m` jest konsumowane WEWNĄTRZ
+  `_build_corridor()`/`_corridor_centerline()`, funkcji, które są
+  centralnym elementem kolejnego projektu ("dopracowanie lokalizowania
+  klatek i korytarzy"). Zmiana tu oznaczałaby dotykanie logiki, którą i tak
+  zaraz będziemy przerabiać — zostaje na osiach, przeliczenie na w świetle
+  dołączymy do tamtego projektu (`żądana_szerokość_w_świetle + 2 *
+  NET_SHRINK_M` przy budowaniu rozstawu osi, ten sam wzór).
+
+## 6a. Zmiana w `services/circulation.py`
+
+```python
+CAGE_WIDTH_M = 4.2   # było 4.0 -- teraz to rozstaw osi (4.0m w świetle + 20cm ściany, spec 2026-07-04 §6)
+CAGE_DEPTH_M = 5.7   # było 5.5 -- analogicznie
+```
+
+Test `test_cage_constants_match_spec` (z planu 2026-07-03) trzeba
+zaktualizować na nowe wartości — to jedyny test, który wprost pinuje te
+liczby (sprawdzone: `backend/tests/test_circulation.py`).
 
 ## 7. Mapa odłożonych tematów (dla pamięci, nie część tego planu)
 
@@ -203,3 +221,29 @@ Frontend: ręczna weryfikacja Playwright — wygenerować układ, sprawdzić
 wizualnie że ściany są rysowane z realną grubością, zaznaczyć mieszkanie i
 potwierdzić etykietę netto różną od (mniejszą niż) powierzchni na rysunku
 konturu.
+
+Backend (`test_circulation.py`, aktualizacja istniejącego):
+- `test_cage_constants_match_spec` zmienia oczekiwane wartości na 4.2/5.7
+  (§6a) — bez tego test i tak by czerwienił się po zmianie stałych, ale
+  zapisuję explicite, żeby nie zgadywać przy implementacji.
+
+## 9. Poprawka fałszywej cytaty WT w kodzie (osobna, szybka sprawa)
+
+Znalezisko przy okazji tej rozmowy: `backend/services/wt_validation.py:31`
+ma `MIN_ROOM_WIDTH_M = 2.4  # §94 ust. 2` — użytkownik potwierdza, że
+prawdziwy §94 reguluje WYŁĄCZNIE minimalną powierzchnię mieszkania (25m²,
+ust.1); nie ma żadnego "ust.2" o szerokości pokoju. Wartość 2.4m to własna
+wiedza projektowa użytkownika, nie przepis WT — dokładnie ten sam wzorzec
+błędu co wcześniej znaleziony i poprawiony `MIN_CAGE_FACADE_CONTACT_M`
+(patrz pamięć projektu: fabrykowanie §-cytat dla heurystyk projektowych).
+
+**To NIE jest część tej fazy** (WT jest w §7 punkt 5, odłożone) — ale jest
+to prosta, izolowana poprawka nazewnictwa (nie logiki): zmienić kod
+`§94 ust.2` na `code="heurystyka"` (wzorem istniejącego
+`MIN_CAGE_FACADE_CONTACT_M`/`_rule_cage_facade_contact`), zaktualizować
+komentarz przy stałej, bez zmiany progu 2.4m ani logiki porównania.
+Dotyczy `wt_validation.py` (rule `_rule_room_width`) oraz zduplikowanej
+stałej `MIN_ROOM_WIDTH_M` w `apartment_validation.py`. Zostawiam to jako
+osobny, mały task do wykonania przy okazji tej fazy (nie wymaga własnego
+brainstormu — to czysta poprawka etykiety, nie projektowa decyzja), ale
+zaznaczony tu osobno, żeby nie ginął w większym planie ścian.
