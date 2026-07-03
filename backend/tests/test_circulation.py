@@ -123,3 +123,51 @@ def test_corridor_centerline_none_when_too_narrow():
     zone = Polygon([(0, 0), (1.0, 0), (1.0, 20), (0, 20)])  # width 1.0m < corridor 1.5m
     seg = _corridor_centerline(zone, width=1.5)
     assert seg is None
+
+
+def test_join_centerlines_single_segment():
+    from services.circulation import _join_centerlines
+
+    path = _join_centerlines([((0, 0), (10, 0))])
+    assert path == [(0, 0), (10, 0)]
+
+
+def test_join_centerlines_two_segments_already_touching():
+    from services.circulation import _join_centerlines
+
+    segs = [((0, 0), (10, 0)), ((10, 0), (10, 10))]
+    path = _join_centerlines(segs)
+    assert path == [(0, 0), (10, 0), (10, 10)]
+
+
+def test_join_centerlines_reversed_segment_orientation():
+    from services.circulation import _join_centerlines
+
+    # Second segment's endpoints are listed far-then-near relative to path end.
+    segs = [((0, 0), (10, 0)), ((10, 10), (10, 0))]
+    path = _join_centerlines(segs)
+    assert path == [(0, 0), (10, 0), (10, 10)]
+
+
+def test_join_centerlines_three_segments_picks_nearest_each_step():
+    from services.circulation import _join_centerlines
+
+    # Start at (0,0)-(10,0). Nearest next endpoint to (10,0) is (10,0) of
+    # the THIRD segment listed (not the second) -- verifies nearest-search,
+    # not list order.
+    segs = [
+        ((0, 0), (10, 0)),
+        ((20, 20), (30, 20)),  # far away, should be picked last
+        ((10, 0), (10, 10)),   # near, should be picked second
+    ]
+    path = _join_centerlines(segs)
+    assert path[0] == (0, 0)
+    assert path[1] == (10, 0)
+    assert path[2] == (10, 10)
+    assert path[-1] in ((20, 20), (30, 20))
+
+
+def test_join_centerlines_empty_list():
+    from services.circulation import _join_centerlines
+
+    assert _join_centerlines([]) == []

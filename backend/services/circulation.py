@@ -228,6 +228,42 @@ def _corridor_centerline(
         return ((mid_x, miny), (mid_x, maxy))
 
 
+def _join_centerlines(
+    segments: list[tuple[tuple[float, float], tuple[float, float]]]
+) -> list[tuple[float, float]]:
+    """Łączy odcinki centerline sąsiednich stref w jedną łamaną (spec §3.2).
+    Zachłanny nearest-neighbor: zaczyna od pierwszego segmentu, za każdym
+    razem dołącza segment, którego bliższy koniec leży najbliżej ostatniego
+    punktu ścieżki. NIE straight-skeleton (odrzucone jako zbyt kruche dla
+    wklęsłych kształtów w tej sesji) -- niepotrzebne tu, bo rectangle_
+    decompose() już daje prawie-prostokątne strefy."""
+    if not segments:
+        return []
+
+    remaining = list(segments[1:])
+    path: list[tuple[float, float]] = [segments[0][0], segments[0][1]]
+
+    while remaining:
+        last = path[-1]
+        best_idx = None
+        best_dist = None
+        best_reversed = False
+        for i, (p1, p2) in enumerate(remaining):
+            d1 = math.hypot(p1[0] - last[0], p1[1] - last[1])
+            d2 = math.hypot(p2[0] - last[0], p2[1] - last[1])
+            if best_dist is None or d1 < best_dist:
+                best_dist, best_idx, best_reversed = d1, i, False
+            if d2 < best_dist:
+                best_dist, best_idx, best_reversed = d2, i, True
+        p1, p2 = remaining.pop(best_idx)
+        if best_reversed:
+            path.append(p1)
+        else:
+            path.append(p2)
+
+    return path
+
+
 def _find_matching_corner(
     zone_polygon: Polygon, candidates: list[tuple[float, float]]
 ) -> tuple[float, float] | None:
