@@ -18,6 +18,13 @@ CAGE_POSITION_MODES = ("1a", "1b", "2", "3", "auto")
 """plan.md §4.3: 1a=elewacja front, 1b=elewacja dziedziniec/tył, 2=środek traktu,
 3=narożnik, auto=narożnik wklęsły jeśli istnieje inaczej narożnik obrysu."""
 
+CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M = 20.0
+CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M = 40.0
+"""Progi kolorowania linii środkowej korytarza (spec §7) -- świadomie
+osobne od wt_validation.py's DEFAULT_MAX_CORRIDOR_DISTANCE_M (inny moduł,
+inny punkt cyklu życia layoutu; duplikacja dwóch float jest tańsza niż
+sprzężenie Etapu 1 z walidacją post-Etap-2)."""
+
 
 def concave_vertices_in_zone(polygon: Polygon) -> list[tuple[int, float, float]]:
     """Wykrywa wierzchołki wklęsłe w pojedynczej strefie."""
@@ -365,6 +372,19 @@ class CirculationResult:
     remainder: Polygon = field(default_factory=Polygon)
     """Może być MultiPolygon w praktyce mimo adnotacji typu (patrz spec §9) —
     konsumenci muszą sprawdzać hasattr(geom, "geoms")."""
+    centerline: list[CorridorCenterlineSegment] = field(default_factory=list)
+
+
+@dataclass
+class CorridorCenterlineSegment:
+    """Jeden odcinek połączonej linii środkowej korytarza (spec §3.5)."""
+
+    points: tuple[tuple[float, float], tuple[float, float]]
+    loading: str  # "single" | "double"
+    distance_start_m: float
+    distance_end_m: float
+    max_distance_m: float
+    exceeds_max: bool
 
 
 def place_circulation(
@@ -444,9 +464,49 @@ def place_circulation(
 
     remainder = unary_union(remainder_parts) if remainder_parts else Polygon()
 
+    raw_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    for i, zone in enumerate(zones):
+        if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
+            continue
+        local_cage = local_cages.get(i)
+        seg = _corridor_centerline(zone.polygon, corridor_width_m, local_cage)
+        if seg is not None:
+            raw_segments.append(seg)
+
+    centerline_path = _join_centerlines(raw_segments)
+    cage_points = [(c.centroid.x, c.centroid.y) for c in cage_polygons]
+    arc_distances = _distances_along_centerline(centerline_path, cage_points)
+
+    centerline: list[CorridorCenterlineSegment] = []
+    for i in range(len(centerline_path) - 1):
+        p1, p2 = centerline_path[i], centerline_path[i + 1]
+        midpoint = Point((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+        containing_zone = next(
+            (z.polygon for z in zones if z.polygon.buffer(1e-6).contains(midpoint)),
+            footprint,
+        )
+        loading = _classify_segment_loading(containing_zone, (p1, p2), corridor_width_m)
+        max_dist = (
+            CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M
+            if loading == "double"
+            else CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M
+        )
+        d_start, d_end = arc_distances[i], arc_distances[i + 1]
+        centerline.append(
+            CorridorCenterlineSegment(
+                points=(p1, p2),
+                loading=loading,
+                distance_start_m=d_start,
+                distance_end_m=d_end,
+                max_distance_m=max_dist,
+                exceeds_max=bool(max(d_start, d_end) > max_dist) if math.isfinite(max(d_start, d_end)) else False,
+            )
+        )
+
     return CirculationResult(
         zones=zones,
         circulation_geometry=circulation_geom if not circulation_geom.is_empty else None,
         cage_polygons=cage_polygons,
         remainder=remainder,
+        centerline=centerline,
     )

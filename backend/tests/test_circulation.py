@@ -218,3 +218,55 @@ def test_distances_along_centerline_picks_nearest_cage():
     cage_points = [(0, 0), (20, 0)]
     distances = _distances_along_centerline(path, cage_points)
     assert distances == [0.0, 10.0, 0.0]
+
+
+def test_place_circulation_populates_centerline():
+    from services.circulation import place_circulation
+
+    footprint = Polygon([(0, 0), (30, 0), (30, 6), (0, 6)])
+    result = place_circulation(
+        footprint,
+        corridor_width_m=1.5,
+        stair_width_m=1.2,
+        place_cage=True,
+        cage_size_m=2.5,
+        cage_position="auto",
+    )
+    assert len(result.centerline) >= 1
+    seg = result.centerline[0]
+    assert seg.loading in ("single", "double")
+    assert seg.max_distance_m in (20.0, 40.0)
+    assert isinstance(seg.exceeds_max, bool)
+
+
+def test_place_circulation_centerline_exceeds_max_on_long_single_loaded_building():
+    from services.circulation import place_circulation
+
+    # 50m long, 3m deep -> definitely single-loaded, far end exceeds 20m.
+    footprint = Polygon([(0, 0), (50, 0), (50, 3), (0, 3)])
+    result = place_circulation(
+        footprint,
+        corridor_width_m=1.4,
+        stair_width_m=1.2,
+        place_cage=True,
+        cage_size_m=2.0,
+        cage_position="1a",
+    )
+    assert any(seg.loading == "single" for seg in result.centerline)
+    assert any(seg.exceeds_max for seg in result.centerline)
+
+
+def test_place_circulation_no_cage_gives_inf_distance_not_crash():
+    from services.circulation import place_circulation
+
+    footprint = Polygon([(0, 0), (30, 0), (30, 6), (0, 6)])
+    result = place_circulation(
+        footprint,
+        corridor_width_m=1.5,
+        stair_width_m=1.2,
+        place_cage=False,
+        cage_size_m=2.5,
+        cage_position="auto",
+    )
+    assert len(result.centerline) >= 1
+    assert all(seg.exceeds_max is False for seg in result.centerline)  # inf never "exceeds" a real building
