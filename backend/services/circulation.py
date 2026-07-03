@@ -552,7 +552,7 @@ def reshape_circulation(
                 distance_start_m=d_start,
                 distance_end_m=d_end,
                 max_distance_m=max_dist,
-                exceeds_max=(max(d_start, d_end) > max_dist) if math.isfinite(max(d_start, d_end)) else False,
+                exceeds_max=bool(max(d_start, d_end) > max_dist) if math.isfinite(max(d_start, d_end)) else False,
             )
         )
 
