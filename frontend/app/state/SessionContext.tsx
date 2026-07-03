@@ -223,7 +223,11 @@ function reducer(state: SessionState, action: Action): SessionState {
     case "SET_CIRCULATION_RESULT":
       return { ...state, circulationResult: action.result };
     case "SET_LAYOUT_RESULT":
-      return { ...state, layoutResult: action.result };
+      // Every dispatch site (regenerate, runPlaceCirculation, runSubdivideUnits,
+      // apply-optimizer-variant) means the apartment geometry/IDs just changed --
+      // any solarResult computed against the previous apartments is now stale
+      // and must not linger on the canvas looking current.
+      return { ...state, layoutResult: action.result, solarResult: null };
     case "SET_VALIDATION":
       return { ...state, validation: action.validation };
     case "SET_TYPOLOGY_SUGGESTION":
