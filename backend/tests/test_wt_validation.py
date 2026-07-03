@@ -297,3 +297,15 @@ def test_layout_generate_endpoint_exposes_wt_rules():
     assert "score" in data["wt_validation"]
     assert isinstance(data["wt_validation"]["rules"], list)
     assert len(data["wt_validation"]["rules"]) >= 5
+
+
+def test_default_max_corridor_distance_is_20m():
+    """Regression for the 2026-07-03 domain correction: WT §58 ust.4
+    single-loaded threshold is 20m, not 30m (see
+    docs/superpowers/specs/2026-07-03-corridor-centerline-editing-design.md
+    §7). All other tests in this file pass an explicit
+    max_corridor_distance_m override, so this is the only place the actual
+    default value is pinned."""
+    from services.wt_validation import DEFAULT_MAX_CORRIDOR_DISTANCE_M
+
+    assert DEFAULT_MAX_CORRIDOR_DISTANCE_M == 20.0

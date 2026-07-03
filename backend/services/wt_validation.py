@@ -38,7 +38,7 @@ UWAGA: to NIE jest wymóg WT, żaden paragraf WT nie wymaga styku klatki z
 elewacją. Czysto opcjonalna heurystyka jakościowa — sprawdzana tylko gdy
 wywołujący jawnie o to poprosi (validate_layout_wt(require_cage_facade_
 contact=True)), domyślnie wyłączona i zawsze traktowana jako "nie dotyczy"."""
-DEFAULT_MAX_CORRIDOR_DISTANCE_M = 30.0  # §58 ust. 4 — komunikacja jednostronna
+DEFAULT_MAX_CORRIDOR_DISTANCE_M = 20.0  # §58 ust. 4 — komunikacja jednostronna (single-loaded); patrz spec 2026-07-03 §7 dla wartości dwustronnej (40.0, tylko w circulation.py -- ta reguła nie klasyfikuje jedno/dwutraktowo, patrz spec §7 "świadomie poza zakresem")
 CORRIDOR_GRID_STEP_M = 0.5  # plan.md §4.4 — siatka do Dijkstry
 
 # Adjacency (plan.md §4.2 + Moduł C): min. długość styku mieszkanie<->komunikacja.
