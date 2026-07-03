@@ -175,10 +175,20 @@ export function generateLayout(req: LayoutGenerateRequest): Promise<LayoutGenera
 
 // ── Circulation / Units (Etap 1 / Etap 2 osobno, redesign 2026-07-02) ──
 
+export interface CorridorCenterlineSegment {
+  points: [Point, Point];
+  loading: "single" | "double";
+  distance_start_m: number;
+  distance_end_m: number;
+  max_distance_m: number;
+  exceeds_max: boolean;
+}
+
 export interface CirculationResponse {
   circulation_geometry: GeoJsonPolygon | null;
   cage_geometries: GeoJsonPolygon[];
   remainder: GeoJsonPolygon; // może być Polygon lub MultiPolygon (patrz backend CirculationResult.remainder)
+  centerline: CorridorCenterlineSegment[];
 }
 
 export function placeCirculation(
@@ -186,6 +196,23 @@ export function placeCirculation(
   circulation: CirculationSpecInput
 ): Promise<CirculationResponse> {
   return postJson("/layout/circulation", { footprint, circulation });
+}
+
+export interface ReshapeCirculationRequest {
+  footprint: Point[];
+  centerline: { points: [Point, Point] }[];
+  corridor_width_m: number;
+  cage_geometries: GeoJsonPolygon[];
+}
+
+export interface ReshapeCirculationResponse {
+  circulation_geometry: GeoJsonPolygon | null;
+  remainder: GeoJsonPolygon;
+  centerline: CorridorCenterlineSegment[];
+}
+
+export function reshapeCirculation(req: ReshapeCirculationRequest): Promise<ReshapeCirculationResponse> {
+  return postJson("/layout/circulation/reshape", req);
 }
 
 export interface UnitsResponse {
