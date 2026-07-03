@@ -5,7 +5,7 @@ import * as api from "../lib/api";
 
 export type Point2D = { x: number; y: number };
 
-export type EditorMode = "idle" | "draw" | "edit-vertices" | "edit-lines" | "edit-circulation";
+export type EditorMode = "idle" | "draw" | "edit-vertices" | "edit-lines" | "edit-circulation" | "edit-corridor-centerline";
 
 export interface ProgramRow {
   id: string;
@@ -143,6 +143,7 @@ type Action =
   | { type: "SET_IS_OPTIMIZING"; isOptimizing: boolean }
   | { type: "SET_THEME"; theme: "dark" | "light" }
   | { type: "TRANSLATE_CIRCULATION"; dx: number; dy: number }
+  | { type: "RESHAPE_CIRCULATION"; result: api.ReshapeCirculationResponse }
   | { type: "RESTORE_STATE"; state: SessionState };
 
 function reducer(state: SessionState, action: Action): SessionState {
@@ -271,6 +272,18 @@ function reducer(state: SessionState, action: Action): SessionState {
         },
       };
     }
+    case "RESHAPE_CIRCULATION": {
+      if (!state.circulationResult) return state;
+      return {
+        ...state,
+        circulationResult: {
+          ...state.circulationResult,
+          circulation_geometry: action.result.circulation_geometry,
+          remainder: action.result.remainder,
+          centerline: action.result.centerline,
+        },
+      };
+    }
     case "RESTORE_STATE": return { ...action.state, isLoading: false, error: null };
     default:
       return state;
@@ -327,6 +340,7 @@ interface SessionContextValue {
   regenerate: () => Promise<void>;
   runPlaceCirculation: () => Promise<void>;
   runSubdivideUnits: () => Promise<void>;
+  runReshapeCirculation: (segments: [Point2D, Point2D][]) => Promise<void>;
   refreshTypologySuggestion: () => Promise<void>;
   applyTypologyPreset: (key: string) => Promise<void>;
   updateApartmentsAndValidate: (apartments: api.ApartmentResult[]) => Promise<void>;
@@ -488,6 +502,33 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_LOADING", loading: false });
     }
   }, [state.footprint, state.circulation]);
+
+  const runReshapeCirculation = useCallback(
+    async (segments: [Point2D, Point2D][]) => {
+      if (!state.footprint || !state.circulationResult) return;
+      dispatch({ type: "SET_LOADING", loading: true });
+      try {
+        const result = await api.reshapeCirculation({
+          footprint: footprintToPoints(state.footprint),
+          centerline: segments.map(([p1, p2]) => ({
+            points: [
+              [p1.x, p1.y],
+              [p2.x, p2.y],
+            ] as [api.Point, api.Point],
+          })),
+          corridor_width_m: state.circulation.corridor_width_m,
+          cage_geometries: state.circulationResult.cage_geometries,
+        });
+        dispatch({ type: "RESHAPE_CIRCULATION", result });
+        dispatch({ type: "SET_ERROR", error: null });
+      } catch (err) {
+        dispatch({ type: "SET_ERROR", error: err instanceof api.ApiError ? err.message : String(err) });
+      } finally {
+        dispatch({ type: "SET_LOADING", loading: false });
+      }
+    },
+    [state.footprint, state.circulationResult, state.circulation.corridor_width_m]
+  );
 
   const runSubdivideUnits = useCallback(async () => {
     if (!state.circulationResult) return;
@@ -699,6 +740,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       regenerate,
       runPlaceCirculation,
       runSubdivideUnits,
+      runReshapeCirculation,
       refreshTypologySuggestion,
       applyTypologyPreset,
       updateApartmentsAndValidate,
@@ -728,6 +770,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       regenerate,
       runPlaceCirculation,
       runSubdivideUnits,
+      runReshapeCirculation,
       refreshTypologySuggestion,
       applyTypologyPreset,
       updateApartmentsAndValidate,
