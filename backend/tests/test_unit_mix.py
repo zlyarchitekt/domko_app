@@ -93,3 +93,19 @@ def test_fit_program_area_conserved(rect_w, rect_h, target_area, target_count):
     total_cells_area = sum(c.polygon.area for c in cells)
     leftover_area = leftover.area if leftover is not None else 0.0
     assert abs((total_cells_area + leftover_area) - rect.area) < 1e-3
+
+
+def test_fit_program_populates_net_area_m2():
+    """Spec 2026-07-04 (wall-thickness) §5.1: every generated cell carries
+    net_area_m2 = wall_geometry.net_polygon(cell.polygon).area, distinct
+    from (smaller than) the axis-based polygon.area."""
+    from services.wall_geometry import net_polygon
+
+    rect = Polygon([(0, 0), (30, 0), (30, 6), (0, 6)])
+    specs = [ApartmentSpec(type="M2", min_area_m2=40.0, target_count=1)]
+    cells, _ = fit_program_to_rectangles([rect], specs)
+    assert len(cells) == 1
+    cell = cells[0]
+    expected_net = net_polygon(cell.polygon).area
+    assert abs(cell.net_area_m2 - expected_net) < 1e-9
+    assert cell.net_area_m2 < cell.polygon.area

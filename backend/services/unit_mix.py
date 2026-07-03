@@ -21,6 +21,7 @@ from services.layout import (
     _cut_cell,
     _polygon_parts,
 )
+from services.wall_geometry import net_polygon
 
 AREA_TOLERANCE = 0.03
 """±3% (Finch §B.2, adaptowane) — patrz spec §5. Powyżej tej tolerancji
@@ -134,6 +135,7 @@ def fit_program_to_rectangles(
                 type=spec.type,
                 polygon=cell_poly,
                 area_tolerance_exceeded=best_deviation > AREA_TOLERANCE,
+                net_area_m2=net_polygon(cell_poly).area,
             )
         )
         unused_specs.pop(best_i)

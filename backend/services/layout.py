@@ -100,6 +100,10 @@ class ApartmentCell:
     by more than the ±3% tolerance (Finch-inspired, see fit_program_to_
     rectangles in services/unit_mix.py). Default False for cells built by
     paths that don't track this (e.g. manual apartment edits)."""
+    net_area_m2: float = 0.0
+    """Powierzchnia w świetle ścian (wall_geometry.net_polygon(polygon).area)
+    -- spec 2026-07-04 wall-thickness §5.1. Domyślnie 0.0 dla ścieżek, które
+    jej nie liczą (np. ręczna edycja mieszkania przed ponownym przeliczeniem)."""
 
 
 @dataclass
