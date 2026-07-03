@@ -171,3 +171,50 @@ def test_join_centerlines_empty_list():
     from services.circulation import _join_centerlines
 
     assert _join_centerlines([]) == []
+
+
+def test_classify_segment_loading_double_when_room_both_sides():
+    from services.circulation import _classify_segment_loading
+
+    # Wide zone: corridor in the middle, >= MIN_ROOM_WIDTH_M (2.4) of
+    # room depth available on both sides.
+    zone = Polygon([(0, 0), (20, 0), (20, 8), (0, 8)])
+    segment = ((0, 4), (20, 4))  # horizontal centerline at mid-height
+    loading = _classify_segment_loading(zone, segment, corridor_width=1.5)
+    assert loading == "double"
+
+
+def test_classify_segment_loading_single_when_room_one_side_only():
+    from services.circulation import _classify_segment_loading
+
+    # Corridor runs along one long edge -- no room depth on the far side.
+    zone = Polygon([(0, 0), (20, 0), (20, 3.5), (0, 3.5)])
+    segment = ((0, 0.75), (20, 0.75))  # centerline hugging the y=0 edge
+    loading = _classify_segment_loading(zone, segment, corridor_width=1.5)
+    assert loading == "single"
+
+
+def test_distances_along_centerline_linear_path_one_cage():
+    from services.circulation import _distances_along_centerline
+
+    path = [(0, 0), (10, 0), (10, 10)]
+    cage_points = [(0, 0)]
+    distances = _distances_along_centerline(path, cage_points)
+    assert distances == [0.0, 10.0, 20.0]
+
+
+def test_distances_along_centerline_no_cages_returns_inf():
+    from services.circulation import _distances_along_centerline
+
+    path = [(0, 0), (10, 0)]
+    distances = _distances_along_centerline(path, [])
+    assert distances == [float("inf"), float("inf")]
+
+
+def test_distances_along_centerline_picks_nearest_cage():
+    from services.circulation import _distances_along_centerline
+
+    path = [(0, 0), (10, 0), (20, 0)]
+    cage_points = [(0, 0), (20, 0)]
+    distances = _distances_along_centerline(path, cage_points)
+    assert distances == [0.0, 10.0, 0.0]

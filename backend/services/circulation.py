@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from shapely.geometry import Polygon
+from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
 from services.bsp import Zone, rectangle_decompose
@@ -262,6 +262,80 @@ def _join_centerlines(
             path.append(p2)
 
     return path
+
+
+def _classify_segment_loading(
+    zone_polygon: Polygon, segment: tuple[tuple[float, float], tuple[float, float]], corridor_width: float
+) -> str:
+    """"single" albo "double" (spec §3.3) -- geometryczne, NIE zależne od
+    danych Etapu 2 (mieszkania jeszcze nie istnieją, gdy place_circulation()
+    działa). Sonduje obie strony odcinka na głębokość MIN_ROOM_WIDTH_M
+    (wt_validation.py) poza pasem korytarza."""
+    from services.wt_validation import MIN_ROOM_WIDTH_M
+
+    (x1, y1), (x2, y2) = segment
+    dx, dy = x2 - x1, y2 - y1
+    length = math.hypot(dx, dy)
+    if length < 1e-9:
+        return "single"
+    ux, uy = dx / length, dy / length
+    normal_x, normal_y = -uy, ux
+
+    half_corridor = corridor_width / 2.0
+    depth = MIN_ROOM_WIDTH_M
+    sides_with_room = 0
+    for sign in (1.0, -1.0):
+        near = (
+            x1 + normal_x * half_corridor * sign,
+            y1 + normal_y * half_corridor * sign,
+        )
+        far = (
+            near[0] + normal_x * depth * sign,
+            near[1] + normal_y * depth * sign,
+        )
+        far2 = (
+            x2 + normal_x * (half_corridor + depth) * sign,
+            y2 + normal_y * (half_corridor + depth) * sign,
+        )
+        near2 = (
+            x2 + normal_x * half_corridor * sign,
+            y2 + normal_y * half_corridor * sign,
+        )
+        probe = Polygon([near, far, far2, near2])
+        if not probe.is_valid or probe.area < 1e-9:
+            continue
+        clipped = probe.intersection(zone_polygon)
+        if clipped.area > probe.area * 0.9:
+            sides_with_room += 1
+
+    return "double" if sides_with_room >= 2 else "single"
+
+
+def _distances_along_centerline(
+    path: list[tuple[float, float]], cage_points: list[tuple[float, float]]
+) -> list[float]:
+    """Odległość (długość łuku wzdłuż `path`) każdego wierzchołka `path` do
+    najbliższego punktu w `cage_points`, rzutowanego na najbliższy punkt na
+    `path` (spec §3.4). float('inf') dla wszystkich gdy `cage_points` puste."""
+    if len(path) < 2:
+        return [float("inf")] * len(path)
+
+    cumulative = [0.0]
+    for i in range(1, len(path)):
+        p1, p2 = path[i - 1], path[i]
+        cumulative.append(cumulative[-1] + math.hypot(p2[0] - p1[0], p2[1] - p1[1]))
+
+    if not cage_points:
+        return [float("inf")] * len(path)
+
+    line = LineString(path)
+    cage_arc_positions = [line.project(Point(cp)) for cp in cage_points]
+
+    result = []
+    for i, point in enumerate(path):
+        vertex_arc = cumulative[i]
+        result.append(min(abs(vertex_arc - cage_arc) for cage_arc in cage_arc_positions))
+    return result
 
 
 def _find_matching_corner(
