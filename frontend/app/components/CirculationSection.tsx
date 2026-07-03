@@ -148,6 +148,19 @@ export default function CirculationSection() {
           <Move size={13} />
           Przesuń komunikację
         </button>
+        <button
+          onClick={() => setMode(state.mode === "edit-corridor-centerline" ? "idle" : "edit-corridor-centerline")}
+          disabled={!state.circulationResult}
+          className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-30 ${
+            state.mode === "edit-corridor-centerline"
+              ? "bg-accent-500/20 text-accent-400 ring-1 ring-inset ring-accent-500/30"
+              : "bg-zinc-800/70 text-zinc-300 hover:bg-zinc-700/70 light:bg-zinc-100 light:text-zinc-700 light:hover:bg-zinc-200"
+          }`}
+          title={!state.circulationResult ? "Wymaga umieszczenia korytarza/klatki" : "Przeciągnij punkty linii korytarza"}
+        >
+          <Move size={13} />
+          Edytuj linię korytarza
+        </button>
       </div>
     </section>
   );
