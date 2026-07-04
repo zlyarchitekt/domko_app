@@ -48,11 +48,12 @@ def test_place_cage_invalid_mode_raises():
 
 
 def test_cage_constants_match_spec():
-    """Spec 2026-07-03 (staircase-cage-rectangle) §4.1 -- pins the exact
-    approved dimensions (400x550cm) so a drive-by edit can't silently shrink
-    or grow the cage."""
-    assert CAGE_WIDTH_M == 4.0
-    assert CAGE_DEPTH_M == 5.5
+    """Spec 2026-07-04 (wall-thickness) §6/§6a -- cage dimensions are now
+    CLEAR (w świetle) dimensions from the user, with 20cm of wall added to
+    get the axis-to-axis rectangle the placement functions actually build:
+    4.0m clear + 0.20m wall = 4.2m axis width, 5.5m + 0.20m = 5.7m axis depth."""
+    assert CAGE_WIDTH_M == 4.2
+    assert CAGE_DEPTH_M == 5.7
 
 
 def test_place_circulation_simple_rectangle():

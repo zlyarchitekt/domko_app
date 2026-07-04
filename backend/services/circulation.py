@@ -25,13 +25,13 @@ osobne od wt_validation.py's DEFAULT_MAX_CORRIDOR_DISTANCE_M (inny moduł,
 inny punkt cyklu życia layoutu; duplikacja dwóch float jest tańsza niż
 sprzężenie Etapu 1 z walidacją post-Etap-2)."""
 
-CAGE_WIDTH_M = 4.0
-CAGE_DEPTH_M = 5.5
-"""Rzeczywisty obrys klatki schodowej 400x550cm (spec 2026-07-03
-staircase-cage-rectangle §3/§4.1): 2 biegi 120x250 + winda 160x250 +
-spoczniki/korytarz 150 na górze i dole. Zastępuje dawny kwadrat o boku
-`cage_size_m` -- ten parametr pozostaje w API (CirculationSpec,
-place_circulation), ale geometria już go nie używa (spec §6)."""
+CAGE_WIDTH_M = 4.2
+CAGE_DEPTH_M = 5.7
+"""Rzeczywisty obrys klatki schodowej: WYMIARY W ŚWIETLE (4.0x5.5m, spec
+2026-07-03 staircase-cage-rectangle) + 20cm ściany wewnętrznej z każdej
+strony (spec 2026-07-04 wall-thickness §6) = 4.2x5.7m rozstaw osi, który te
+funkcje faktycznie budują: 2 biegi 120x250 + winda 160x250 + spoczniki/
+korytarz 150 na górze i dole, W ŚWIETLE, plus zapas na ściany."""
 
 
 def concave_vertices_in_zone(polygon: Polygon) -> list[tuple[int, float, float]]:
