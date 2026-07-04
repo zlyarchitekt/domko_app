@@ -898,7 +898,7 @@ export default function CanvasEditor() {
                   data-center-x={center.x}
                   data-center-y={center.y}
                 />
-                {isSelected && (
+                {isSelected && apt.net_area_m2 > 0 && (
                   <Text
                     x={center.x * METER_PX}
                     y={-center.y * METER_PX}

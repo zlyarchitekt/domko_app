@@ -338,6 +338,7 @@ def subdivide_units_endpoint(request: UnitsRequest):
     apartments_out = [
         ApartmentResult(
             id=c.id, type=c.type, area_m2=c.polygon.area,
+            net_area_m2=c.net_area_m2,
             geometry=json.loads(json.dumps(c.polygon.__geo_interface__)),
         )
         for c in cells
