@@ -331,6 +331,8 @@ export default function CanvasEditor() {
   
   // Stan do tooltipa
   const [hoveredFacade, setHoveredFacade] = useState<{ x: number, y: number, text: string } | null>(null);
+  const [hoveredOutlineSegment, setHoveredOutlineSegment] = useState<number | null>(null);
+  const [hoveredOutlineVertex, setHoveredOutlineVertex] = useState<number | null>(null);
 
   // Konva shape fills/strokes are literal hex props, not Tailwind classes, so
   // theme-following them needs its own small palette instead of `light:`.
@@ -373,6 +375,13 @@ export default function CanvasEditor() {
     [state.layoutResult, state.validation]
   );
   const sharedLines = useMemo(() => findSharedLines(apartments), [apartments]);
+
+  // Segmenty obrysu jako pary punktów; segment i łączy footprint[i] z
+  // footprint[(i+1) % n] — ostatni domyka wielokąt (konwencja polygonEdit.ts).
+  const footprintSegments = useMemo<[Point2D, Point2D][]>(() => {
+    if (!footprint || footprint.length < 2) return [];
+    return footprint.map((p, i) => [p, footprint[(i + 1) % footprint.length]] as [Point2D, Point2D]);
+  }, [footprint]);
 
   const worldToMeters = (canvasX: number, canvasY: number): Point2D => {
     const worldPxX = (canvasX - position.x) / scale;
@@ -684,6 +693,34 @@ export default function CanvasEditor() {
               fill={apartments.length === 0 ? canvasColors.outlineFill : undefined}
             />
           )}
+
+          {/* Podświetlenie ściany obrysu pod myszą (tryb edycji) */}
+          {state.mode === "edit-vertices" &&
+            hoveredOutlineSegment !== null &&
+            footprintSegments[hoveredOutlineSegment] && (
+              <Line
+                points={toCanvasPoints([...footprintSegments[hoveredOutlineSegment]])}
+                stroke="#60a5fa"
+                strokeWidth={4 / scale}
+                listening={false}
+              />
+            )}
+
+          {/* Niewidoczne hitboxy segmentów obrysu: hover (Task 4),
+              dblclick-wstaw (Task 5), drag ściany (Task 6) */}
+          {state.mode === "edit-vertices" &&
+            footprintSegments.map(([a, b], i) => (
+              <Line
+                key={`outline-hit-${i}`}
+                points={toCanvasPoints([a, b])}
+                stroke="#000000"
+                opacity={0}
+                strokeWidth={2 / scale}
+                hitStrokeWidth={14 / scale}
+                onMouseEnter={() => setHoveredOutlineSegment(i)}
+                onMouseLeave={() => setHoveredOutlineSegment(null)}
+              />
+            ))}
 
           {/* Ściany -- pasy zewn./wewn., spec 2026-07-04 wall-thickness.
               <Path fillRule="evenodd"> (not <Line>): the exterior band is an
@@ -1135,11 +1172,13 @@ export default function CanvasEditor() {
                 key={`vertex-${i}`}
                 x={p.x * METER_PX}
                 y={-p.y * METER_PX}
-                radius={6 / scale}
-                fill="#ffffff"
+                radius={(hoveredOutlineVertex === i ? 9 : 6) / scale}
+                fill={hoveredOutlineVertex === i ? "#60a5fa" : "#ffffff"}
                 stroke="#2563eb"
                 strokeWidth={2 / scale}
                 draggable
+                onMouseEnter={() => setHoveredOutlineVertex(i)}
+                onMouseLeave={() => setHoveredOutlineVertex(null)}
                 onDragStart={(e) => {
                   e.cancelBubble = true;
                 }}
