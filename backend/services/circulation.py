@@ -455,12 +455,13 @@ def place_circulation(
     # narożnik strefy (patrz _corner_cage_convex).
     original_concave = [(x, y) for _, x, y in concave_vertices_in_zone(footprint)]
 
-    # Tylko jedna klatka na budynek (jak dawne generate_layout() — wiele
-    # klatek to zakres optymalizatora/cage_mode, nie tego prostego
-    # generatora, patrz services/optimizer.py's effective_cage_mode). Kolejność
-    # prób: jeśli tryb "3"/"auto", najpierw strefy, których narożnik bbox
-    # pokrywa się z oryginalnym wklęsłym wierzchołkiem (przywraca sens trybu
-    # po rectangle_decompose), potem zwykła kolejność stref.
+    # Do num_cages klatek, jedna na strefę (spec 2026-07-04-cage-corridor-
+    # placement-quality §3) — optimizer.py nadal buduje LayoutInput bez
+    # num_cages (zawsze efektywnie 1), świadomie odłożone poza zakres tego
+    # planu. Kolejność prób: jeśli tryb "3"/"auto", najpierw strefy, których
+    # narożnik bbox pokrywa się z oryginalnym wklęsłym wierzchołkiem
+    # (przywraca sens trybu po rectangle_decompose), potem zwykła kolejność
+    # stref.
     cage_zone_order = list(range(len(zones)))
     if place_cage and cage_position in ("3", "auto") and original_concave:
         matching = [
