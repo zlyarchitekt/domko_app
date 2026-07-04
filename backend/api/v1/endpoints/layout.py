@@ -32,6 +32,7 @@ class CirculationSpec(BaseModel):
         default="auto",
         description=f"Tryb pozycji klatki wg plan.md §4.3: {CAGE_POSITION_MODES}",
     )
+    num_cages: int = Field(default=1, ge=1)
 
 
 class LayoutGenerateRequest(BaseModel):
@@ -115,6 +116,7 @@ def generate_layout_endpoint(request: LayoutGenerateRequest):
         place_cage=circulation.place_cage,
         cage_size_m=circulation.cage_size_m,
         cage_position=circulation.cage_position,
+        num_cages=circulation.num_cages,
         apartments=specs,
         local_law=request.local_law,
     )
@@ -291,6 +293,7 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
         place_cage=circulation.place_cage,
         cage_size_m=circulation.cage_size_m,
         cage_position=circulation.cage_position,
+        num_cages=circulation.num_cages,
     )
 
     return CirculationResponse(

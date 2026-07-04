@@ -86,6 +86,7 @@ class LayoutInput:
     place_cage: bool = True
     cage_size_m: float = 2.5
     cage_position: str = "auto"
+    num_cages: int = 1
     apartments: list[ApartmentSpec] = field(default_factory=list)
     local_law: str | None = None
 
@@ -149,6 +150,7 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
         place_cage=input.place_cage,
         cage_size_m=input.cage_size_m,
         cage_position=input.cage_position,
+        num_cages=input.num_cages,
     )
 
     apartments, leftover = subdivide_units(circulation.remainder, input.apartments)
