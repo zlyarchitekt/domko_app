@@ -548,7 +548,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         footprint_area_m2: state.footprint ? polygonAreaFromPoints(state.footprint) : 0,
         circulation_area_m2: 0,
         usable_area_m2: unitsRes.apartments.reduce((sum, a) => sum + a.area_m2, 0),
-        apartments: unitsRes.apartments,
+        // net_area_m2 defaulted to 0: this path (/layout/units) doesn't run the
+        // wall_geometry engine, so there's no wall data to derive it from --
+        // 0 matches the backend's own default-for-unpopulated-paths convention
+        // (Task 2, populate ApartmentCell.net_area_m2 from wall_geometry).
+        apartments: unitsRes.apartments.map((a) => ({ ...a, net_area_m2: 0 })),
         leftover: unitsRes.leftover,
         wt_validation: { passed: true, score: 0, rules: [], issues: [] },
         zones: [],
@@ -556,6 +560,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           ? [state.circulationResult.circulation_geometry]
           : [],
         cage_geometries: state.circulationResult.cage_geometries,
+        wall_bands: [],
       };
       dispatch({ type: "SET_LAYOUT_RESULT", result: layoutResult });
       dispatch({ type: "SET_ERROR", error: null });

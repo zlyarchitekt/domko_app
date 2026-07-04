@@ -140,6 +140,7 @@ export interface ApartmentResult {
   id: string;
   type: string;
   area_m2: number;
+  net_area_m2: number;
   geometry: GeoJsonPolygon;
 }
 
@@ -167,6 +168,7 @@ export interface LayoutGenerateResponse {
   zones: { name: string; geometry: GeoJsonPolygon }[];
   circulation_parts: GeoJsonPolygon[];
   cage_geometries: GeoJsonPolygon[];
+  wall_bands: GeoJsonPolygon[];
 }
 
 export function generateLayout(req: LayoutGenerateRequest): Promise<LayoutGenerateResponse> {

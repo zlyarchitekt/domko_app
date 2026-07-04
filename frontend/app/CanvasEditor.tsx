@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Stage, Layer, Line, Rect, Text, Circle, Group } from "react-konva";
+import { Stage, Layer, Line, Rect, Text, Circle, Group, Path } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { Stage as StageType } from "konva/lib/Stage";
 import { Maximize2, RotateCcw } from "lucide-react";
@@ -23,6 +23,35 @@ function snap(value: number): number {
 function ringToPoints(geom: GeoJsonPolygon): Point2D[] {
   const ring = geom.coordinates[0] ?? [];
   return ring.slice(0, -1).map(([x, y]) => ({ x, y }));
+}
+
+/** Konva's <Line> only ever draws a single ring, so it can't represent a
+ *  polygon with holes. wall_bands can legitimately have holes: the exterior
+ *  band is `footprint.buffer(+0.30).difference(buffer(-0.10))` -- an annulus
+ *  by construction -- and interior bands can equally end up with a hole
+ *  wherever unallocated `leftover` space (or any cell) is fully enclosed by
+ *  wall material. Rendering only coordinates[0] (as ringToPoints does) would
+ *  fill that hole solid, painting all of `leftover` as fake wall -- exactly
+ *  the bug the backend's multi-round wall_bands/leftover fix (Task 4,
+ *  2026-07-04) was written to prevent, just reintroduced on the frontend.
+ *  Building one `M...Z` SVG subpath per ring and filling with fillRule=
+ *  "evenodd" (see <Path> usage below) punches holes correctly regardless of
+ *  a ring's winding direction -- verified against a live /layout/generate
+ *  response during Task 5 manual QA, where wall_bands[0] came back as a
+ *  2-ring GeoJSON Polygon (exterior + 1 hole). */
+function geomToSvgPath(geom: GeoJsonPolygon): string {
+  return geom.coordinates
+    .map((ring) => {
+      const pts = ring.slice(0, -1);
+      if (pts.length === 0) return "";
+      const [x0, y0] = pts[0];
+      const rest = pts
+        .slice(1)
+        .map(([x, y]) => `L ${x * METER_PX} ${-y * METER_PX}`)
+        .join(" ");
+      return `M ${x0 * METER_PX} ${-y0 * METER_PX} ${rest} Z`;
+    })
+    .join(" ");
 }
 
 /** Dekoracyjny podział klatki schodowej (spec 2026-07-03 staircase-cage-rectangle §3/§4.3):
@@ -292,6 +321,7 @@ export default function CanvasEditor() {
           axisText: "#71717a",
           outline: "#18181b",
           outlineFill: "rgba(24,24,27,0.04)",
+          wallFill: "rgba(82,82,91,0.35)",
         }
       : {
           bg: "#0c0c10",
@@ -300,6 +330,7 @@ export default function CanvasEditor() {
           axisText: "#71717a",
           outline: "#ffffff",
           outlineFill: "rgba(255,255,255,0.05)",
+          wallFill: "rgba(161,161,170,0.45)",
         };
 
   const footprint = state.footprint;
@@ -632,6 +663,20 @@ export default function CanvasEditor() {
             />
           )}
 
+          {/* Ściany -- pasy zewn./wewn., spec 2026-07-04 wall-thickness.
+              <Path fillRule="evenodd"> (not <Line>): the exterior band is an
+              annulus (has a hole) by construction -- see geomToSvgPath's
+              docstring above. */}
+          {(state.layoutResult?.wall_bands ?? []).map((geom, i) => (
+            <Path
+              key={`wall-${i}`}
+              data={geomToSvgPath(geom)}
+              fillRule="evenodd"
+              fill={canvasColors.wallFill}
+              listening={false}
+            />
+          ))}
+
           {/* Rysowanie w toku */}
 
           {drawingCanvasPoints.length > 0 && (
@@ -816,34 +861,58 @@ export default function CanvasEditor() {
             }
             
             const isSelected = state.selectedApartmentId === apt.id;
-            const pts = toCanvasPoints(ringToPoints(apt.geometry));
-            const center = ringToPoints(apt.geometry).reduce(
-              (acc, p) => ({ x: acc.x + p.x / apt.geometry.coordinates[0].length, y: acc.y + p.y / apt.geometry.coordinates[0].length }),
+            const ring = ringToPoints(apt.geometry);
+            const pts = toCanvasPoints(ring);
+            // Divide by ring.length (the true vertex count), NOT
+            // apt.geometry.coordinates[0].length -- the latter includes
+            // GeoJSON's closing duplicate vertex (N+1 points for an N-vertex
+            // polygon), which was silently pulling `center` ~1/(N+1) of the
+            // way toward the world origin (e.g. 20% for a rectangle). Found
+            // during Task 5 QA: it visibly displaced the new net-area label
+            // (below) off of far-from-origin apartments and into whatever
+            // neighboring zone sat between them and (0,0).
+            const center = ring.reduce(
+              (acc, p) => ({ x: acc.x + p.x / ring.length, y: acc.y + p.y / ring.length }),
               { x: 0, y: 0 }
             );
             return (
-              <Line
-                key={apt.id}
-                points={pts}
-                closed
-                fill={colors.fill}
-                stroke={isSelected ? "#3b82f6" : colors.stroke}
-                strokeWidth={(isSelected ? 3 : 1.5) / scale}
-                onClick={(e) => {
-                  e.cancelBubble = true;
-                  selectApartment(isSelected ? null : apt.id);
-                }}
-                onMouseEnter={(e) => {
-                  const container = e.target.getStage()?.container();
-                  if (container) container.style.cursor = "pointer";
-                }}
-                onMouseLeave={(e) => {
-                  const container = e.target.getStage()?.container();
-                  if (container) container.style.cursor = cursor;
-                }}
-                data-center-x={center.x}
-                data-center-y={center.y}
-              />
+              <Group key={apt.id}>
+                <Line
+                  points={pts}
+                  closed
+                  fill={colors.fill}
+                  stroke={isSelected ? "#3b82f6" : colors.stroke}
+                  strokeWidth={(isSelected ? 3 : 1.5) / scale}
+                  onClick={(e) => {
+                    e.cancelBubble = true;
+                    selectApartment(isSelected ? null : apt.id);
+                  }}
+                  onMouseEnter={(e) => {
+                    const container = e.target.getStage()?.container();
+                    if (container) container.style.cursor = "pointer";
+                  }}
+                  onMouseLeave={(e) => {
+                    const container = e.target.getStage()?.container();
+                    if (container) container.style.cursor = cursor;
+                  }}
+                  data-center-x={center.x}
+                  data-center-y={center.y}
+                />
+                {isSelected && (
+                  <Text
+                    x={center.x * METER_PX}
+                    y={-center.y * METER_PX}
+                    text={`${apt.net_area_m2.toFixed(1)} m² netto`}
+                    fontSize={11 / scale}
+                    fill="#ffffff"
+                    fontStyle="bold"
+                    shadowColor="#000000"
+                    shadowBlur={4}
+                    listening={false}
+                    offsetX={30 / scale}
+                  />
+                )}
+              </Group>
             );
           })}
 
