@@ -9,7 +9,7 @@ from shapely.geometry import shape as _shape
 from services.circulation import CAGE_POSITION_MODES, place_circulation
 from services.layout import ApartmentSpec, LayoutInput, LayoutResult, generate_layout
 from services.unit_mix import subdivide_units
-from services.wall_geometry import exterior_wall_band, interior_wall_bands
+from services.wall_geometry import exterior_wall_band, interior_wall_bands, net_polygon
 from services.wt_validation import WTValidationResult, validate_layout_wt
 
 router = APIRouter()
@@ -153,7 +153,27 @@ def layout_result_to_response(layout: LayoutResult, wt: WTValidationResult) -> L
         wall_cells.append(layout.circulation_geometry)
     wall_geoms = [exterior_wall_band(layout.footprint)]
     if wall_cells:
-        wall_geoms.append(interior_wall_bands(layout.footprint, wall_cells))
+        interior_bands = interior_wall_bands(layout.footprint, wall_cells)
+        if layout.leftover is not None and not layout.leftover.is_empty:
+            # interior_wall_bands() infers "wall" from "not covered by any cell's
+            # NET polygon" -- LayoutResult.leftover satisfies that same condition
+            # without being a wall (it's legitimately un-programmed floor space).
+            # Subtract its own net polygon back out here so it renders as an open
+            # hole, not fake wall (spec docs/superpowers/specs/2026-07-04-wall-
+            # thickness-design.md §3). Using net_polygon(leftover) (not the raw
+            # polygon) matters: leftover's raw/gross boundary is *supposed* to
+            # touch real wall bands at its edges -- exactly like every apartment's
+            # raw polygon does -- so subtracting the raw polygon would also strip
+            # away that legitimate rim (confirmed empirically: raw-polygon
+            # subtraction still left ~5m^2 of "overlap" against exterior_wall_band
+            # for the brief's own test scenario, which is the expected edge rim,
+            # not a bug; net_polygon(leftover) leaves exactly 0). wall_geometry.py
+            # itself stays unaware of "leftover" -- that's a LayoutResult-level
+            # concept, not a generic geometry-helper concern -- so the exclusion
+            # lives here, at the integration point, reusing net_polygon() rather
+            # than reimplementing the same 0.10m shrink.
+            interior_bands = interior_bands.difference(net_polygon(layout.leftover))
+        wall_geoms.append(interior_bands)
     wall_bands_out = [g for geom in wall_geoms for g in _decompose_to_polygons(geom)]
 
     return LayoutGenerateResponse(

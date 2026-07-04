@@ -325,6 +325,52 @@ def test_layout_generate_endpoint_exposes_net_area_and_wall_bands():
     assert len(data["wall_bands"]) >= 1
 
 
+def test_wall_bands_excludes_leftover_area():
+    """Regression: interior_wall_bands() (Task 1, services/wall_geometry.py)
+    treats any interior-envelope area not covered by any cell's NET polygon as
+    'wall' -- but LayoutResult.leftover is legitimately un-programmed floor
+    space, not a wall. Per docs/superpowers/specs/2026-07-04-wall-thickness-
+    design.md §3, leftover must render as an open hole (no wall drawn through
+    it), so layout_result_to_response() must subtract it back out of
+    wall_bands.
+
+    The check compares against net_polygon(leftover), not leftover's raw
+    polygon: leftover's raw/gross boundary is *supposed* to touch real wall
+    bands at its own edges -- exactly like every apartment's raw polygon
+    does against its neighbours -- so a small rim of overlap against the raw
+    polygon is correct, not a bug. Confirmed empirically while diagnosing
+    this regression: subtracting the raw leftover polygon still left ~5m^2
+    of "overlap" against exterior_wall_band for this exact scenario (the
+    legitimate edge rim); subtracting net_polygon(leftover) leaves exactly
+    0 -- so that's the fair, scenario-independent check."""
+    from shapely.geometry import shape
+    from shapely.ops import unary_union
+
+    from api.v1.endpoints.layout import layout_result_to_response
+    from services.wall_geometry import net_polygon
+
+    layout = _layout(
+        SQUARE_20,
+        corridor_width_m=1.5,
+        cage_size_m=3.0,
+        place_cage=True,
+        apartments=[ApartmentSpec(type="M2", min_area_m2=40.0, target_count=4)],
+    )
+    assert layout.leftover is not None
+    assert layout.leftover.area > 50.0, "test scenario should under-fill the footprint (non-trivial leftover)"
+
+    wt = validate_layout_wt(layout)
+    response = layout_result_to_response(layout, wt)
+
+    wall_union = unary_union([shape(g) for g in response.wall_bands])
+    net_leftover = net_polygon(layout.leftover)
+    overlap_area = wall_union.intersection(net_leftover).area
+    assert overlap_area < 1e-6, (
+        f"wall_bands overlaps net_polygon(leftover) by {overlap_area:.3f} m^2 -- "
+        "leftover was absorbed into the wall layer instead of rendering as an open gap"
+    )
+
+
 def test_default_max_corridor_distance_is_20m():
     """Regression for the 2026-07-03 domain correction: WT §58 ust.4
     single-loaded threshold is 20m, not 30m (see
