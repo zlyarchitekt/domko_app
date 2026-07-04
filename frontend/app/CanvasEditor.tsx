@@ -25,6 +25,32 @@ function ringToPoints(geom: GeoJsonPolygon): Point2D[] {
   return ring.slice(0, -1).map(([x, y]) => ({ x, y }));
 }
 
+/** Corridor centerline segments are stored as a list of [p1,p2] pairs where
+ *  consecutive segments share an endpoint (seg[i][1] === seg[i+1][0]) --
+ *  same continuity `reshape_circulation()` assumes server-side (circulation.py
+ *  §_join_centerlines). `points` is `[api.Point, api.Point]` where
+ *  `api.Point = [number, number]` (a tuple, NOT a `{x,y}` object — see
+ *  `frontend/app/lib/api.ts`'s `Point` type). Flattening to a plain
+ *  `Point2D[]` list and rebuilding segments from it is the shared primitive
+ *  both insert and remove need. */
+function flattenCenterline(centerline: api.CorridorCenterlineSegment[]): Point2D[] {
+  if (centerline.length === 0) return [];
+  const toPt = ([x, y]: api.Point): Point2D => ({ x, y });
+  const flat: Point2D[] = [toPt(centerline[0].points[0])];
+  for (const seg of centerline) {
+    flat.push(toPt(seg.points[1]));
+  }
+  return flat;
+}
+
+function segmentsFromFlatPath(flat: Point2D[]): [Point2D, Point2D][] {
+  const segs: [Point2D, Point2D][] = [];
+  for (let i = 0; i < flat.length - 1; i++) {
+    segs.push([flat[i], flat[i + 1]]);
+  }
+  return segs;
+}
+
 /** Konva's <Line> only ever draws a single ring, so it can't represent a
  *  polygon with holes. wall_bands can legitimately have holes: the exterior
  *  band is `footprint.buffer(+0.30).difference(buffer(-0.10))` -- an annulus
@@ -728,7 +754,21 @@ export default function CanvasEditor() {
               points={toCanvasPoints(seg.points.map(([x, y]) => ({ x, y })))}
               stroke={seg.exceeds_max ? "#ef4444" : "#22c55e"}
               strokeWidth={3 / scale}
-              listening={false}
+              listening={state.mode === "edit-corridor-centerline"}
+              onDblClick={(e) => {
+                if (state.mode !== "edit-corridor-centerline" || !state.circulationResult) return;
+                e.cancelBubble = true;
+                const stage = stageRef.current;
+                const pointer = stage?.getPointerPosition();
+                if (!pointer) return;
+                const clicked = worldToMeters(pointer.x, pointer.y);
+                const flat = flattenCenterline(state.circulationResult.centerline);
+                // Insert the new point between this segment's two endpoints
+                // (index i in the flat path, since flat[i]/flat[i+1] are
+                // exactly seg.points[0]/seg.points[1] by construction).
+                const newFlat = [...flat.slice(0, i + 1), clicked, ...flat.slice(i + 1)];
+                void runReshapeCirculation(segmentsFromFlatPath(newFlat));
+              }}
             />
           ))}
 
@@ -756,6 +796,21 @@ export default function CanvasEditor() {
                   stroke="#22c55e"
                   strokeWidth={2 / scale}
                   draggable
+                  onDblClick={(e) => {
+                    e.cancelBubble = true;
+                    if (!state.circulationResult) return;
+                    const flat = flattenCenterline(state.circulationResult.centerline);
+                    // Guard: 2 points = 1 segment = the minimum viable
+                    // centerline. Removing one would leave 0 or 1 points and
+                    // no geometry -- no-op instead (spec §4.1).
+                    if (flat.length <= 2) return;
+                    const idx = flat.findIndex(
+                      (p) => Math.abs(p.x - v.x) < 1e-6 && Math.abs(p.y - v.y) < 1e-6
+                    );
+                    if (idx === -1) return;
+                    const newFlat = [...flat.slice(0, idx), ...flat.slice(idx + 1)];
+                    void runReshapeCirculation(segmentsFromFlatPath(newFlat));
+                  }}
                   onDragStart={(e) => {
                     e.cancelBubble = true;
                   }}
