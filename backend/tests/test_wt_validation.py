@@ -327,27 +327,42 @@ def test_layout_generate_endpoint_exposes_net_area_and_wall_bands():
 
 def test_wall_bands_excludes_leftover_area():
     """Regression: interior_wall_bands() (Task 1, services/wall_geometry.py)
-    treats any interior-envelope area not covered by any cell's NET polygon as
-    'wall' -- but LayoutResult.leftover is legitimately un-programmed floor
-    space, not a wall. Per docs/superpowers/specs/2026-07-04-wall-thickness-
-    design.md §3, leftover must render as an open hole (no wall drawn through
-    it), so layout_result_to_response() must subtract it back out of
-    wall_bands.
+    treats any interior-envelope area not covered by any real cell's net
+    polygon as 'wall' -- but LayoutResult.leftover is legitimately
+    un-programmed floor space, not a wall. Per docs/superpowers/specs/2026-
+    07-04-wall-thickness-design.md §3 ("bez ściany dookoła" -- no wall
+    around it), leftover must render as a fully open hole, so
+    layout_result_to_response() must subtract it back out of the interior
+    wall bands (using leftover's RAW polygon, not net_polygon(leftover) --
+    see the module-level fix comment for why).
 
-    The check compares against net_polygon(leftover), not leftover's raw
-    polygon: leftover's raw/gross boundary is *supposed* to touch real wall
-    bands at its own edges -- exactly like every apartment's raw polygon
-    does against its neighbours -- so a small rim of overlap against the raw
-    polygon is correct, not a bug. Confirmed empirically while diagnosing
-    this regression: subtracting the raw leftover polygon still left ~5m^2
-    of "overlap" against exterior_wall_band for this exact scenario (the
-    legitimate edge rim); subtracting net_polygon(leftover) leaves exactly
-    0 -- so that's the fair, scenario-independent check."""
+    The check isolates the interior contribution (wall_bands minus
+    exterior_wall_band(footprint)) before comparing against leftover's raw
+    polygon. Two failure modes this specifically guards against, both
+    verified empirically while diagnosing this regression:
+    - Comparing the *full* wall_bands (including exterior_wall_band)
+      against raw leftover is unsatisfiable whenever leftover touches a
+      facade edge: the real 40cm perimeter wall legitimately overlaps raw
+      leftover there (~5.03m^2 in this scenario) regardless of how the
+      interior exclusion is implemented -- that's not a bug, so asserting
+      zero overlap against the *full* wall_bands would fail even with a
+      correct fix.
+    - Comparing against net_polygon(leftover) instead of raw would dodge
+      that, but is blind to a real regression: subtracting
+      net_polygon(leftover) (instead of raw leftover) from
+      interior_wall_bands() still leaves a ~4.97m^2 rim of fake wall at
+      leftover's boundary against its neighbours -- yet that rim sits
+      entirely *outside* net_polygon(leftover) too, so it evaluates to
+      exactly 0 either way and wouldn't catch the regression. Isolating the
+      interior contribution and comparing against the RAW polygon catches
+      both "no exclusion at all" (187.33 m^2 overlap) and "net-shrunk
+      exclusion" (4.97 m^2 overlap), vs. exactly 0 for the correct (raw)
+      fix."""
     from shapely.geometry import shape
     from shapely.ops import unary_union
 
     from api.v1.endpoints.layout import layout_result_to_response
-    from services.wall_geometry import net_polygon
+    from services.wall_geometry import exterior_wall_band
 
     layout = _layout(
         SQUARE_20,
@@ -363,11 +378,79 @@ def test_wall_bands_excludes_leftover_area():
     response = layout_result_to_response(layout, wt)
 
     wall_union = unary_union([shape(g) for g in response.wall_bands])
-    net_leftover = net_polygon(layout.leftover)
-    overlap_area = wall_union.intersection(net_leftover).area
+    interior_only = wall_union.difference(exterior_wall_band(layout.footprint))
+    overlap_area = interior_only.intersection(layout.leftover).area
     assert overlap_area < 1e-6, (
-        f"wall_bands overlaps net_polygon(leftover) by {overlap_area:.3f} m^2 -- "
+        f"interior wall_bands overlap leftover by {overlap_area:.3f} m^2 -- "
         "leftover was absorbed into the wall layer instead of rendering as an open gap"
+    )
+
+
+def test_wall_bands_excludes_thin_leftover_sliver():
+    """Regression: net_polygon() (services/wall_geometry.py) returns an EMPTY
+    polygon for shapes too thin to survive a -0.10m shrink on all sides (see
+    test_wall_geometry.py::test_net_polygon_too_small_returns_empty_not_crash
+    -- NET_SHRINK_M=0.10, so anything narrower than 0.20m collapses). A
+    leftover-exclusion fix built on net_polygon(leftover) would therefore be
+    a silent no-op for a thin leftover sliver: `interior_bands.difference(
+    Polygon())` is a no-op, so the sliver renders as fake wall, reproducing
+    the original bug for that shape. Subtracting the RAW leftover polygon
+    (what layout_result_to_response() actually does) has no such failure
+    mode -- Shapely's .difference() works regardless of how thin the
+    subtrahend is.
+
+    This is also *why* the assertion below can't be phrased in terms of
+    net_polygon(sliver) the way the sibling test discusses net_polygon
+    (leftover): net_polygon(sliver) is empty by construction here, so
+    comparing against it would be vacuously true regardless of whether the
+    fix works. Isolating the interior contribution (wall_bands minus
+    exterior_wall_band(footprint), which legitimately touches the sliver's
+    facade-adjacent edge) and comparing against the RAW sliver is the only
+    check that's both satisfiable and actually exercises the fix -- verified
+    empirically: 0.24 m^2 overlap with no exclusion (or with a
+    net_polygon-based exclusion, which is a no-op here and gives the exact
+    same result), vs. exactly 0 for the correct (raw) fix.
+
+    Hand-built LayoutResult (not generate_layout()) for exact control over
+    the sliver's geometry, same technique as _build_layout_result()
+    elsewhere in this file."""
+    from shapely.geometry import shape
+    from shapely.ops import unary_union
+
+    from api.v1.endpoints.layout import layout_result_to_response
+    from services.wall_geometry import exterior_wall_band, net_polygon
+
+    footprint = Polygon([(0, 0), (10, 0), (10, 5), (0, 5)])
+    apartment = ApartmentCell(
+        id="big-apt", type="1-room", polygon=Polygon([(0, 0), (9.85, 0), (9.85, 5), (0, 5)])
+    )
+    sliver = Polygon([(9.85, 0), (10, 0), (10, 5), (9.85, 5)])  # 0.15m wide, 5m tall -> 0.75 m^2
+    assert sliver.area > 0.5, "sanity: sliver should be a real, non-trivial (if thin) leftover area"
+    assert net_polygon(sliver).is_empty, (
+        "test setup assumption: sliver must be too thin to survive net_polygon's -0.10m shrink"
+    )
+
+    layout = LayoutResult(
+        footprint=footprint,
+        footprint_area_m2=footprint.area,
+        circulation_area_m2=0.0,
+        usable_area_m2=apartment.polygon.area,
+        apartments=[apartment],
+        leftover=sliver,
+        zones=[],
+        circulation_geometry=None,
+        cage_polygons=[],
+    )
+
+    wt = validate_layout_wt(layout)
+    response = layout_result_to_response(layout, wt)
+
+    wall_union = unary_union([shape(g) for g in response.wall_bands])
+    interior_only = wall_union.difference(exterior_wall_band(layout.footprint))
+    overlap_area = interior_only.intersection(sliver).area
+    assert overlap_area < 1e-6, (
+        f"interior wall_bands overlap the thin leftover sliver by {overlap_area:.4f} m^2 -- "
+        "a net_polygon-based fix would silently no-op here since net_polygon(sliver) is empty"
     )
 
 
