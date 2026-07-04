@@ -342,7 +342,7 @@ export default function CanvasEditor() {
     state.theme === "light"
       ? {
           bg: "#f4f4f5",
-          grid: "#e4e4e7",
+          grid: "#c8c8cd",
           axis: "#a1a1aa",
           axisText: "#71717a",
           outline: "#18181b",
@@ -351,7 +351,7 @@ export default function CanvasEditor() {
         }
       : {
           bg: "#0c0c10",
-          grid: "#232329",
+          grid: "#3a3a42",
           axis: "#52525b",
           axisText: "#71717a",
           outline: "#ffffff",
