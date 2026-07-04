@@ -13,7 +13,7 @@
 
 ## Global Constraints
 
-- Progi: reużyć `CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M = 20.0` (zielona) i `CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M = 40.0` (szara) z `circulation.py:22-23`. To heurystyki robocze usera — w komentarzach i opisach NIE przypisywać im § WT (utrwalona zasada: żadnych fabrykowanych citations).
+- Progi 20/40m to wartości DOMYŚLNE (stałe `CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M` / `..._DOUBLE_LOADED_M` z `circulation.py:22-23`) — user edytuje je w panelu, idą w requeście (`max_dist_single_m`/`max_dist_multi_m`), a `compute_evacuation_dots` bierze je jako parametry. To heurystyki robocze usera — w komentarzach i opisach NIE przypisywać im § WT (utrwalona zasada: żadnych fabrykowanych citations).
 - Krok próbkowania `SAMPLE_STEP_M = 1.0`; tolerancja wejścia do klatki `CAGE_ENTRY_TOLERANCE_M = 0.25`; tolerancja deduplikacji węzłów `1e-6`.
 - Testy backendu: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_evacuation.py -v` (globalny python bez zależności). Frontend bez testów automatycznych — typecheck `cd frontend && npx tsc --noEmit` + weryfikacja ręczna.
 - Dev: backend `cd backend && .venv/Scripts/python.exe -m uvicorn main:app --reload`; frontend `cd frontend && npm run dev -- -p 3001`.
@@ -31,7 +31,7 @@
 - Consumes: `shapely.geometry.Polygon/LineString/Point`, stałe progów z `services.circulation`
 - Produces (używane w Tasku 2):
   - `@dataclass EvacuationDot: x: float; y: float; status: str; distance_m: float | None` (`status ∈ {"green","gray","red"}`)
-  - `compute_evacuation_dots(segments: list[tuple[tuple[float, float], tuple[float, float]]], cage_polygons: list[Polygon]) -> list[EvacuationDot]`
+  - `compute_evacuation_dots(segments: list[tuple[tuple[float, float], tuple[float, float]]], cage_polygons: list[Polygon], green_max_m: float = GREEN_MAX_M, gray_max_m: float = GRAY_MAX_M) -> list[EvacuationDot]` — progi edytowalne (spec, uzupełnienie z review usera)
 
 - [ ] **Step 1: Napisz failing testy**
 
@@ -233,6 +233,8 @@ def _dijkstra(
 def compute_evacuation_dots(
     segments: list[tuple[tuple[float, float], tuple[float, float]]],
     cage_polygons: list[Polygon],
+    green_max_m: float = GREEN_MAX_M,
+    gray_max_m: float = GRAY_MAX_M,
 ) -> list[EvacuationDot]:
     if not segments:
         return []
@@ -258,8 +260,8 @@ def compute_evacuation_dots(
             return "red", None
         d = min(reachable)
         if len(reachable) >= 2:
-            return ("gray" if d < GRAY_MAX_M else "red"), d
-        return ("green" if d < GREEN_MAX_M else "red"), d
+            return ("gray" if d < gray_max_m else "red"), d
+        return ("green" if d < green_max_m else "red"), d
 
     dots: list[EvacuationDot] = []
     seen: set[tuple[float, float]] = set()
@@ -334,7 +336,7 @@ def test_place_circulation_returns_dots():
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_evacuation.py -k place -v`
 Expected: FAIL — `AttributeError: ... no attribute 'evacuation_dots'`
 
-- [ ] **Step 2: CirculationResult + oba returny**
+- [ ] **Step 2: CirculationResult + oba returny + parametry progów**
 
 `circulation.py` — do dataclass `CirculationResult` (po `centerline`, linia 387):
 
@@ -345,6 +347,14 @@ Expected: FAIL — `AttributeError: ... no attribute 'evacuation_dots'`
     stałe z tego modułu)."""
 ```
 
+Sygnatury OBU funkcji dostają edytowalne progi (na końcu listy parametrów,
+z defaultami = stałe modułu):
+
+```python
+    max_dist_single_m: float = CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M,
+    max_dist_multi_m: float = CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M,
+```
+
 W `place_circulation` — przed `return CirculationResult(...)` (a PO bloku
 manuali z Etapu 2, jeśli już wdrożony):
 
@@ -352,7 +362,10 @@ manuali z Etapu 2, jeśli już wdrożony):
     from services.evacuation import compute_evacuation_dots
 
     all_segments = [seg.points for seg in centerline]
-    evacuation_dots = compute_evacuation_dots(all_segments, cage_polygons)
+    evacuation_dots = compute_evacuation_dots(
+        all_segments, cage_polygons,
+        green_max_m=max_dist_single_m, gray_max_m=max_dist_multi_m,
+    )
 ```
 
 i `evacuation_dots=evacuation_dots` w konstruktorze. To samo w
@@ -361,7 +374,10 @@ i `evacuation_dots=evacuation_dots` w konstruktorze. To samo w
 ```python
     from services.evacuation import compute_evacuation_dots
 
-    evacuation_dots = compute_evacuation_dots(centerline_points, cage_polygons)
+    evacuation_dots = compute_evacuation_dots(
+        centerline_points, cage_polygons,
+        green_max_m=max_dist_single_m, gray_max_m=max_dist_multi_m,
+    )
 ```
 
 i `evacuation_dots=evacuation_dots` w konstruktorze.
@@ -423,6 +439,31 @@ Wypełnienie:
 - `place_circulation_endpoint`: `evacuation_dots=_serialize_dots(result.evacuation_dots)` w konstruktorze odpowiedzi (linia 299).
 - `reshape_circulation_endpoint`: analogicznie w jego konstruktorze odpowiedzi.
 - `layout_result_to_response` (linia 134): `evacuation_dots=_serialize_dots(layout.evacuation_dots)`.
+
+Progi w requestach — `CirculationSpec` (linia 26, za `num_cages` / polami
+manuali z Etapu 2):
+
+```python
+    max_dist_single_m: float = Field(default=20.0, gt=0)
+    """Edytowalny próg zielonej kropki (heurystyka usera, nie § WT)."""
+    max_dist_multi_m: float = Field(default=40.0, gt=0)
+    """Edytowalny próg szarej kropki (>=2 klatki osiągalne)."""
+```
+
+`place_circulation_endpoint` przekazuje oba do `place_circulation(...)`:
+
+```python
+        max_dist_single_m=circulation.max_dist_single_m,
+        max_dist_multi_m=circulation.max_dist_multi_m,
+```
+
+`ReshapeCirculationRequest` dostaje te same dwa pola (z tymi samymi
+defaultami), a `reshape_circulation_endpoint` przekazuje je do
+`reshape_circulation(...)`. `LayoutInput` (services/layout.py) dostaje
+`max_dist_single_m: float = 20.0` / `max_dist_multi_m: float = 40.0`,
+`generate_layout` przekazuje je do `place_circulation`, a
+`generate_layout_endpoint` mapuje z `request.circulation` (trzecia
+ścieżka — dual-surface).
 
 - [ ] **Step 5: Testy całości + commit**
 
@@ -552,12 +593,173 @@ git commit -m "feat: render evacuation dots, neutral centerline color, panel sum
 
 ---
 
-### Task 4: Weryfikacja ręczna (spec §6)
+### Task 4: Progi edytowalne w panelu + endpoint PRZELICZ
+
+**Files:**
+- Modify: `backend/api/v1/endpoints/layout.py` (nowy endpoint za `/circulation/reshape`)
+- Modify: `frontend/app/lib/api.ts` (`CirculationSpecInput`, nowa funkcja `recomputeEvacuation`)
+- Modify: `frontend/app/state/SessionContext.tsx` (initialCirculation, nowy callback `runRecomputeEvacuation`, akcja `SET_EVACUATION_DOTS`)
+- Modify: `frontend/app/components/CirculationSection.tsx` (dwa inputy + przycisk PRZELICZ)
+
+**Interfaces:**
+- Consumes: `compute_evacuation_dots(segments, cages, green_max_m, gray_max_m)` (Task 1), `_serialize_dots`/`EvacuationDotResult` (Task 2)
+- Produces: `POST /layout/evacuation` — przelicza TYLKO kropki (bez geometrii); `runRecomputeEvacuation()` w SessionContext
+
+- [ ] **Step 1: Endpoint backendu**
+
+W `backend/api/v1/endpoints/layout.py`, za `reshape_circulation_endpoint`:
+
+```python
+class EvacuationRecomputeRequest(BaseModel):
+    centerline: list[dict]
+    """[{points: [[x,y],[x,y]]}] -- aktualna oś z frontendu (auto+manual+reshape)."""
+    cage_geometries: list[dict] = Field(default_factory=list)
+    max_dist_single_m: float = Field(default=20.0, gt=0)
+    max_dist_multi_m: float = Field(default=40.0, gt=0)
+
+
+class EvacuationRecomputeResponse(BaseModel):
+    evacuation_dots: list[EvacuationDotResult] = []
+
+
+@router.post("/evacuation", response_model=EvacuationRecomputeResponse)
+def recompute_evacuation_endpoint(request: EvacuationRecomputeRequest):
+    """PRZELICZ (spec 2026-07-04-evacuation-dots §3): przemalowuje kropki
+    po zmianie progów BEZ ruszania geometrii -- ręcznie przesunięta oś
+    zostaje dokładnie tam, gdzie user ją zostawił."""
+    from services.evacuation import compute_evacuation_dots
+
+    try:
+        segments = [
+            ((seg["points"][0][0], seg["points"][0][1]), (seg["points"][1][0], seg["points"][1][1]))
+            for seg in request.centerline
+        ]
+        cages = [_shape(g) for g in request.cage_geometries]
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid evacuation payload: {exc}")
+
+    dots = compute_evacuation_dots(
+        segments, cages,
+        green_max_m=request.max_dist_single_m, gray_max_m=request.max_dist_multi_m,
+    )
+    return EvacuationRecomputeResponse(evacuation_dots=_serialize_dots(dots))
+```
+
+- [ ] **Step 2: api.ts**
+
+`CirculationSpecInput` — dodaj `max_dist_single_m: number;
+max_dist_multi_m: number;`. Nowa funkcja:
+
+```ts
+export function recomputeEvacuation(req: {
+  centerline: { points: [Point, Point] }[];
+  cage_geometries: GeoJsonPolygon[];
+  max_dist_single_m: number;
+  max_dist_multi_m: number;
+}): Promise<{ evacuation_dots: EvacuationDot[] }> {
+  return postJson("/layout/evacuation", req);
+}
+```
+
+- [ ] **Step 3: SessionContext**
+
+`initialCirculation` — dodaj `max_dist_single_m: 20, max_dist_multi_m: 40,`.
+
+Akcja + reducer:
+
+```ts
+  | { type: "SET_EVACUATION_DOTS"; dots: api.EvacuationDot[] }
+```
+
+```ts
+    case "SET_EVACUATION_DOTS":
+      if (!state.circulationResult) return state;
+      return {
+        ...state,
+        circulationResult: { ...state.circulationResult, evacuation_dots: action.dots },
+      };
+```
+
+Callback (wpisany też do interfejsu i `value`, wzorzec `runPlaceCirculation`):
+
+```ts
+  const runRecomputeEvacuation = useCallback(async () => {
+    if (!state.circulationResult?.centerline?.length) return;
+    dispatch({ type: "SET_LOADING", loading: true });
+    try {
+      const res = await api.recomputeEvacuation({
+        centerline: state.circulationResult.centerline.map((seg) => ({ points: seg.points })),
+        cage_geometries: state.circulationResult.cage_geometries,
+        max_dist_single_m: state.circulation.max_dist_single_m,
+        max_dist_multi_m: state.circulation.max_dist_multi_m,
+      });
+      dispatch({ type: "SET_EVACUATION_DOTS", dots: res.evacuation_dots });
+      dispatch({ type: "SET_ERROR", error: null });
+    } catch (err) {
+      dispatch({ type: "SET_ERROR", error: err instanceof api.ApiError ? err.message : String(err) });
+    } finally {
+      dispatch({ type: "SET_LOADING", loading: false });
+    }
+  }, [state.circulationResult, state.circulation.max_dist_single_m, state.circulation.max_dist_multi_m]);
+```
+
+- [ ] **Step 4: Panel — inputy + PRZELICZ**
+
+W `CirculationSection.tsx`, po polu „Szerokość korytarza" (linia ~136):
+
+```tsx
+      <label className="flex items-center justify-between text-xs text-zinc-400">
+        Dojście do 1 klatki ≤ (m)
+        <input
+          type="number" step={1} min={1}
+          value={state.circulation.max_dist_single_m}
+          onChange={(e) => setCirculation({ max_dist_single_m: Number(e.target.value) })}
+          className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 font-mono text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+        />
+      </label>
+      <label className="flex items-center justify-between text-xs text-zinc-400">
+        Dojście do ≥2 klatek ≤ (m)
+        <input
+          type="number" step={1} min={1}
+          value={state.circulation.max_dist_multi_m}
+          onChange={(e) => setCirculation({ max_dist_multi_m: Number(e.target.value) })}
+          className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 font-mono text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+        />
+      </label>
+```
+
+Do bloku przycisków (za „Edytuj linię korytarza") — do destrukturyzacji
+dodaj `runRecomputeEvacuation`:
+
+```tsx
+        <button
+          onClick={() => void runRecomputeEvacuation()}
+          disabled={!state.circulationResult || state.isLoading}
+          className="flex items-center justify-center gap-1.5 rounded-lg bg-zinc-800/70 px-2 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700/70 disabled:opacity-30 light:bg-zinc-100 light:text-zinc-700 light:hover:bg-zinc-200"
+          title="Przelicz kropki dojść po zmianie progów — bez ruszania geometrii"
+        >
+          PRZELICZ dojścia
+        </button>
+```
+
+- [ ] **Step 5: Typecheck + testy + commit**
+
+Run: `cd frontend && npx tsc --noEmit` oraz `cd backend && .venv/Scripts/python.exe -m pytest tests/ -v`
+Expected: exit 0 / wszystkie PASS.
+
+```bash
+git add backend/api/v1/endpoints/layout.py frontend/app/lib/api.ts frontend/app/state/SessionContext.tsx frontend/app/components/CirculationSection.tsx
+git commit -m "feat: editable evacuation thresholds with PRZELICZ recompute endpoint"
+```
+
+---
+
+### Task 5: Weryfikacja ręczna (spec §6)
 
 **Files:** brak (task weryfikacyjny)
 
 **Interfaces:**
-- Consumes: Taski 1–3 (+ Etap 2 dla scenariuszy manualnych)
+- Consumes: Taski 1–4 (+ Etap 2 dla scenariuszy manualnych)
 - Produces: raport dla usera
 
 - [ ] **Step 1: Uruchom backend + frontend** (komendy z Global Constraints)
@@ -570,6 +772,7 @@ git commit -m "feat: render evacuation dots, neutral centerline color, panel sum
 4. Oś neutralna (#60a5fa) — starych zielonych/czerwonych ODCINKÓW brak.
 5. Panel: licznik „Dojścia: N pkt poza limitem" zmienia się z geometrią; przy zerze czerwonych — „Dojścia: OK".
 6. „Generuj układ" (pełna ścieżka /generate) → kropki też widoczne (dual-surface potwierdzony).
-7. Regresja: edycja osi (dblclick/drag), manuale, podział na mieszkania.
+7. Zmiana progu 20→30 + „PRZELICZ dojścia" → część czerwonych → zielone; oś/korytarze/ściany NIE drgnęły (także po ręcznym reshape osi).
+8. Regresja: edycja osi (dblclick/drag), manuale, podział na mieszkania.
 
 - [ ] **Step 3: Poprawki znalezisk** (commit per poprawka, `fix: ...`), raport dla usera.

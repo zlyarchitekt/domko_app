@@ -1,32 +1,33 @@
-# Etap 4: Podział na mieszkania — liczba z powierzchni, iteracje, zero resztek — Implementation Plan
+# Etap 4: Podział na mieszkania — liczba z powierzchni, iteracje, zero resztek, 7 wag — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Liczba mieszkań wyliczana z powierzchni i struktury % (pole input znika), 10 iteracji podziału z deterministycznym seedem i scoringiem `w·struktura + (1−w)·wielkości`, zero resztek (leftover doklejany do sąsiadów), lista iteracji w panelu + suwak wagi.
+**Goal:** Liczba mieszkań wyliczana z powierzchni i struktury % (pole input znika), 10 iteracji podziału z deterministycznym seedem, zero resztek, scoring wielokryterialny z 7 wagami (Size m², Unit Mix, Grid lines, Shape aware, Daylight, Squareness, Adjacency — mapowanie z Finch3D zaakceptowane 2026-07-04) i lista iteracji w panelu.
 
-**Architecture:** Nowa funkcja `iterate_units()` w `unit_mix.py` owija istniejący `fit_program_to_rectangles()` (dostaje on opcjonalny `rng` do tasowania), po każdej iteracji skleja leftover z sąsiadami (`_merge_leftover_into_cells`) i liczy score. Backend wylicza `derived_total_units` z powierzchni netto remainder i struktury % (largest-remainder dla sztuk per typ). Oba endpointy (`/layout/units`, `/layout/generate`) dostają `iterations`/`weight_w` i zwracają metadane iteracji (dual-surface gotcha).
+**Architecture:** Nowa funkcja `iterate_units()` w `unit_mix.py` owija istniejący `fit_program_to_rectangles()` (dostaje opcjonalny `rng` do tasowania), po każdej iteracji skleja leftover z sąsiadami i liczy `score = Σ wᵢ·devᵢ / Σ wᵢ` z 7 komponentów. Komponenty `daylight`/`adjacency` wymagają obrysu i geometrii komunikacji — gdy brak w requeście, są pomijane (wypadają z Σwᵢ). Oba endpointy (`/layout/units`, `/layout/generate`) dostają `iterations`/`weights` i zwracają metadane iteracji (dual-surface gotcha).
 
 **Tech Stack:** shapely + stdlib `random` (backend), Next.js (frontend).
 
-**Spec:** `docs/superpowers/specs/2026-07-04-apartment-division-iterations-design.md`
-**Niezależny od** Etapów 2–3 (konsumuje tylko `remainder`); może być wdrażany równolegle.
+**Spec:** `docs/superpowers/specs/2026-07-04-apartment-division-iterations-design.md` (Sekcja 4 = tabela wag)
+**Niezależny od** Etapów 2–3 (konsumuje tylko `remainder` + opcjonalnie geometrię komunikacji); może być wdrażany równolegle.
 
 ## Global Constraints
 
-- Domyślnie `iterations = 10` (zakres 1–50), `weight_w = 0.5` (0–1).
-- Determinizm: iteracja `i` używa `random.Random(i)` — ten sam wynik przy każdym uruchomieniu.
-- Zero resztek: po `iterate_units()` leftover ZAWSZE None; pole `leftover` w odpowiedziach zostaje (kompatybilność), zawsze null.
-- Kara `merged_disjoint`: +0.5 do składnika `size_dev` danego mieszkania.
-- Struktura % normalizowana do sumy (gdy ≠ 100%); wszystkie wiersze 0% → 422.
+- Domyślnie `iterations = 10` (zakres 1–50).
+- Wagi (0–1) z defaultami ze specu §4: `size 0.8, mix 0.6, grid 0.3, shape 0.5, daylight 0.7, squareness 0.5, adjacency 1.0`.
+- Determinizm: iteracja `i` używa `random.Random(i)`.
+- Zero resztek: po `iterate_units()` leftover ZAWSZE None; pole `leftover` w odpowiedziach zostaje (kompat), zawsze null.
+- Kara `merged_disjoint`: +0.5 do komponentu `adjacency` danego mieszkania (spec §3/§4).
+- Struktura % normalizowana do sumy; wszystkie wiersze 0% → 422.
 - Testy backendu: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_unit_iterations.py -v`. Frontend bez testów automatycznych — typecheck `cd frontend && npx tsc --noEmit`.
 - Dev: backend `cd backend && .venv/Scripts/python.exe -m uvicorn main:app --reload`; frontend `cd frontend && npm run dev -- -p 3001`.
 
 ---
 
-### Task 1: unit_mix — rng w fit, merge leftover, scoring, iterate_units (TDD)
+### Task 1: unit_mix — rng, merge leftover, scoring 7-komponentowy, iterate_units (TDD)
 
 **Files:**
-- Modify: `backend/services/unit_mix.py` (cały moduł — dopisanie funkcji, `fit_program_to_rectangles` dostaje `rng`)
+- Modify: `backend/services/unit_mix.py` (dopisanie funkcji; `fit_program_to_rectangles` dostaje `rng`)
 - Modify: `backend/services/layout.py:94-107` (`ApartmentCell` — pole `merged_disjoint`)
 - Test: `backend/tests/test_unit_iterations.py` (nowy plik)
 
@@ -35,11 +36,12 @@
 - Produces (używane w Tasku 2):
   - `ApartmentCell.merged_disjoint: bool = False`
   - `@dataclass ProgramShare: type: str; percentage: float; area_min_m2: float; area_max_m2: float`
-  - `@dataclass IterationMeta: seed: int; score: float; units_count: int; structure_dev: float; size_dev: float`
+  - `@dataclass UnitWeights: size=0.8; mix=0.6; grid=0.3; shape=0.5; daylight=0.7; squareness=0.5; adjacency=1.0` (wszystkie float)
+  - `@dataclass IterationMeta: seed: int; score: float; units_count: int; components: dict[str, float]`
   - `derive_total_units(net_remainder_m2: float, shares: list[ProgramShare]) -> int`
-  - `allocate_counts(shares: list[ProgramShare], total_units: int) -> dict[str, int]` (largest-remainder, suma = total_units)
-  - `iterate_units(remainder, shares: list[ProgramShare], iterations: int, weight_w: float) -> tuple[list[ApartmentCell], list[IterationMeta], int, int]` — zwraca (komórki najlepszej iteracji, metadane wszystkich, best_seed, derived_total_units); leftover zawsze wchłonięty
-  - `fit_program_to_rectangles(rectangles, specs, rng: random.Random | None = None)` — wstecznie zgodne (rng=None = dotychczasowe zachowanie)
+  - `allocate_counts(shares: list[ProgramShare], total_units: int) -> dict[str, int]` (largest-remainder)
+  - `iterate_units(remainder, shares, iterations: int = 10, weights: UnitWeights | None = None, footprint: Polygon | None = None, circulation_geometry=None) -> tuple[list[ApartmentCell], list[IterationMeta], int, int]` — (komórki najlepszej, metadane, best_seed, derived_total_units)
+  - `fit_program_to_rectangles(rectangles, specs, rng: random.Random | None = None)` — wstecznie zgodne
 
 - [ ] **Step 1: Napisz failing testy**
 
@@ -47,13 +49,15 @@ Utwórz `backend/tests/test_unit_iterations.py`:
 
 ```python
 """Testy iteracyjnego podziału na mieszkania (spec 2026-07-04-apartment-
-division-iterations §7)."""
+division-iterations §7, scoring 7-wagowy z §4)."""
 
 from shapely.geometry import Polygon
 
+from services.layout import ApartmentCell
 from services.unit_mix import (
-    IterationMeta,
     ProgramShare,
+    UnitWeights,
+    _score_iteration,
     allocate_counts,
     derive_total_units,
     iterate_units,
@@ -83,47 +87,87 @@ def test_derive_total_units_scales_with_area():
 def test_allocate_counts_largest_remainder_sums_to_total():
     counts = allocate_counts(SHARES, 7)
     assert sum(counts.values()) == 7
-    # 7*0.4 = 2.8 -> M2 i M3 dostają po ~3 przez largest remainder
     assert counts["M2"] >= 2 and counts["M3"] >= 2
 
 
 def test_zero_leftover_guarantee():
     remainder = _rect(0, 0, 24, 10)  # 240 m2
-    cells, metas, best_seed, derived_total = iterate_units(remainder, SHARES, iterations=5, weight_w=0.5)
+    cells, metas, best_seed, derived_total = iterate_units(remainder, SHARES, iterations=5)
     assert cells
     assert derived_total >= 1
     total_cells_area = sum(c.polygon.area for c in cells)
-    assert abs(total_cells_area - remainder.area) < 1e-6  # cała powierzchnia przydzielona
+    assert abs(total_cells_area - remainder.area) < 1e-6
     assert len(metas) == 5
     assert best_seed in {m.seed for m in metas}
 
 
 def test_determinism_same_seed_same_result():
     remainder = _rect(0, 0, 24, 10)
-    cells_a, metas_a, _, _ = iterate_units(remainder, SHARES, iterations=3, weight_w=0.5)
-    cells_b, metas_b, _, _ = iterate_units(remainder, SHARES, iterations=3, weight_w=0.5)
+    cells_a, metas_a, _, _ = iterate_units(remainder, SHARES, iterations=3)
+    cells_b, metas_b, _, _ = iterate_units(remainder, SHARES, iterations=3)
     assert [m.score for m in metas_a] == [m.score for m in metas_b]
     assert [c.polygon.wkt for c in cells_a] == [c.polygon.wkt for c in cells_b]
 
 
 def test_best_seed_has_lowest_score():
     remainder = _rect(0, 0, 30, 11)
-    _, metas, best_seed, _ = iterate_units(remainder, SHARES, iterations=10, weight_w=0.5)
+    _, metas, best_seed, _ = iterate_units(remainder, SHARES, iterations=10)
     best = min(metas, key=lambda m: m.score)
     assert best.seed == best_seed
 
 
-def test_weight_extremes_change_scores():
+def test_single_weight_score_equals_component():
     remainder = _rect(0, 0, 24, 10)
-    _, metas_structure, _, _ = iterate_units(remainder, SHARES, iterations=5, weight_w=0.0)
-    _, metas_sizes, _, _ = iterate_units(remainder, SHARES, iterations=5, weight_w=1.0)
-    # w=0.0 -> score == size_dev; w=1.0 -> score == structure_dev
-    assert all(abs(m.score - m.size_dev) < 1e-9 for m in metas_structure)
-    assert all(abs(m.score - m.structure_dev) < 1e-9 for m in metas_sizes)
-```
+    only_mix = UnitWeights(size=0, mix=1, grid=0, shape=0, daylight=0, squareness=0, adjacency=0)
+    only_size = UnitWeights(size=1, mix=0, grid=0, shape=0, daylight=0, squareness=0, adjacency=0)
+    _, metas_mix, _, _ = iterate_units(remainder, SHARES, iterations=3, weights=only_mix)
+    _, metas_size, _, _ = iterate_units(remainder, SHARES, iterations=3, weights=only_size)
+    assert all(abs(m.score - m.components["mix"]) < 1e-9 for m in metas_mix)
+    assert all(abs(m.score - m.components["size"]) < 1e-9 for m in metas_size)
 
-UWAGA do konwencji wag: `w` waży STRUKTURĘ (`score = w·structure_dev +
-(1−w)·size_dev`), więc `weight_w=1.0` = czysta struktura.
+
+def test_geometric_components_on_crafted_cells():
+    # kwadrat 6x6 na siatce: grid=0, shape=0 (prostokąt), squareness=0 (kwadrat)
+    square = ApartmentCell(id="a", type="M2", polygon=_rect(0, 0, 6, 6))
+    # 6x15: proporcja 2.5:1 -> squareness = 1.0; poza siatką: wierzchołek 0.3
+    long_off = ApartmentCell(id="b", type="M2", polygon=_rect(0.3, 0, 6.3, 15))
+    shares = [ProgramShare(type="M2", percentage=100, area_min_m2=30, area_max_m2=100)]
+    w = UnitWeights(size=0, mix=0, grid=1, shape=0, daylight=0, squareness=0, adjacency=0)
+    score_sq, comp_sq = _score_iteration([square], shares, w, None, None)
+    score_lo, comp_lo = _score_iteration([long_off], shares, w, None, None)
+    assert comp_sq["grid"] == 0.0
+    assert comp_lo["grid"] > 0.0
+    assert comp_sq["squareness"] == 0.0
+    assert comp_lo["squareness"] >= 0.99
+
+
+def test_min_facade_per_type_drives_daylight():
+    # komórka 6x6 przy lewej krawędzi obrysu 20x6 dzieli z exterior obrysu
+    # lewą (6m), dolną (6m) i górną (6m) krawędź = ~18m styku.
+    # Próg 3m -> spełniony (dev 0); próg 25m -> niespełniony (dev 1).
+    fp = _rect(0, 0, 20, 6)
+    cell = ApartmentCell(id="a", type="M2", polygon=_rect(0, 0, 6, 6))
+    w = UnitWeights(size=0, mix=0, grid=0, shape=0, daylight=1, squareness=0, adjacency=0)
+    ok_shares = [ProgramShare(type="M2", percentage=100, area_min_m2=30, area_max_m2=40, min_facade_m=3.0)]
+    hi_shares = [ProgramShare(type="M2", percentage=100, area_min_m2=30, area_max_m2=40, min_facade_m=25.0)]
+    _, comp_ok = _score_iteration([cell], ok_shares, w, fp, None)
+    _, comp_hi = _score_iteration([cell], hi_shares, w, fp, None)
+    assert comp_ok["daylight"] == 0.0
+    assert comp_hi["daylight"] == 1.0
+
+
+def test_merged_disjoint_raises_adjacency():
+    circulation = _rect(10, 0, 12, 6)
+    touching = ApartmentCell(id="a", type="M2", polygon=_rect(6, 0, 10, 6))
+    disjoint = ApartmentCell(id="b", type="M2", polygon=_rect(6, 0, 10, 6))
+    disjoint.merged_disjoint = True
+    shares = [ProgramShare(type="M2", percentage=100, area_min_m2=20, area_max_m2=30)]
+    w = UnitWeights(size=0, mix=0, grid=0, shape=0, daylight=0, squareness=0, adjacency=1)
+    _, comp_ok = _score_iteration([touching], shares, w, None, circulation)
+    _, comp_bad = _score_iteration([disjoint], shares, w, None, circulation)
+    assert comp_ok["adjacency"] == 0.0
+    assert abs(comp_bad["adjacency"] - 0.5) < 1e-9  # styka się, ale kara za enklawę
+```
 
 - [ ] **Step 2: Uruchom testy — mają FAILować**
 
@@ -138,28 +182,42 @@ linia 107):
 ```python
     merged_disjoint: bool = False
     """True gdy zero-leftover merge dokleił do tej komórki część bez wspólnej
-    krawędzi (enklawę) -- kara w scoringu, spec 2026-07-04-apartment-division
-    -iterations §3."""
+    krawędzi (enklawę) -- kara +0.5 w komponencie adjacency scoringu, spec
+    2026-07-04-apartment-division-iterations §3."""
 ```
 
 - [ ] **Step 4: Implementacja w unit_mix.py**
 
-Na górze pliku dodaj importy `import math`, `import random` oraz dataclasses:
+Importy na górze: `import math`, `import random`,
+`from dataclasses import dataclass, field, asdict` oraz:
 
 ```python
-from dataclasses import dataclass
-
-
 @dataclass
 class ProgramShare:
-    """Wiersz struktury % (spec 2026-07-04-apartment-division-iterations §1).
-    Zastępuje parę (min_area_m2, target_count) jako źródło prawdy programu:
-    sztuki wynikają z powierzchni budynku, nie z pola usera."""
+    """Wiersz struktury % (spec §1): sztuki wynikają z powierzchni budynku,
+    nie z pola usera."""
 
     type: str
     percentage: float
     area_min_m2: float
     area_max_m2: float
+    min_facade_m: float = 3.0
+    """Minimalny styk mieszkania tego typu ze ścianą zewnętrzną (spec §4,
+    komponent daylight) -- per typ, pomysł usera ze screena Finch
+    'Min facade length'."""
+
+
+@dataclass
+class UnitWeights:
+    """7 wag scoringu (spec §4, mapowanie z Finch 'Unit weights')."""
+
+    size: float = 0.8
+    mix: float = 0.6
+    grid: float = 0.3
+    shape: float = 0.5
+    daylight: float = 0.7
+    squareness: float = 0.5
+    adjacency: float = 1.0
 
 
 @dataclass
@@ -167,30 +225,24 @@ class IterationMeta:
     seed: int
     score: float
     units_count: int
-    structure_dev: float
-    size_dev: float
+    components: dict = field(default_factory=dict)
+    """dev per waga: {"size": ..., "mix": ..., ...} -- 0 = idealnie."""
 ```
 
-Funkcje wyliczeń:
+`derive_total_units` i `allocate_counts` (spec §1):
 
 ```python
 def derive_total_units(net_remainder_m2: float, shares: list[ProgramShare]) -> int:
-    """totalUnits z powierzchni i struktury (spec §1). Udziały normalizowane
-    do sumy -- struktura 50/50 działa tak samo jak 25/25."""
     total_pct = sum(s.percentage for s in shares)
     if total_pct <= 0:
         raise ValueError("Struktura mieszkań: wszystkie udziały procentowe są zerowe")
-    avg = sum(
-        (s.percentage / total_pct) * (s.area_min_m2 + s.area_max_m2) / 2.0 for s in shares
-    )
+    avg = sum((s.percentage / total_pct) * (s.area_min_m2 + s.area_max_m2) / 2.0 for s in shares)
     if avg <= 0:
         raise ValueError("Struktura mieszkań: nieprawidłowe przedziały wielkości")
     return max(1, math.floor(net_remainder_m2 / avg))
 
 
 def allocate_counts(shares: list[ProgramShare], total_units: int) -> dict[str, int]:
-    """Largest-remainder: suma sztuk == total_units, bez dryfu zaokrągleń
-    (spec §1)."""
     total_pct = sum(s.percentage for s in shares)
     if total_pct <= 0:
         raise ValueError("Struktura mieszkań: wszystkie udziały procentowe są zerowe")
@@ -203,15 +255,8 @@ def allocate_counts(shares: list[ProgramShare], total_units: int) -> dict[str, i
     return counts
 ```
 
-`fit_program_to_rectangles` — sygnatura (linia 37) dostaje parametr:
-
-```python
-def fit_program_to_rectangles(
-    rectangles: list[Polygon], specs: list[ApartmentSpec], rng: random.Random | None = None
-) -> tuple[list[ApartmentCell], Polygon | None]:
-```
-
-a zaraz po zbudowaniu `queue` (linia 46, `queue.extend(...)`) dodaj:
+`fit_program_to_rectangles` — sygnatura (linia 37) dostaje `rng:
+random.Random | None = None`, a po zbudowaniu `queue` (linia 46):
 
 ```python
     if rng is not None:
@@ -219,16 +264,16 @@ a zaraz po zbudowaniu `queue` (linia 46, `queue.extend(...)`) dodaj:
         rng.shuffle(rectangles := list(rectangles))
 ```
 
-(UWAGA: `rectangles :=` tworzy przetasowaną KOPIĘ lokalną — oryginalna lista
-wywołującego nietknięta; bez rng zachowanie w 100% dotychczasowe.)
+(kopia lokalna — lista wywołującego nietknięta; bez rng zachowanie
+w 100% dotychczasowe).
 
-Merge resztek:
+Merge resztek (spec §3):
 
 ```python
 def _merge_leftover_into_cells(cells: list[ApartmentCell], leftover) -> None:
-    """Zero resztek (spec §3): każda część leftover doklejana do mieszkania
-    o najdłuższej wspólnej krawędzi; części bez sąsiada -- do najbliższego
-    mieszkania z flagą merged_disjoint. Mutuje cells in-place."""
+    """Zero resztek: część leftover -> mieszkanie o najdłuższej wspólnej
+    krawędzi; bez sąsiada -> najbliższe mieszkanie + merged_disjoint.
+    Mutuje cells in-place."""
     if leftover is None or leftover.is_empty or not cells:
         return
     parts = list(leftover.geoms) if hasattr(leftover, "geoms") else [leftover]
@@ -250,35 +295,108 @@ def _merge_leftover_into_cells(cells: list[ApartmentCell], leftover) -> None:
         cell.net_area_m2 = net_polygon(cell.polygon).area
 ```
 
-Scoring:
+Scoring 7-komponentowy (spec §4). Komponenty per mieszkanie liczone na
+SUROWYCH poligonach (`cell.polygon`), 0 = idealnie:
 
 ```python
+_GRID_M = 0.5
+_DAYLIGHT_MIN_CONTACT_M = 3.0
+_SQUARENESS_CAP_RATIO = 2.5
+
+
+def _cell_geometry_devs(cell: ApartmentCell) -> tuple[float, float, float]:
+    """(grid, shape, squareness) dla jednej komórki."""
+    polys = list(cell.polygon.geoms) if hasattr(cell.polygon, "geoms") else [cell.polygon]
+    coords = [pt for p in polys for pt in p.exterior.coords[:-1]]
+    off = sum(
+        1
+        for x, y in coords
+        if abs(x - round(x / _GRID_M) * _GRID_M) > 1e-6 or abs(y - round(y / _GRID_M) * _GRID_M) > 1e-6
+    )
+    grid = off / len(coords) if coords else 0.0
+
+    mrr = cell.polygon.minimum_rotated_rectangle
+    shape = max(0.0, 1.0 - cell.polygon.area / mrr.area) if mrr.area > 1e-9 else 0.0
+
+    xs = [pt[0] for pt in mrr.exterior.coords[:-1]]
+    ys = [pt[1] for pt in mrr.exterior.coords[:-1]]
+    import math as _m
+    side_a = _m.hypot(xs[1] - xs[0], ys[1] - ys[0])
+    side_b = _m.hypot(xs[2] - xs[1], ys[2] - ys[1])
+    longer, shorter = max(side_a, side_b), min(side_a, side_b)
+    ratio = longer / shorter if shorter > 1e-9 else _SQUARENESS_CAP_RATIO
+    squareness = min(1.0, max(0.0, (ratio - 1.0) / (_SQUARENESS_CAP_RATIO - 1.0)))
+    return grid, shape, squareness
+
+
 def _score_iteration(
-    cells: list[ApartmentCell], shares: list[ProgramShare], weight_w: float
-) -> tuple[float, float, float]:
-    """Zwraca (score, structure_dev, size_dev) -- spec §4. Mniejszy lepszy."""
-    total_pct = sum(s.percentage for s in shares) or 1.0
+    cells: list[ApartmentCell],
+    shares: list[ProgramShare],
+    weights: UnitWeights,
+    footprint: Polygon | None,
+    circulation_geometry,
+) -> tuple[float, dict]:
+    """(score, components) -- spec §4. daylight bez footprint i adjacency
+    bez circulation_geometry są pomijane (wypadają z sumy wag)."""
     n = len(cells) or 1
-    structure_dev = sum(
+    total_pct = sum(s.percentage for s in shares) or 1.0
+
+    mix = sum(
         abs(s.percentage / total_pct - sum(1 for c in cells if c.type == s.type) / n)
         for s in shares
     )
+
     bounds = {s.type: (s.area_min_m2, s.area_max_m2) for s in shares}
-    devs = []
+    size_devs = []
     for c in cells:
         lo, hi = bounds.get(c.type, (0.0, float("inf")))
         area = c.polygon.area
-        dev = 0.0
         if lo > 0 and area < lo:
-            dev = (lo - area) / lo
+            size_devs.append((lo - area) / lo)
         elif hi > 0 and area > hi:
-            dev = (area - hi) / hi
-        if c.merged_disjoint:
-            dev += 0.5
-        devs.append(dev)
-    size_dev = sum(devs) / len(devs) if devs else 0.0
-    score = weight_w * structure_dev + (1.0 - weight_w) * size_dev
-    return score, structure_dev, size_dev
+            size_devs.append((area - hi) / hi)
+        else:
+            size_devs.append(0.0)
+    size = sum(size_devs) / n
+
+    geo = [_cell_geometry_devs(c) for c in cells]
+    grid = sum(g[0] for g in geo) / n
+    shape = sum(g[1] for g in geo) / n
+    squareness = sum(g[2] for g in geo) / n
+
+    components = {"size": size, "mix": mix, "grid": grid, "shape": shape, "squareness": squareness}
+    active = {
+        "size": weights.size, "mix": weights.mix, "grid": weights.grid,
+        "shape": weights.shape, "squareness": weights.squareness,
+    }
+
+    if footprint is not None:
+        edge = footprint.exterior.buffer(0.01)
+        facade_min = {s.type: s.min_facade_m for s in shares}
+        short_contact = sum(
+            1
+            for c in cells
+            if c.polygon.boundary.intersection(edge).length
+            < facade_min.get(c.type, _DAYLIGHT_MIN_CONTACT_M)
+        )
+        components["daylight"] = short_contact / n
+        active["daylight"] = weights.daylight
+
+    if circulation_geometry is not None and not circulation_geometry.is_empty:
+        adj_devs = []
+        for c in cells:
+            base = 0.0 if c.polygon.distance(circulation_geometry) < 0.01 else 1.0
+            if c.merged_disjoint:
+                base += 0.5
+            adj_devs.append(base)
+        components["adjacency"] = sum(adj_devs) / n
+        active["adjacency"] = weights.adjacency
+
+    total_w = sum(active.values())
+    if total_w <= 0:
+        return 0.0, components
+    score = sum(active[k] * components[k] for k in active) / total_w
+    return score, components
 ```
 
 Główna pętla:
@@ -288,13 +406,13 @@ def iterate_units(
     remainder: Polygon | MultiPolygon,
     shares: list[ProgramShare],
     iterations: int = 10,
-    weight_w: float = 0.5,
+    weights: UnitWeights | None = None,
+    footprint: Polygon | None = None,
+    circulation_geometry=None,
 ) -> tuple[list[ApartmentCell], list[IterationMeta], int, int]:
-    """Iteracyjny podział (spec §2): `iterations` przebiegów z deterministycznym
-    seedem, zero-leftover merge po każdym, wygrywa najniższy score."""
-    net_remainder = net_polygon(remainder) if remainder.geom_type == "Polygon" else remainder
-    # totalUnits liczone z powierzchni netto remainder (spec §1); dla
-    # MultiPolygon sumujemy netto części.
+    """Iteracyjny podział (spec §2): seeded przebiegi, zero-leftover merge,
+    scoring 7-wagowy, wygrywa najniższy score."""
+    weights = weights or UnitWeights()
     if hasattr(remainder, "geoms"):
         net_area = sum(net_polygon(p).area for p in remainder.geoms)
     else:
@@ -319,15 +437,14 @@ def iterate_units(
         cells, leftover = fit_program_to_rectangles(list(rectangles), specs, rng=rng)
         _merge_leftover_into_cells(cells, leftover)
         if not cells:
-            # remainder za mały na jakikolwiek program: jedno mieszkanie z całości
-            from services.layout import ApartmentCell as _Cell
             import uuid as _uuid
-            cells = [_Cell(id=str(_uuid.uuid4()), type=shares[0].type, polygon=remainder
-                           if remainder.geom_type == "Polygon" else unary_union(remainder))]
+            from services.layout import ApartmentCell as _Cell
+
+            whole = remainder if remainder.geom_type == "Polygon" else unary_union(remainder)
+            cells = [_Cell(id=str(_uuid.uuid4()), type=shares[0].type, polygon=whole)]
             cells[0].net_area_m2 = net_area
-        score, structure_dev, size_dev = _score_iteration(cells, shares, weight_w)
-        metas.append(IterationMeta(seed=seed, score=score, units_count=len(cells),
-                                   structure_dev=structure_dev, size_dev=size_dev))
+        score, components = _score_iteration(cells, shares, weights, footprint, circulation_geometry)
+        metas.append(IterationMeta(seed=seed, score=score, units_count=len(cells), components=components))
         if best is None or score < best[0]:
             best = (score, cells)
     best_seed = min(metas, key=lambda m: m.score).seed
@@ -337,19 +454,19 @@ def iterate_units(
 - [ ] **Step 5: Uruchom testy — mają przejść**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_unit_iterations.py tests/test_layout.py -v`
-Expected: wszystkie PASS (w tym stare — `fit_program_to_rectangles` bez rng
-zachowuje się identycznie).
+Expected: wszystkie PASS (stare bez regresji — `fit_program_to_rectangles`
+bez rng identyczne).
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add backend/services/unit_mix.py backend/services/layout.py backend/tests/test_unit_iterations.py
-git commit -m "feat: iterate_units - seeded iterations, zero-leftover merge, structure/size scoring"
+git commit -m "feat: iterate_units - seeded iterations, zero-leftover merge, 7-weight scoring"
 ```
 
 ---
 
-### Task 2: API — oba endpointy z iteracjami i strukturą %
+### Task 2: API — oba endpointy z iteracjami, wagami i strukturą %
 
 **Files:**
 - Modify: `backend/api/v1/endpoints/layout.py` (`ApartmentProgram` :18-23, `LayoutGenerateRequest` :38-42, `UnitsRequest` :311-323, `UnitsResponse` :326-332, `LayoutGenerateResponse` :68-84, `subdivide_units_endpoint` :335-405, `generate_layout_endpoint` :87, `layout_result_to_response` :134)
@@ -357,10 +474,10 @@ git commit -m "feat: iterate_units - seeded iterations, zero-leftover merge, str
 - Test: `backend/tests/test_unit_iterations.py` (dopisanie)
 
 **Interfaces:**
-- Consumes: `iterate_units`, `ProgramShare`, `IterationMeta` (Task 1)
+- Consumes: `iterate_units`, `ProgramShare`, `UnitWeights`, `IterationMeta` (Task 1)
 - Produces:
-  - `ApartmentProgram` + pola: `percentage: float = 0`, `area_min_m2: float = 0`, `area_max_m2: float = 0` (stare pola zostają — kompat)
-  - `UnitsRequest`/`LayoutGenerateRequest` + `iterations: int = 10 (ge=1, le=50)`, `weight_w: float = 0.5 (ge=0, le=1)`
+  - `ApartmentProgram` + `percentage: float = 0`, `area_min_m2: float = 0`, `area_max_m2: float = 0` (stare pola zostają — kompat)
+  - `UnitsRequest`/`LayoutGenerateRequest` + `iterations: int = 10 (ge=1, le=50)`, `weights: UnitWeightsInput`
   - odpowiedzi (OBIE): `derived_total_units: int`, `net_remainder_m2: float`, `iterations: list[IterationMetaResult]`, `best_seed: int`; `leftover` zawsze `None`
 
 - [ ] **Step 1: Failing test endpointu**
@@ -383,7 +500,8 @@ def test_units_endpoint_returns_iterations_and_no_leftover():
              "min_area_m2": 64, "target_count": 0},
         ],
         "iterations": 5,
-        "weight_w": 0.5,
+        "weights": {"size": 1.0, "mix": 1.0, "grid": 0, "shape": 0,
+                    "daylight": 0, "squareness": 0, "adjacency": 0},
     }
     res = client.post("/api/v1/layout/units", json=payload)
     assert res.status_code == 200, res.text
@@ -395,37 +513,50 @@ def test_units_endpoint_returns_iterations_and_no_leftover():
 ```
 
 (Prefiks ścieżki `/api/v1` zweryfikuj w `backend/api/v1/router.py` /
-`main.py` — jeśli inny, dostosuj URL w teście.)
+`main.py` — jeśli inny, dostosuj URL.)
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_unit_iterations.py -k endpoint -v`
 Expected: FAIL (pola nie istnieją).
 
 - [ ] **Step 2: Modele request/response**
 
-`ApartmentProgram` (linia 18) — dodaj pola struktury:
+`ApartmentProgram` (linia 18) — dodaj:
 
 ```python
     percentage: float = Field(default=0.0, ge=0)
     area_min_m2: float = Field(default=0.0, ge=0)
     area_max_m2: float = Field(default=0.0, ge=0)
+    min_facade_m: float = Field(default=3.0, ge=0)
+    """Min. styk typu ze ścianą zewnętrzną [m] -- komponent daylight."""
+```
+
+Nowe modele (obok pozostałych):
+
+```python
+class UnitWeightsInput(BaseModel):
+    """7 wag scoringu (spec §4) -- defaulty jak services.unit_mix.UnitWeights."""
+
+    size: float = Field(default=0.8, ge=0, le=1)
+    mix: float = Field(default=0.6, ge=0, le=1)
+    grid: float = Field(default=0.3, ge=0, le=1)
+    shape: float = Field(default=0.5, ge=0, le=1)
+    daylight: float = Field(default=0.7, ge=0, le=1)
+    squareness: float = Field(default=0.5, ge=0, le=1)
+    adjacency: float = Field(default=1.0, ge=0, le=1)
+
+
+class IterationMetaResult(BaseModel):
+    seed: int
+    score: float
+    units_count: int
+    components: dict[str, float] = {}
 ```
 
 `UnitsRequest` i `LayoutGenerateRequest` — dodaj:
 
 ```python
     iterations: int = Field(default=10, ge=1, le=50)
-    weight_w: float = Field(default=0.5, ge=0.0, le=1.0)
-```
-
-Wspólny model metadanych (obok innych modeli):
-
-```python
-class IterationMetaResult(BaseModel):
-    seed: int
-    score: float
-    units_count: int
-    structure_dev: float
-    size_dev: float
+    weights: UnitWeightsInput = Field(default_factory=UnitWeightsInput)
 ```
 
 `UnitsResponse` i `LayoutGenerateResponse` — dodaj:
@@ -439,7 +570,10 @@ class IterationMetaResult(BaseModel):
 
 - [ ] **Step 3: subdivide_units_endpoint na iterate_units**
 
-W `subdivide_units_endpoint` (linia 345-353) zamień budowę specs i wywołanie:
+W `subdivide_units_endpoint` — footprint i circulation_geometry są dziś
+parsowane dopiero w bloku wall_bands (linie 365-376); PRZENIEŚ oba parsy
+przed podział (potrzebne do daylight/adjacency), reszta bloku wall_bands
+używa już sparsowanych. Zamień budowę specs i wywołanie (linie 345-353):
 
 ```python
     shares = [
@@ -448,22 +582,27 @@ W `subdivide_units_endpoint` (linia 345-353) zamień budowę specs i wywołanie:
             percentage=a.percentage,
             area_min_m2=a.area_min_m2 or a.min_area_m2,
             area_max_m2=a.area_max_m2 or a.min_area_m2,
+            min_facade_m=a.min_facade_m,
         )
         for a in request.apartments
     ]
+    weights = UnitWeights(**request.weights.model_dump())
     try:
         cells, iteration_metas, best_seed, derived_total = iterate_units(
-            remainder, shares, iterations=request.iterations, weight_w=request.weight_w
+            remainder, shares,
+            iterations=request.iterations, weights=weights,
+            footprint=footprint, circulation_geometry=circulation_geometry,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     leftover = None  # iterate_units gwarantuje zero resztek (spec §3)
 ```
 
-(importy: `from services.unit_mix import ProgramShare, iterate_units`;
-`or a.min_area_m2` = fallback dla starych klientów bez pól przedziału).
+(importy: `from services.unit_mix import ProgramShare, UnitWeights,
+iterate_units`; `footprint`/`circulation_geometry` mogą być None — wtedy
+daylight/adjacency pomijane, spec §4).
 
-Dalej w tym endpoincie: net remainder do odpowiedzi —
+Net remainder do odpowiedzi:
 
 ```python
     if hasattr(remainder, "geoms"):
@@ -472,20 +611,21 @@ Dalej w tym endpoincie: net remainder do odpowiedzi —
         net_remainder_m2 = net_polygon(remainder).area
 ```
 
-(import `net_polygon` z `services.wall_geometry` już jest pośrednio — dodaj
-jawny). W `return UnitsResponse(...)` dodaj:
+(import `net_polygon` z `services.wall_geometry`). W `return
+UnitsResponse(...)`:
 
 ```python
         derived_total_units=derived_total,
         net_remainder_m2=net_remainder_m2,
-        iterations=[IterationMetaResult(**vars(m)) for m in iteration_metas],
+        iterations=[
+            IterationMetaResult(seed=m.seed, score=m.score, units_count=m.units_count, components=m.components)
+            for m in iteration_metas
+        ],
         best_seed=best_seed,
 ```
 
-UWAGA: blok `wall_bands` w tym endpoincie odejmował `leftover` od
-`interior_bands` (linie 389-397) — po zmianie `leftover` jest zawsze None,
-więc ta gałąź po prostu przestaje się wykonywać; NIE usuwaj jej (zero
-ryzyka, mniejszy diff).
+UWAGA: gałąź `wall_bands` odejmująca `leftover` (linie 389-397) przestaje
+się wykonywać (leftover zawsze None) — NIE usuwaj jej (mniejszy diff).
 
 - [ ] **Step 4: Ścieżka /generate (dual-surface)**
 
@@ -495,10 +635,10 @@ ryzyka, mniejszy diff).
 
 ```python
     iterations: int = 10
-    weight_w: float = 0.5
+    unit_weights: object = None
+    """services.unit_mix.UnitWeights | None."""
     program_shares: list = field(default_factory=list)
-    """list[ProgramShare] -- gdy niepuste, generate_layout używa iterate_units
-    zamiast subdivide_units (spec 2026-07-04-apartment-division-iterations)."""
+    """list[ProgramShare] -- gdy niepuste, generate_layout używa iterate_units."""
 ```
 
 `LayoutResult` — dodaj:
@@ -510,16 +650,19 @@ ryzyka, mniejszy diff).
     net_remainder_m2: float = 0.0
 ```
 
-W `generate_layout` (linia 156) zamień `subdivide_units(...)` na:
+W `generate_layout` (linia 156) zamień `subdivide_units(...)`:
 
 ```python
     if input.program_shares:
-        from services.unit_mix import iterate_units
+        from services.unit_mix import UnitWeights, iterate_units
         from services.wall_geometry import net_polygon as _np
 
         apartments, iteration_metas, best_seed, derived_total_units = iterate_units(
             circulation.remainder, input.program_shares,
-            iterations=input.iterations, weight_w=input.weight_w,
+            iterations=input.iterations,
+            weights=input.unit_weights or UnitWeights(),
+            footprint=footprint,
+            circulation_geometry=circulation.circulation_geometry,
         )
         leftover = None
         rem = circulation.remainder
@@ -533,16 +676,17 @@ W `generate_layout` (linia 156) zamień `subdivide_units(...)` na:
 
 i przekaż nowe pola do `LayoutResult(...)`.
 
-W `generate_layout_endpoint` — przy budowie `LayoutInput` dodaj:
+W `generate_layout_endpoint` — przy budowie `LayoutInput`:
 
 ```python
         iterations=request.iterations,
-        weight_w=request.weight_w,
+        unit_weights=UnitWeights(**request.weights.model_dump()),
         program_shares=[
             ProgramShare(
                 type=a.type, percentage=a.percentage,
                 area_min_m2=a.area_min_m2 or a.min_area_m2,
                 area_max_m2=a.area_max_m2 or a.min_area_m2,
+                min_facade_m=a.min_facade_m,
             )
             for a in request.apartments
             if a.percentage > 0
@@ -554,29 +698,32 @@ W `layout_result_to_response` dodaj do konstruktora odpowiedzi:
 ```python
         derived_total_units=layout.derived_total_units,
         net_remainder_m2=layout.net_remainder_m2,
-        iterations=[IterationMetaResult(**vars(m)) for m in layout.iteration_metas],
+        iterations=[
+            IterationMetaResult(seed=m.seed, score=m.score, units_count=m.units_count, components=m.components)
+            for m in layout.iteration_metas
+        ],
         best_seed=layout.best_seed,
 ```
 
 - [ ] **Step 5: Testy + commit**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/ -v`
-Expected: wszystkie PASS (stare testy /units z klientami bez nowych pól
-przechodzą przez fallbacki `or a.min_area_m2` i defaulty Pydantic).
+Expected: wszystkie PASS (starzy klienci bez nowych pól przechodzą przez
+fallbacki `or a.min_area_m2` i defaulty Pydantic).
 
 ```bash
 git add backend/api/v1/endpoints/layout.py backend/services/layout.py backend/tests/test_unit_iterations.py
-git commit -m "feat: iterations/weight_w through /layout/units and /layout/generate, derived unit count"
+git commit -m "feat: iterations and 7-weight scoring through /layout/units and /layout/generate"
 ```
 
 ---
 
-### Task 3: Frontend — panel Program bez pola liczby, suwak wagi, lista iteracji
+### Task 3: Frontend — panel Program: readonly liczba, 7 suwaków wag, lista iteracji
 
 **Files:**
 - Modify: `frontend/app/lib/api.ts` (`ApartmentProgramInput`, `UnitsResponse` :224-228, `LayoutGenerateResponse`, sygnatura `subdivideUnits` :230-)
 - Modify: `frontend/app/state/SessionContext.tsx` (stan, `runSubdivideUnits` :538-, `regenerate`, reducer)
-- Modify: `frontend/app/components/ProgramSection.tsx` (pole totalUnits :39, wiersze, stopka)
+- Modify: `frontend/app/components/ProgramSection.tsx` (pole totalUnits :39, suwaki, lista)
 
 **Interfaces:**
 - Consumes: pola API z Task 2
@@ -585,24 +732,32 @@ git commit -m "feat: iterations/weight_w through /layout/units and /layout/gener
 - [ ] **Step 1: api.ts**
 
 `ApartmentProgramInput` — dodaj `percentage: number; area_min_m2: number;
-area_max_m2: number;` (obok istniejących pól).
+area_max_m2: number; min_facade_m: number;`.
 
-Nowy typ + pola odpowiedzi:
+Nowe typy:
 
 ```ts
+export interface UnitWeightsInput {
+  size: number;
+  mix: number;
+  grid: number;
+  shape: number;
+  daylight: number;
+  squareness: number;
+  adjacency: number;
+}
+
 export interface IterationMeta {
   seed: number;
   score: number;
   units_count: number;
-  structure_dev: number;
-  size_dev: number;
+  components?: Record<string, number>;
 }
 ```
 
 Do `UnitsResponse` i `LayoutGenerateResponse` dodaj (OPCJONALNE w TS —
-`runSubdivideUnits` konstruuje `LayoutGenerateResponse` ręcznie i wymagane
-pola wymusiłyby dopisywanie ich w każdym takim miejscu; odczyt zawsze
-z `?? []`/`?? null`):
+`runSubdivideUnits` konstruuje `LayoutGenerateResponse` ręcznie; odczyt
+zawsze z `?? []`/`?? null`):
 
 ```ts
   derived_total_units?: number;
@@ -611,35 +766,41 @@ z `?? []`/`?? null`):
   best_seed?: number;
 ```
 
-`subdivideUnits(...)` — dodaj parametry `iterations: number` i `weightW:
-number` przekazywane w body jako `iterations`/`weight_w`.
+`subdivideUnits(...)` — dodaj parametry `iterations: number` i `weights:
+UnitWeightsInput` przekazywane w body jako `iterations`/`weights`.
 
 - [ ] **Step 2: SessionContext**
 
-Stan (po `totalUnits`):
+Stała + stan (po `totalUnits`):
 
 ```ts
-  weightW: number;               // suwak struktura(1)↔wielkości(0), default 0.5
+export const DEFAULT_UNIT_WEIGHTS: api.UnitWeightsInput = {
+  size: 0.8, mix: 0.6, grid: 0.3, shape: 0.5, daylight: 0.7, squareness: 0.5, adjacency: 1.0,
+};
+```
+
+```ts
+  unitWeights: api.UnitWeightsInput;
   lastIterations: api.IterationMeta[];
   derivedTotalUnits: number | null;
   netRemainderM2: number | null;
 ```
 
-`initialState`: `weightW: 0.5, lastIterations: [], derivedTotalUnits: null,
-netRemainderM2: null,`.
+`initialState`: `unitWeights: DEFAULT_UNIT_WEIGHTS, lastIterations: [],
+derivedTotalUnits: null, netRemainderM2: null,`.
 
 Akcje:
 
 ```ts
-  | { type: "SET_WEIGHT_W"; weightW: number }
+  | { type: "SET_UNIT_WEIGHT"; key: keyof api.UnitWeightsInput; value: number }
   | { type: "SET_ITERATION_RESULTS"; iterations: api.IterationMeta[]; derivedTotalUnits: number; netRemainderM2: number }
 ```
 
 Reducer:
 
 ```ts
-    case "SET_WEIGHT_W":
-      return { ...state, weightW: action.weightW };
+    case "SET_UNIT_WEIGHT":
+      return { ...state, unitWeights: { ...state.unitWeights, [action.key]: action.value } };
     case "SET_ITERATION_RESULTS":
       return {
         ...state,
@@ -652,11 +813,11 @@ Reducer:
       };
 ```
 
-Callback `setWeightW` + wpis do interfejsu i `value` (wzorzec
-`setTotalUnits`). `SET_TOTAL_UNITS` i `setTotalUnits` ZOSTAJĄ w kodzie
-(nieużywane przez UI po tym etapie — usunięcie odkładamy, mniejszy diff).
+Callback `setUnitWeight(key, value)` + wpis do interfejsu i `value`
+(wzorzec `setTotalUnits`). `SET_TOTAL_UNITS`/`setTotalUnits` ZOSTAJĄ
+(nieużywane przez UI — usunięcie odkładamy).
 
-`runSubdivideUnits` (linia 538): w `unitsReq` dodaj pola struktury:
+`runSubdivideUnits` (linia 538): `unitsReq` z polami struktury:
 
 ```ts
       const unitsReq = state.program.map((row) => ({
@@ -666,11 +827,19 @@ Callback `setWeightW` + wpis do interfejsu i `value` (wzorzec
         percentage: row.percentage,
         area_min_m2: row.area_min_m2,
         area_max_m2: row.area_max_m2,
+        min_facade_m: row.min_facade_m,
       }));
 ```
 
-wywołanie `api.subdivideUnits(..., 10, state.weightW)` — stała `10`
-(bez osobnego pola w stanie; YAGNI). Po otrzymaniu `unitsRes` dodaj dispatch:
+Typ `ProgramRow` (SessionContext) dostaje pole `min_facade_m: number`;
+w `initialState` i w `ADD_PROGRAM_ROW` nowe wiersze dostają
+`min_facade_m: 3.0` (dopisz do każdego literału wiersza obok
+`area_max_m2`).
+
+```ts
+```
+
+wywołanie `api.subdivideUnits(..., 10, state.unitWeights)`. Po `unitsRes`:
 
 ```ts
       dispatch({
@@ -681,9 +850,7 @@ wywołanie `api.subdivideUnits(..., 10, state.weightW)` — stała `10`
       });
 ```
 
-W ręcznie budowanym `layoutResult` w tym samym callbacku (linie ~553-566)
-dopisz nowe pola z odpowiedzi, żeby ścieżka dwustopniowa niosła te same
-dane co /generate:
+W ręcznie budowanym `layoutResult` (linie ~553-566) dopisz:
 
 ```ts
         derived_total_units: unitsRes.derived_total_units,
@@ -692,16 +859,30 @@ dane co /generate:
         best_seed: unitsRes.best_seed,
 ```
 
-Analogicznie w `regenerate` (ścieżka /generate): request dostaje
-`iterations: 10, weight_w: state.weightW` oraz pola struktury w
-`apartments`; po odpowiedzi ten sam dispatch `SET_ITERATION_RESULTS`
-z pól `LayoutGenerateResponse`. Dodaj `state.weightW` do zależności obu
-useCallbacków.
+Analogicznie `regenerate` (/generate): request dostaje `iterations: 10,
+weights: state.unitWeights` + pola struktury w `apartments`; po odpowiedzi
+ten sam dispatch `SET_ITERATION_RESULTS`. `state.unitWeights` do zależności
+obu useCallbacków.
 
 - [ ] **Step 3: ProgramSection**
 
 - USUŃ label/input „liczba mieszkań" (blok z `value={state.totalUnits}`,
-  linia ~39) wraz z `setTotalUnits` z destrukturyzacji.
+  linia ~39) wraz z `setTotalUnits` z destrukturyzacji; dodaj
+  `setUnitWeight` do destrukturyzacji.
+- W każdym wierszu struktury (obok pól area_min/area_max) dodaj pole
+  „Min. styk z elewacją [m]" (screen Finch „Min facade length"):
+
+```tsx
+              <input
+                type="number"
+                step={0.5}
+                min={0}
+                value={row.min_facade_m}
+                onChange={(e) => updateProgramRow(row.id, { min_facade_m: Number(e.target.value) })}
+                title="Minimalny styk mieszkań tego typu ze ścianą zewnętrzną (komponent Daylight)"
+                className="w-14 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-1.5 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+              />
+```
 - W jego miejsce readonly:
 
 ```tsx
@@ -715,24 +896,36 @@ useCallbacków.
       </div>
 ```
 
-- Suwak wagi (pod wierszami struktury):
+- Sekcja 7 suwaków wag (pod wierszami struktury; etykiety PL ze specu §4):
 
 ```tsx
-      <label className="flex items-center justify-between text-xs text-zinc-400">
-        {/* spec §"Suwak": LEWO = trzymaj strukturę %, PRAWO = trzymaj
-            wielkości. Pozycja suwaka s mapuje się na weight_w = 1 - s,
-            bo w waży strukturę (score = w·struktura + (1-w)·wielkości). */}
-        <span>struktura ↔ wielkości (w={state.weightW.toFixed(2)})</span>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.05}
-          value={1 - state.weightW}
-          onChange={(e) => setWeightW(1 - Number(e.target.value))}
-          className="ml-2 w-24 accent-accent-500"
-        />
-      </label>
+      <div className="space-y-1.5 pt-1">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Wagi układu</div>
+        {(
+          [
+            ["size", "Wielkość m²"],
+            ["mix", "Struktura mieszkań"],
+            ["grid", "Siatka 0.5m"],
+            ["shape", "Prostokątność"],
+            ["daylight", "Dostęp do elewacji"],
+            ["squareness", "Proporcje boków"],
+            ["adjacency", "Dostęp do komunikacji"],
+          ] as [keyof api.UnitWeightsInput, string][]
+        ).map(([key, label]) => (
+          <label key={key} className="flex items-center justify-between text-xs text-zinc-400">
+            <span>{label} ({state.unitWeights[key].toFixed(2)})</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={state.unitWeights[key]}
+              onChange={(e) => setUnitWeight(key, Number(e.target.value))}
+              className="ml-2 w-24 accent-accent-500"
+            />
+          </label>
+        ))}
+      </div>
 ```
 
 - Lista iteracji (na końcu sekcji):
@@ -744,15 +937,12 @@ useCallbacków.
             Iteracje ({state.lastIterations.length})
           </div>
           {state.lastIterations.map((m) => {
-            const isBest = m.seed === (state.layoutResult?.best_seed ?? -1) ||
-              state.lastIterations.every((o) => m.score <= o.score);
+            const isBest = state.lastIterations.every((o) => m.score <= o.score);
             return (
               <div
                 key={m.seed}
                 className={`flex items-center justify-between rounded px-2 py-0.5 font-mono text-[11px] ${
-                  isBest
-                    ? "bg-accent-500/15 text-accent-400"
-                    : "text-zinc-500"
+                  isBest ? "bg-accent-500/15 text-accent-400" : "text-zinc-500"
                 }`}
               >
                 <span>#{m.seed}</span>
@@ -765,8 +955,6 @@ useCallbacków.
       )}
 ```
 
-(Wybór najlepszej: najniższy score — bez zależności od kanału odpowiedzi.)
-
 - [ ] **Step 4: Typecheck + commit**
 
 Run: `cd frontend && npx tsc --noEmit`
@@ -774,7 +962,7 @@ Expected: exit 0.
 
 ```bash
 git add frontend/app/lib/api.ts frontend/app/state/SessionContext.tsx frontend/app/components/ProgramSection.tsx
-git commit -m "feat: derived unit count display, weight slider, iteration list in Program panel"
+git commit -m "feat: derived unit count, 7 weight sliders, iteration list in Program panel"
 ```
 
 ---
@@ -791,16 +979,19 @@ git commit -m "feat: derived unit count display, weight slider, iteration list i
 
 - [ ] **Step 2: Scenariusz**
 
-1. Mały obrys (~12×10m) → komunikacja → podział: kilka mieszkań. Duży
-   (~40×15m): kilkanaście+. Liczba skaluje się z powierzchnią.
+1. Mały obrys (~12×10m) → kilka mieszkań; duży (~40×15m) → kilkanaście+.
 2. Pole „liczba mieszkań" zniknęło; readonly „≈ N mieszkań (M m² netto)".
 3. Po podziale lista 10 iteracji ze score; najlepsza podświetlona; canvas
    pokazuje najlepszą.
-4. Suwak 0 vs 1 → inne układy/score (przy tej samej geometrii).
-5. Zero dziur: mieszkania + komunikacja + ściany pokrywają cały obrys
-   (leftover null, brak nieprzydzielonych szarych pól).
+4. Skrajne wagi: `adjacency=1` reszta 0 vs `size=1` reszta 0 → inne
+   zwycięskie układy/score.
+4b. Podbij „Min. styk z elewacją" jednego typu do 8m przy `daylight=1` →
+   mieszkania tego typu lądują przy elewacji z długim stykiem / score
+   rośnie gdy się nie da.
+5. Zero dziur: mieszkania + komunikacja + ściany pokrywają cały obrys.
 6. Dwa uruchomienia z tymi samymi danymi → identyczne wyniki (determinizm).
-7. Ścieżka „Generuj układ" (/generate) daje te same nowe pola co dwustopniowa.
+7. Ścieżka „Generuj układ" (/generate) daje te same nowe pola co
+   dwustopniowa.
 8. Regresja: WT-walidacja, eksport, wall_bands.
 
 - [ ] **Step 3: Poprawki znalezisk** (commit per poprawka, `fix: ...`), raport dla usera.
