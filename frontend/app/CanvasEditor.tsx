@@ -9,15 +9,11 @@ import { useSession, Point2D } from "./state/SessionContext";
 import { deriveApartmentStatuses } from "./lib/deriveStatus";
 import { GeoJsonPolygon } from "./lib/api";
 import * as api from "./lib/api";
+import { snap } from "./lib/polygonEdit";
 const METER_PX = 50; // base scale: 1m = 50px
-const SNAP_M = 0.5; // snap do siatki co 0.5m (rysowanie, wierzchołki, linie podziału)
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
-}
-
-function snap(value: number): number {
-  return Math.round(value / SNAP_M) * SNAP_M;
 }
 
 function ringToPoints(geom: GeoJsonPolygon): Point2D[] {
