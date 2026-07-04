@@ -13,6 +13,7 @@ from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
 from services.bsp import Zone, rectangle_decompose
+from services.wall_geometry import NET_SHRINK_M
 
 CAGE_POSITION_MODES = ("1a", "1b", "2", "3", "auto")
 """plan.md §4.3: 1a=elewacja front, 1b=elewacja dziedziniec/tył, 2=środek traktu,
@@ -187,7 +188,7 @@ def _build_corridor(polygon: Polygon, width: float, cage_polygon: Polygon | None
     h = maxy - miny
 
     if w >= h:
-        half = width / 2.0
+        half = (width + 2 * NET_SHRINK_M) / 2.0
         if cage_polygon:
             cage_y = cage_polygon.centroid.y
             mid_y = max(miny + half, min(maxy - half, cage_y))
@@ -197,7 +198,7 @@ def _build_corridor(polygon: Polygon, width: float, cage_polygon: Polygon | None
             [(minx, mid_y - half), (maxx, mid_y - half), (maxx, mid_y + half), (minx, mid_y + half)]
         )
     else:
-        half = width / 2.0
+        half = (width + 2 * NET_SHRINK_M) / 2.0
         if cage_polygon:
             cage_x = cage_polygon.centroid.x
             mid_x = max(minx + half, min(maxx - half, cage_x))
@@ -223,10 +224,11 @@ def _corridor_centerline(
     minx, miny, maxx, maxy = bounds
     w = maxx - minx
     h = maxy - miny
-    half = width / 2.0
+    grown_width = width + 2 * NET_SHRINK_M
+    half = grown_width / 2.0
 
     if w >= h:
-        if width >= h:
+        if grown_width >= h:
             return None
         if cage_polygon:
             cage_y = cage_polygon.centroid.y
@@ -235,7 +237,7 @@ def _corridor_centerline(
             mid_y = (miny + maxy) / 2.0
         return ((minx, mid_y), (maxx, mid_y))
     else:
-        if width >= w:
+        if grown_width >= w:
             return None
         if cage_polygon:
             cage_x = cage_polygon.centroid.x
@@ -554,7 +556,7 @@ def reshape_circulation(
     jako bufor (cap_style="flat") wokół każdego edytowanego odcinka, zamiast
     ponownie dzielić footprint na strefy -- edytowana linia już nie jest
     przywiązana do rectangle_decompose()'s stref."""
-    half = corridor_width_m / 2.0
+    half = (corridor_width_m + 2 * NET_SHRINK_M) / 2.0
     buffered_parts = [
         LineString([p1, p2]).buffer(half, cap_style="flat")
         for p1, p2 in centerline_points

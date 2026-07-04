@@ -141,7 +141,9 @@ def test_corridor_centerline_aligns_to_cage():
     seg = _corridor_centerline(zone, width=1.5, cage_polygon=cage)
     assert seg is not None
     (_, y1), (_, y2) = seg
-    assert abs(y1 - 5.25) < 1e-6 and abs(y2 - 5.25) < 1e-6  # mid_y clamped to maxy(6) - half(0.75)
+    # mid_y clamped to maxy(6) - half, where half is now derived from the
+    # grown (clear + 2*NET_SHRINK_M) width: (1.5 + 0.2) / 2 = 0.85.
+    assert abs(y1 - 5.15) < 1e-6 and abs(y2 - 5.15) < 1e-6
 
 
 def test_corridor_centerline_none_when_too_narrow():
@@ -349,3 +351,59 @@ def test_place_circulation_num_cages_exceeds_available_zones_caps_silently():
     )
     # Only 2 zones exist in this footprint — no error, just 2 cages.
     assert len(result.cage_polygons) == 2
+
+
+def test_build_corridor_width_is_clear_not_axis():
+    from services.circulation import _build_corridor
+    from services.wall_geometry import NET_SHRINK_M, net_polygon
+
+    zone = Polygon([(0, 0), (20, 0), (20, 6), (0, 6)])
+    corridor = _build_corridor(zone, width=1.5)
+    minx, miny, maxx, maxy = corridor.bounds
+    built_width = maxy - miny
+    assert abs(built_width - (1.5 + 2 * NET_SHRINK_M)) < 1e-6
+
+    # After wall subtraction (net_polygon shrinks 0.10m per side), the
+    # walkable width should be back to the requested 1.5m clear width.
+    net = net_polygon(corridor)
+    net_minx, net_miny, net_maxx, net_maxy = net.bounds
+    assert abs((net_maxy - net_miny) - 1.5) < 1e-6
+
+
+def test_corridor_centerline_axis_unaffected_by_clear_width_change():
+    from services.circulation import _corridor_centerline
+
+    zone = Polygon([(0, 0), (20, 0), (20, 6), (0, 6)])
+    seg = _corridor_centerline(zone, width=1.5)
+    assert seg is not None
+    (x1, y1), (x2, y2) = seg
+    # Centerline axis position is unaffected by the width -- only which
+    # widths are still "too wide to fit" changes (checked below).
+    assert abs(y1 - 3.0) < 1e-6
+    assert abs(y2 - 3.0) < 1e-6
+
+
+def test_corridor_centerline_none_when_clear_width_plus_walls_too_wide():
+    from services.circulation import _corridor_centerline
+
+    # Zone is 6m in the cross-axis; a corridor whose BUILT width (clear +
+    # 2*NET_SHRINK_M = 5.8 + 0.2 = 6.0) exactly consumes the whole zone
+    # depth must be rejected (existing `if width >= h: return None` guard
+    # must compare against the grown width, not the raw clear width).
+    zone = Polygon([(0, 0), (20, 0), (20, 6), (0, 6)])
+    seg = _corridor_centerline(zone, width=5.8)
+    assert seg is None
+
+
+def test_reshape_circulation_width_matches_build_corridor():
+    from services.circulation import reshape_circulation
+
+    footprint = Polygon([(0, 0), (20, 0), (20, 6), (0, 6)])
+    result = reshape_circulation(
+        footprint,
+        centerline_points=[((0, 3), (20, 3))],
+        corridor_width_m=1.5,
+        cage_polygons=[],
+    )
+    minx, miny, maxx, maxy = result.circulation_geometry.bounds
+    assert abs((maxy - miny) - (1.5 + 2 * 0.10)) < 1e-6
