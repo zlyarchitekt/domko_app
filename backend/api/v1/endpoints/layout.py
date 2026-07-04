@@ -311,11 +311,25 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
 class UnitsRequest(BaseModel):
     remainder: dict
     apartments: list[ApartmentProgram] = Field(default_factory=list)
+    footprint: list[list[float]] | None = None
+    """Opcjonalny -- bez niego endpoint dzieli remainder tak jak wcześniej,
+    ale nie może policzyć wall_bands (potrzebuje pełnego obrysu, nie tylko
+    pozostałej po komunikacji części). Podawany przez frontend od naprawy
+    braku wall_bands w przepływie Etap 1/2 (2026-07-04)."""
+    circulation_geometry: dict | None = None
+    """Geometria korytarza+klatki z /layout/circulation -- wliczana do
+    wall_cells tak samo jak layout.circulation_geometry w
+    layout_result_to_response(), żeby ściana między mieszkaniem a
+    korytarzem/klatką też się narysowała."""
 
 
 class UnitsResponse(BaseModel):
     apartments: list[ApartmentResult]
     leftover: dict | None = None
+    wall_bands: list[dict] = []
+    """Pasy ścian (zewn.+wewn.), GeoJSON -- patrz UnitsRequest.footprint.
+    Puste, gdy request nie podał footprint (nie da się policzyć bez pełnego
+    obrysu)."""
 
 
 @router.post("/units", response_model=UnitsResponse)
@@ -347,9 +361,47 @@ def subdivide_units_endpoint(request: UnitsRequest):
         for c in cells
     ]
 
+    wall_bands_out: list[dict] = []
+    if request.footprint is not None:
+        try:
+            footprint = _points_to_polygon(request.footprint)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        circulation_geometry = None
+        if request.circulation_geometry is not None:
+            try:
+                circulation_geometry = _shape(request.circulation_geometry)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid circulation_geometry: {exc}")
+
+        # Same pattern as layout_result_to_response() (shared with
+        # /layout/generate and the optimizer endpoints): wall_cells is every
+        # real cell that should get a net-shrunk footprint carved out of the
+        # wall envelope -- apartments plus circulation/cage geometry.
+        wall_cells = [c.polygon for c in cells]
+        if circulation_geometry is not None:
+            wall_cells.append(circulation_geometry)
+
+        wall_geoms = [exterior_wall_band(footprint)]
+        if wall_cells:
+            interior_bands = interior_wall_bands(footprint, wall_cells)
+            if leftover is not None and not leftover.is_empty:
+                # Subtract the RAW leftover polygon here too -- not
+                # net_polygon(leftover) -- exactly the fix from Wall Task 4
+                # (commit 10341e3, "revert leftover exclusion to subtract raw
+                # polygon, not net-shrunk, avoids thin-sliver regression").
+                # leftover is subdivide_units()'s own un-programmed slice,
+                # constructed disjoint from every real cell, so raw
+                # subtraction can never erase a genuine inter-cell wall.
+                interior_bands = interior_bands.difference(leftover)
+            wall_geoms.append(interior_bands)
+        wall_bands_out = [g for geom in wall_geoms for g in _decompose_to_polygons(geom)]
+
     return UnitsResponse(
         apartments=apartments_out,
         leftover=json.loads(json.dumps(leftover.__geo_interface__)) if leftover else None,
+        wall_bands=wall_bands_out,
     )
 
 

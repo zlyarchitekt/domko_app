@@ -544,7 +544,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         min_area_m2: row.min_area_m2,
         target_count: row.target_count,
       }));
-      const unitsRes = await api.subdivideUnits(state.circulationResult.remainder, unitsReq);
+      const unitsRes = await api.subdivideUnits(
+        state.circulationResult.remainder,
+        unitsReq,
+        state.footprint ? footprintToPoints(state.footprint) : undefined,
+        state.circulationResult.circulation_geometry
+      );
       const layoutResult: api.LayoutGenerateResponse = {
         footprint_area_m2: state.footprint ? polygonAreaFromPoints(state.footprint) : 0,
         circulation_area_m2: 0,
@@ -557,7 +562,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           ? [state.circulationResult.circulation_geometry]
           : [],
         cage_geometries: state.circulationResult.cage_geometries,
-        wall_bands: [],
+        wall_bands: unitsRes.wall_bands,
       };
       dispatch({ type: "SET_LAYOUT_RESULT", result: layoutResult });
       dispatch({ type: "SET_ERROR", error: null });

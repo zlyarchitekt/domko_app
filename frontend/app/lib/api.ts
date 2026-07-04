@@ -224,13 +224,25 @@ export function reshapeCirculation(req: ReshapeCirculationRequest): Promise<Resh
 export interface UnitsResponse {
   apartments: ApartmentResult[];
   leftover: GeoJsonPolygon | null;
+  wall_bands: GeoJsonPolygon[];
 }
 
 export function subdivideUnits(
   remainder: GeoJsonPolygon,
-  apartments: ApartmentProgramInput[]
+  apartments: ApartmentProgramInput[],
+  footprint?: Point[],
+  circulationGeometry?: GeoJsonPolygon | null
 ): Promise<UnitsResponse> {
-  return postJson("/layout/units", { remainder, apartments });
+  // footprint/circulation_geometry are optional on the backend (older calls
+  // still work without them) but required for it to compute wall_bands --
+  // without them the response's wall_bands comes back empty, same as before
+  // this fix (2026-07-04 wall-bands-units-fix).
+  return postJson("/layout/units", {
+    remainder,
+    apartments,
+    footprint,
+    circulation_geometry: circulationGeometry,
+  });
 }
 
 export interface SplitResponse {
