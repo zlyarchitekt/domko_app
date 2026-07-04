@@ -120,6 +120,7 @@ type Action =
   | { type: "CLEAR_DRAWING" }
   | { type: "SET_FOOTPRINT"; footprint: Point2D[] }
   | { type: "UPDATE_VERTEX"; index: number; point: Point2D }
+  | { type: "SET_FOOTPRINT_POINTS"; points: Point2D[] }
   | { type: "SET_PROGRAM"; program: ProgramRow[] }
   | { type: "ADD_PROGRAM_ROW" }
   | { type: "UPDATE_PROGRAM_ROW"; id: string; patch: Partial<ProgramRow> }
@@ -189,6 +190,16 @@ function reducer(state: SessionState, action: Action): SessionState {
       // results with no error, which looks like "re-analysis doesn't work".
       return { ...state, footprint: next, layoutResult: null, validation: null, circulationResult: null };
     }
+    case "SET_FOOTPRINT_POINTS":
+      // Jak UPDATE_VERTEX wyżej: wyniki pochodne liczone ze starego obrysu
+      // (layout, walidacja, komunikacja) są po tej podmianie nieaktualne.
+      return {
+        ...state,
+        footprint: action.points,
+        layoutResult: null,
+        validation: null,
+        circulationResult: null,
+      };
     case "SET_PROGRAM":
       return { ...state, program: recomputeDerivedProgram(action.program, state.totalUnits) };
     case "ADD_PROGRAM_ROW":
@@ -336,6 +347,7 @@ interface SessionContextValue {
   finishDrawing: () => Promise<void>;
   setFootprintFromDxf: (file: File) => Promise<void>;
   updateVertex: (index: number, point: Point2D) => void;
+  setFootprintPoints: (points: Point2D[]) => void;
   updateProgramRow: (id: string, patch: Partial<ProgramRow>) => void;
   addProgramRow: () => void;
   removeProgramRow: (id: string) => void;
@@ -437,6 +449,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   const updateVertex = useCallback(
     (index: number, point: Point2D) => dispatch({ type: "UPDATE_VERTEX", index, point }),
+    []
+  );
+  const setFootprintPoints = useCallback(
+    (points: Point2D[]) => dispatch({ type: "SET_FOOTPRINT_POINTS", points }),
     []
   );
   const updateProgramRow = useCallback(
@@ -742,6 +758,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       finishDrawing,
       setFootprintFromDxf,
       updateVertex,
+      setFootprintPoints,
       updateProgramRow,
       addProgramRow,
       removeProgramRow,
@@ -772,6 +789,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       finishDrawing,
       setFootprintFromDxf,
       updateVertex,
+      setFootprintPoints,
       updateProgramRow,
       addProgramRow,
       removeProgramRow,
