@@ -11,16 +11,26 @@ import SolarSection from "./SolarSection";
 import OptimizerSection from "./OptimizerSection";
 import { ExportSection } from "./ExportSection";
 
-const TABS = [
+/** Etap 0 (spec 2026-07-04 footprint-editing-ux §1): analiza słońca i
+ *  optymalizator wyłączone z UI do czasu ukończenia etapów 1–4.
+ *  Backend (solar.py, optimizer.py) zostaje nietknięty — przywrócenie to
+ *  zmiana tej jednej flagi. */
+const SHOW_SOLAR_OPTIMIZER = false;
+
+const ALL_TABS = [
   { key: "layout", label: "Układ", icon: LayoutGrid },
   { key: "solar", label: "Słońce", icon: Sun },
   { key: "optimizer", label: "Optymalizacja", icon: Sparkles },
   { key: "export", label: "Eksport", icon: Download },
 ] as const;
 
+const TABS = ALL_TABS.filter(
+  ({ key }) => SHOW_SOLAR_OPTIMIZER || (key !== "solar" && key !== "optimizer")
+);
+
 export default function Sidebar() {
   const { state, regenerate, toggleTheme } = useSession();
-  const [activeTab, setActiveTab] = useState<(typeof TABS)[number]["key"]>("layout");
+  const [activeTab, setActiveTab] = useState<(typeof ALL_TABS)[number]["key"]>("layout");
 
   return (
     <div className="h-full shrink-0 p-3">
@@ -65,8 +75,8 @@ export default function Sidebar() {
               <FootprintSection />
               <ProgramSection />
               <CirculationSection />
-              <SolarSection />
-              <OptimizerSection />
+              {SHOW_SOLAR_OPTIMIZER && <SolarSection />}
+              {SHOW_SOLAR_OPTIMIZER && <OptimizerSection />}
 
               <button
                 onClick={() => void regenerate()}
