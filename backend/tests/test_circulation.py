@@ -297,3 +297,55 @@ def test_place_circulation_no_cage_gives_inf_distance_not_crash():
     )
     assert len(result.centerline) >= 1
     assert all(seg.exceeds_max is False for seg in result.centerline)  # inf never "exceeds" a real building
+
+
+def test_place_circulation_num_cages_two_zones_gets_two_cages():
+    from services.circulation import place_circulation
+
+    # L-shape: rectangle_decompose gives exactly 2 zones (20x10 and 10x10),
+    # both large enough for the 4.2x5.7m cage.
+    l_shape = Polygon([(0, 0), (20, 0), (20, 10), (10, 10), (10, 20), (0, 20)])
+    result = place_circulation(
+        l_shape,
+        corridor_width_m=1.5,
+        stair_width_m=1.2,
+        place_cage=True,
+        cage_size_m=2.5,
+        cage_position="auto",
+        num_cages=2,
+    )
+    assert len(result.cage_polygons) == 2
+    # No overlap between the two cages.
+    assert result.cage_polygons[0].intersection(result.cage_polygons[1]).area < 1e-9
+
+
+def test_place_circulation_num_cages_defaults_to_one():
+    from services.circulation import place_circulation
+
+    footprint = Polygon([(0, 0), (30, 0), (30, 6), (0, 6)])
+    result = place_circulation(
+        footprint,
+        corridor_width_m=1.5,
+        stair_width_m=1.2,
+        place_cage=True,
+        cage_size_m=2.5,
+        cage_position="auto",
+    )
+    assert len(result.cage_polygons) == 1
+
+
+def test_place_circulation_num_cages_exceeds_available_zones_caps_silently():
+    from services.circulation import place_circulation
+
+    l_shape = Polygon([(0, 0), (20, 0), (20, 10), (10, 10), (10, 20), (0, 20)])
+    result = place_circulation(
+        l_shape,
+        corridor_width_m=1.5,
+        stair_width_m=1.2,
+        place_cage=True,
+        cage_size_m=2.5,
+        cage_position="auto",
+        num_cages=5,
+    )
+    # Only 2 zones exist in this footprint — no error, just 2 cages.
+    assert len(result.cage_polygons) == 2

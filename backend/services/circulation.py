@@ -429,12 +429,18 @@ def place_circulation(
     place_cage: bool,
     cage_size_m: float,
     cage_position: str,
+    num_cages: int = 1,
 ) -> CirculationResult:
     """Etap 1: dzieli obrys na prawie-prostokątne strefy (rectangle_decompose),
     umieszcza klatkę i korytarz w każdej, zwraca zunifikowany wynik.
 
     `cage_size_m` jest przyjmowany dla zgodności API, ale geometria klatki
-    używa stałych CAGE_WIDTH_M x CAGE_DEPTH_M (spec 2026-07-03 §6)."""
+    używa stałych CAGE_WIDTH_M x CAGE_DEPTH_M (spec 2026-07-03 §6).
+
+    `num_cages`: maksymalna liczba klatek do umieszczenia, jedna na strefę
+    (spec 2026-07-04-cage-corridor-placement-quality §3). Jeśli stref
+    zdolnych pomieścić klatkę jest mniej niż `num_cages`, umieszczonych
+    zostaje tyle, ile się zmieści -- bez błędu (cichy cap, spec §3.1)."""
     zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
 
     # rectangle_decompose() rozwiązuje każdy wklęsły wierzchołek OBRYSU na
@@ -468,6 +474,8 @@ def place_circulation(
 
     if place_cage:
         for i in cage_zone_order:
+            if len(cage_polygons) >= num_cages:
+                break
             zone = zones[i]
             if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
                 continue
@@ -481,7 +489,6 @@ def place_circulation(
                 circulation_geom = unary_union([circulation_geom, cage_polygon])
                 cage_polygons.append(cage_polygon)
                 local_cages[i] = cage_polygon
-                break
 
     remainder_parts: list[Polygon] = []
 
