@@ -1,7 +1,8 @@
 """Aggregate validation of a full apartment layout against WT thresholds.
 
 Combines three independently-testable layers into one 0-100 score + error list:
-- apartment-level checks (area §94 ust.1, room width §94 ust.2) — this module
+- apartment-level checks (area §94 ust.1 -- real WT; room width -- design
+  heuristic, not WT, see wt_validation.py's MIN_ROOM_WIDTH_M) — this module
 - geometric building-code rules (§64, §68, §58) — services/wt_validation.py
 - communication/adjacency checks (contact length, cage reach, cage spacing) —
   services/wt_validation.py's validate_communication()
@@ -20,7 +21,7 @@ from services.wt_validation import (
     validate_layout_wt,
 )
 
-MIN_ROOM_WIDTH_M = 2.4  # WT §94 ust. 2
+MIN_ROOM_WIDTH_M = 2.4  # Zalecana szerokość, NIE wymóg WT (patrz wt_validation.py)
 
 MIN_FACADE_FRONTAGE_M = 3.6
 """Finch §B.2 (adaptowane, nie polskie WT) — min. długość elewacji frontowej
@@ -71,7 +72,8 @@ def _apartment_aspect_ratio(apt: ApartmentCell) -> float:
 def validate_apartment(
     apt: ApartmentCell, min_area_m2: float | None
 ) -> ApartmentValidationResult:
-    """Validate a single apartment cell against area (§94 ust. 1) and width (§94 ust. 2)."""
+    """Validate a single apartment cell against area (§94 ust. 1, real WT)
+    and width (design heuristic, not WT -- see MIN_ROOM_WIDTH_M above)."""
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -90,7 +92,7 @@ def validate_apartment(
 
     if width < MIN_ROOM_WIDTH_M:
         errors.append(
-            f"{apt.id}: szerokość {width:.2f} m < {MIN_ROOM_WIDTH_M} m (WT §94 ust. 2)."
+            f"{apt.id}: szerokość {width:.2f} m < {MIN_ROOM_WIDTH_M} m (zalecana min. szerokość, nie WT)."
         )
 
     if width < MIN_FACADE_FRONTAGE_M:

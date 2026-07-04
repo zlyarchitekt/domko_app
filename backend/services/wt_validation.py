@@ -28,7 +28,10 @@ from services.layout import ApartmentCell, LayoutResult
 
 # Wartości graniczne z WT (patrz plan.md §4.6)
 MIN_APARTMENT_AREA_M2 = 25.0  # §94 ust. 1 — kawalerka / bezwzględne minimum
-MIN_ROOM_WIDTH_M = 2.4  # §94 ust. 2
+MIN_ROOM_WIDTH_M = 2.4
+"""Zalecana min. szerokość pokoju -- NIE jest to wymóg WT (prawdziwy §94
+reguluje wyłącznie min. powierzchnię mieszkania, ust.1). Własna wiedza
+projektowa, poprawka 2026-07-04 (wcześniej błędnie oznaczone "§94 ust.2")."""
 MIN_CORRIDOR_WIDTH_M = 1.4  # §64 (przy drzwiach; 1.2m w prześwitach — nie modelowane osobno)
 MIN_STAIR_WIDTH_M = 1.2  # §68 ust. 1 — bieg schodowy / szerokość klatki w tym uproszczonym modelu
 
@@ -128,7 +131,11 @@ def _apartment_min_width(apt: ApartmentCell) -> float:
 
 
 def _rule_room_width(layout: LayoutResult) -> WTRule:
-    """§94 ust. 2 — min. szerokość pokoju (przybliżana mniejszym wymiarem bbox komórki)."""
+    """Heurystyka (NIE WT): min. szerokość pokoju. §94 reguluje WYŁĄCZNIE
+    minimalną powierzchnię mieszkania (ust.1, 25m2) -- nie ma żadnego
+    "ust.2" o szerokości pokoju. Wartość MIN_ROOM_WIDTH_M to własna wiedza
+    projektowa, nie przepis (poprawka 2026-07-04, spec wall-thickness §9,
+    ten sam wzorzec co MIN_CAGE_FACADE_CONTACT_M)."""
     failing = [
         f"{apt.id}: {_apartment_min_width(apt):.2f} m < {MIN_ROOM_WIDTH_M} m"
         for apt in layout.apartments
@@ -136,11 +143,11 @@ def _rule_room_width(layout: LayoutResult) -> WTRule:
     ]
     passed = not failing
     detail = (
-        "Wszystkie mieszkania spełniają minimum §94 ust. 2 (2.4 m)."
+        f"Wszystkie mieszkania spełniają zalecaną min. szerokość pokoju ({MIN_ROOM_WIDTH_M} m, heurystyka nie-WT)."
         if passed
-        else "Mieszkania poniżej minimum §94 ust. 2: " + "; ".join(failing)
+        else "Mieszkania poniżej zalecanej szerokości pokoju (heurystyka nie-WT): " + "; ".join(failing)
     )
-    return WTRule(code="§94 ust.2", description="Min. szerokość pokoju", passed=passed, detail=detail)
+    return WTRule(code="heurystyka", description="Min. szerokość pokoju", passed=passed, detail=detail)
 
 
 def _rule_corridor_width(layout: LayoutResult) -> WTRule:

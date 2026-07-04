@@ -47,14 +47,15 @@ def test_validate_full_layout_returns_wt_rules_and_communication():
     data = response.json()
     assert isinstance(data["score"], int)
     assert 0 <= data["score"] <= 100
-    # 7 rules: the 6 original codes below + a 2nd "heurystyka" rule
-    # (optional cage-facade-contact daylighting check, off by default) —
-    # same code as circulation_utilization's existing "heurystyka" rule,
-    # so the CODE set stays 6 unique values even though the rule COUNT is 7.
+    # 7 rules: the 5 unique codes below (heurystyka now shared by 3 rules --
+    # circulation_utilization, cage_facade_contact, and room_width, since
+    # none of them are real WT paragraphs -- spec 2026-07-04 wall-thickness
+    # §9) + the extra cage-facade-contact rule, same "heurystyka" code as
+    # circulation_utilization's, so the CODE set stays 5 unique values even
+    # though the rule COUNT is 7.
     assert len(data["wt_rules"]) == 7
     assert {r["code"] for r in data["wt_rules"]} == {
         "§94 ust.1",
-        "§94 ust.2",
         "§64",
         "§68 ust.1",
         "§58 ust.4",

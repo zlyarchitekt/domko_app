@@ -58,7 +58,10 @@ def test_all_rules_present_and_scored():
     layout = _layout(SQUARE_20, corridor_width_m=2.0, cage_size_m=3.0, place_cage=True)
     result = validate_layout_wt(layout)
     codes = {r.code for r in result.rules}
-    assert codes == {"§94 ust.1", "§94 ust.2", "§64", "§68 ust.1", "§58 ust.4", "heurystyka"}
+    # §94 ust.2 (room width) is not a real WT paragraph -- only §94 ust.1
+    # (min. apartment area) exists; room width is now code="heurystyka"
+    # like the other non-statutory checks (spec 2026-07-04 wall-thickness §9).
+    assert codes == {"§94 ust.1", "§64", "§68 ust.1", "§58 ust.4", "heurystyka"}
     assert 0 <= result.score <= 100
     assert result.passed == all(r.passed for r in result.rules)
 
@@ -137,7 +140,7 @@ def test_room_width_rule_fails_for_narrow_apartment():
     layout = _layout(SQUARE_20, apartments=[])
     layout.apartments.append(narrow_apt)
     result = validate_layout_wt(layout)
-    width_rule = next(r for r in result.rules if r.code == "§94 ust.2")
+    width_rule = next(r for r in result.rules if r.description == "Min. szerokość pokoju")
     assert width_rule.passed is False
     assert f"< {MIN_ROOM_WIDTH_M}" in width_rule.detail
 
