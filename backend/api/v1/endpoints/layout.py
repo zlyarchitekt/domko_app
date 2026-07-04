@@ -9,6 +9,7 @@ from shapely.geometry import shape as _shape
 from services.circulation import CAGE_POSITION_MODES, place_circulation
 from services.layout import ApartmentSpec, LayoutInput, LayoutResult, generate_layout
 from services.unit_mix import subdivide_units
+from services.wall_geometry import exterior_wall_band, interior_wall_bands
 from services.wt_validation import WTValidationResult, validate_layout_wt
 
 router = APIRouter()
@@ -44,6 +45,8 @@ class ApartmentResult(BaseModel):
     id: str
     type: str
     area_m2: float
+    net_area_m2: float = 0.0
+    """Powierzchnia w świetle ścian -- spec 2026-07-04 wall-thickness §5.2."""
     geometry: dict
 
 
@@ -75,6 +78,9 @@ class LayoutGenerateResponse(BaseModel):
     for frontend rendering (F2-07)."""
     cage_geometries: list[dict] = []
     """Individual staircase cage polygons (may be empty), for frontend rendering (F2-07)."""
+    wall_bands: list[dict] = []
+    """Pasy ścian (zewnętrzne + wewnętrzne), GeoJSON, do narysowania na
+    płótnie -- spec 2026-07-04 wall-thickness §5.2."""
 
 
 @router.post("/generate", response_model=LayoutGenerateResponse)
@@ -136,10 +142,19 @@ def layout_result_to_response(layout: LayoutResult, wt: WTValidationResult) -> L
             id=a.id,
             type=a.type,
             area_m2=a.polygon.area,
+            net_area_m2=a.net_area_m2,
             geometry=json.loads(json.dumps(a.polygon.__geo_interface__)),
         )
         for a in layout.apartments
     ]
+
+    wall_cells = [a.polygon for a in layout.apartments]
+    if layout.circulation_geometry is not None:
+        wall_cells.append(layout.circulation_geometry)
+    wall_geoms = [exterior_wall_band(layout.footprint)]
+    if wall_cells:
+        wall_geoms.append(interior_wall_bands(layout.footprint, wall_cells))
+    wall_bands_out = [g for geom in wall_geoms for g in _decompose_to_polygons(geom)]
 
     return LayoutGenerateResponse(
         footprint_area_m2=layout.footprint_area_m2,
@@ -162,6 +177,7 @@ def layout_result_to_response(layout: LayoutResult, wt: WTValidationResult) -> L
         ],
         circulation_parts=_decompose_to_polygons(layout.circulation_geometry),
         cage_geometries=[json.loads(json.dumps(c.__geo_interface__)) for c in layout.cage_polygons],
+        wall_bands=wall_bands_out,
     )
 
 

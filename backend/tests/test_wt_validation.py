@@ -299,6 +299,32 @@ def test_layout_generate_endpoint_exposes_wt_rules():
     assert len(data["wt_validation"]["rules"]) >= 5
 
 
+def test_layout_generate_endpoint_exposes_net_area_and_wall_bands():
+    from fastapi.testclient import TestClient
+
+    from main import app
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/layout/generate",
+        json={
+            "footprint": [[0, 0], [20, 0], [20, 20], [0, 20]],
+            "circulation": {"corridor_width_m": 1.5, "cage_size_m": 3.0, "place_cage": True},
+            "apartments": [
+                {"type": "M2", "min_area_m2": 40.0, "target_count": 4},
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert len(data["apartments"]) >= 1
+    for apt in data["apartments"]:
+        assert "net_area_m2" in apt
+        assert apt["net_area_m2"] < apt["area_m2"]
+    assert "wall_bands" in data
+    assert len(data["wall_bands"]) >= 1
+
+
 def test_default_max_corridor_distance_is_20m():
     """Regression for the 2026-07-03 domain correction: WT §58 ust.4
     single-loaded threshold is 20m, not 30m (see
