@@ -72,6 +72,7 @@ const initialCirculation: api.CirculationSpecInput = {
   place_cage: true,
   cage_size_m: 2.5,
   cage_position: "auto",
+  num_cages: 1,
 };
 
 const INITIAL_TOTAL_UNITS = 10;

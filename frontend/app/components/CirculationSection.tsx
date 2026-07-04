@@ -84,6 +84,19 @@ export default function CirculationSection() {
         </select>
       </label>
 
+      <label className="flex items-center justify-between text-xs text-zinc-400">
+        Liczba klatek: {state.circulation.num_cages}
+        <input
+          type="range"
+          min={1}
+          max={8}
+          step={1}
+          value={state.circulation.num_cages}
+          onChange={(e) => setCirculation({ num_cages: Number(e.target.value) })}
+          className="ml-2 w-24 accent-accent-500"
+        />
+      </label>
+
       <label className="flex items-center gap-2 text-xs text-zinc-400">
         <input
           type="checkbox"
@@ -111,7 +124,7 @@ export default function CirculationSection() {
       </label>
 
       <label className="flex items-center justify-between text-xs text-zinc-400">
-        Szerokość korytarza (m)
+        Szerokość korytarza (w świetle, m)
         <input
           type="number"
           step={0.1}

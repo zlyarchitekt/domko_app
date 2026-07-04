@@ -127,6 +127,7 @@ export interface CirculationSpecInput {
   place_cage: boolean;
   cage_size_m: number;
   cage_position: CagePosition;
+  num_cages: number;
 }
 
 export interface LayoutGenerateRequest {
