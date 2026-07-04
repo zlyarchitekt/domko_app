@@ -95,6 +95,26 @@ po `runReshapeCirculation`.
 Brak nowego przycisku/trybu — działa w istniejącym trybie
 `edit-corridor-centerline`.
 
+### 4.1 Usuwanie punktów
+
+`onDblClick` na istniejącym wierzchołku (`<Circle>`, CanvasEditor.tsx:750-796
+— dziś ma tylko `onDragStart`/`onDragMove`/`onDragEnd`) usuwa go z płaskiej
+listy wierzchołków (`flat_path`, ten sam spłaszczony ciąg co budowany w
+`reshape_circulation()`, circulation.py:566-568) i przebudowuje segmenty z
+sąsiadujących punktów, po czym woła `runReshapeCirculation()` jak przy
+dodawaniu/przeciąganiu.
+
+**Guard: nie usuwać, gdy `flat_path.length <= 2`** — dwa punkty to jeden
+segment, minimalna oś korytarza; usunięcie jednego zostawiłoby zerodługościowy
+"korytarz" albo pojedynczy punkt bez geometrii. Przy `length === 2` dwuklik na
+wierzchołku jest no-opem (żadnego wywołania `runReshapeCirculation`).
+
+Konflikt zdarzeń: `<Circle>` już ma `onDragStart`/`onDragEnd` z
+`e.cancelBubble = true` — `onDblClick` to osobny handler Konva, nie
+koliduje z drag (dwuklik bez przeciągnięcia nie odpala `onDragMove`/
+`onDragEnd`), więc nie wymaga dodatkowej logiki różnicującej "klik" od
+"przeciągnięcie".
+
 ## 5. Korytarz w świetle (nie oś-do-osi)
 
 Analogiczne do Wall Task 3 (`CAGE_WIDTH_M`/`CAGE_DEPTH_M` +20cm). Zmiana w
@@ -137,7 +157,9 @@ patrz wall-thickness spec §5) — nie wymaga dalszej akcji.
   geometrii bufora) — regresja na wypadek błędu w logice `half`.
 - Playwright: dodać klatkę suwakiem →2, umieścić, potwierdzić wizualnie 2
   klatki; dwuklik na linii korytarza w trybie edycji, potwierdzić nowy
-  przeciągalny wierzchołek.
+  przeciągalny wierzchołek; dwuklik na tym nowym wierzchołku, potwierdzić że
+  zniknął; dwuklik na jednym z pozostałych 2 wierzchołków (oś z powrotem przy
+  minimum), potwierdzić że NIC się nie usuwa (guard §4.1).
 
 ## 7. Świadomie poza zakresem
 
