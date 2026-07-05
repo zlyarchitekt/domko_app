@@ -380,7 +380,7 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
 
     cage_iteration_metas: list = []
     cage_best_seed = 0
-    if circulation.cage_iterations > 0:
+    if circulation.cage_iterations > 0 and circulation.place_cage:
         from services.cage_placement import CageWeights, iterate_cage_placement
         from services.circulation import _merge_manual_elements
 

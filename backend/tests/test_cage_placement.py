@@ -148,3 +148,29 @@ def test_circulation_endpoint_iterative_mode():
     assert len(body["cage_iterations"]) >= 1
     assert body["cage_best_seed"] in [m["seed"] for m in body["cage_iterations"]]
     assert body["cage_geometries"]
+
+
+def test_generate_endpoint_iterative_mode():
+    from fastapi.testclient import TestClient
+    from main import app
+
+    client = TestClient(app)
+    payload = {
+        "footprint": [[0, 0], [40, 0], [40, 12], [0, 12]],
+        "circulation": {
+            "corridor_width_m": 1.5, "stair_width_m": 1.2, "place_cage": True,
+            "cage_size_m": 2.5, "cage_position": "auto", "num_cages": 3,
+            "cage_iterations": 10,
+            "cage_weights": {"egress": 1.0, "count": 0.5, "corners": 0.3,
+                             "ends": 0.3, "spread": 0.5},
+        },
+        "apartments": [
+            {"type": "1-room", "min_area_m2": 25, "target_count": 4, "width_m": 4, "depth_m": 7}
+        ],
+    }
+    res = client.post("/api/v1/layout/generate", json=payload)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert len(body["cage_iterations"]) >= 1
+    assert body["cage_best_seed"] in [m["seed"] for m in body["cage_iterations"]]
+    assert body["cage_geometries"]
