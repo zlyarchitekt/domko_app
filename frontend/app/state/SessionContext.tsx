@@ -357,6 +357,7 @@ function reducer(state: SessionState, action: Action): SessionState {
           circulation_geometry: action.result.circulation_geometry,
           remainder: action.result.remainder,
           centerline: action.result.centerline,
+          evacuation_dots: action.result.evacuation_dots,
         },
       };
     }

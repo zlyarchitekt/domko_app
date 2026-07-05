@@ -931,7 +931,7 @@ export default function CanvasEditor() {
             <Line
               key={`centerline-${i}`}
               points={toCanvasPoints(seg.points.map(([x, y]) => ({ x, y })))}
-              stroke={seg.exceeds_max ? "#ef4444" : "#22c55e"}
+              stroke="#60a5fa"
               strokeWidth={3 / scale}
               listening={state.mode === "edit-corridor-centerline"}
               onDblClick={(e) => {
@@ -1030,6 +1030,27 @@ export default function CanvasEditor() {
                 />
               ));
             })()}
+
+          {/* Kropki ewakuacyjne co 1m (spec 2026-07-04-evacuation-dots §4).
+              Zawsze widoczne gdy są w wyniku -- informacja projektowa, nie
+              narzędzie edycji; listening=false, żeby nie łapały myszy. */}
+          {(() => {
+            const dots =
+              state.circulationResult?.evacuation_dots ??
+              state.layoutResult?.evacuation_dots ??
+              [];
+            const fill = { green: "#22c55e", gray: "#9ca3af", red: "#ef4444" } as const;
+            return dots.map((d, i) => (
+              <Circle
+                key={`evac-dot-${i}`}
+                x={d.x * METER_PX}
+                y={-d.y * METER_PX}
+                radius={3 / scale}
+                fill={fill[d.status]}
+                listening={false}
+              />
+            ));
+          })()}
 
           {/* Przesuwanie korytarza/klatki jako sztywnej bryły (edit-circulation) */}
           {state.mode === "edit-circulation" && state.circulationResult && (

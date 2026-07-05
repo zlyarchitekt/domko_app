@@ -172,6 +172,7 @@ export interface LayoutGenerateResponse {
   circulation_parts: GeoJsonPolygon[];
   cage_geometries: GeoJsonPolygon[];
   wall_bands: GeoJsonPolygon[];
+  evacuation_dots?: EvacuationDot[];
 }
 
 export function generateLayout(req: LayoutGenerateRequest): Promise<LayoutGenerateResponse> {
@@ -192,12 +193,20 @@ export interface CorridorCenterlineSegment {
   exceeds_max: boolean;
 }
 
+export interface EvacuationDot {
+  x: number;
+  y: number;
+  status: "green" | "gray" | "red";
+  distance_m: number | null;
+}
+
 export interface CirculationResponse {
   circulation_geometry: GeoJsonPolygon | null;
   cage_geometries: GeoJsonPolygon[];
   remainder: GeoJsonPolygon; // może być Polygon lub MultiPolygon (patrz backend CirculationResult.remainder)
   centerline: CorridorCenterlineSegment[];
   warnings?: string[];
+  evacuation_dots?: EvacuationDot[];
 }
 
 export function placeCirculation(
@@ -218,6 +227,7 @@ export interface ReshapeCirculationResponse {
   circulation_geometry: GeoJsonPolygon | null;
   remainder: GeoJsonPolygon;
   centerline: CorridorCenterlineSegment[];
+  evacuation_dots?: EvacuationDot[];
 }
 
 export function reshapeCirculation(req: ReshapeCirculationRequest): Promise<ReshapeCirculationResponse> {

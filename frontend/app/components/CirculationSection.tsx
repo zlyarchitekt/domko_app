@@ -259,6 +259,23 @@ export default function CirculationSection() {
           ))}
         </div>
       )}
+
+      {(() => {
+        const dots = state.circulationResult?.evacuation_dots ?? [];
+        if (dots.length === 0) return null;
+        const reds = dots.filter((d) => d.status === "red").length;
+        return (
+          <div
+            className={`rounded-lg px-2 py-1.5 text-[11px] ${
+              reds > 0
+                ? "border border-red-500/20 bg-red-500/10 text-red-300 light:text-red-700"
+                : "border border-emerald-500/20 bg-emerald-500/10 text-emerald-300 light:text-emerald-700"
+            }`}
+          >
+            {reds > 0 ? `Dojścia: ${reds} pkt poza limitem (20/40m)` : "Dojścia: OK (limity 20/40m)"}
+          </div>
+        );
+      })()}
     </section>
   );
 }
