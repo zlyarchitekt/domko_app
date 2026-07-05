@@ -1,12 +1,14 @@
 """Testy iteracyjnego podziału na mieszkania (spec 2026-07-04-apartment-
 division-iterations §7, scoring 7-wagowy z §4)."""
 
+import pytest
 from shapely.geometry import Polygon
 
 from services.layout import ApartmentCell
 from services.unit_mix import (
     ProgramShare,
     UnitWeights,
+    _merge_leftover_into_cells,
     _score_iteration,
     allocate_counts,
     derive_total_units,
@@ -117,3 +119,79 @@ def test_merged_disjoint_raises_adjacency():
     _, comp_bad = _score_iteration([disjoint], shares, w, None, circulation)
     assert comp_ok["adjacency"] == 0.0
     assert abs(comp_bad["adjacency"] - 0.5) < 1e-9  # styka się, ale kara za enklawę
+
+
+def test_merge_leftover_disjoint_into_nearest_cell():
+    """Leftover bez wspólnej krawędzi z żadną komórką -> merguje do
+    najbliższej komórki i ustawia merged_disjoint=True."""
+    cells = [
+        ApartmentCell(id="a", type="M2", polygon=_rect(0, 0, 5, 5)),
+        ApartmentCell(id="b", type="M2", polygon=_rect(30, 0, 35, 5)),
+    ]
+    leftover = _rect(6, 0, 8, 2)  # blisko komórki 'a', daleko od 'b'
+
+    cells_before_a = cells[0].polygon.area
+    cells_before_b = cells[1].polygon.area
+
+    _merge_leftover_into_cells(cells, leftover)
+
+    # Komórka 'a' jest bliżej
+    nearest_cell = cells[0]
+    other_cell = cells[1]
+
+    # Nearest powinno zawierać pełną powierzchnię (stara + leftover)
+    assert abs(nearest_cell.polygon.area - (cells_before_a + leftover.area)) < 1e-6
+    # Other powinno być bez zmian
+    assert abs(other_cell.polygon.area - cells_before_b) < 1e-6
+    # Merged disjoint powinno być True
+    assert nearest_cell.merged_disjoint is True
+    # Net area powinno być przebudowane
+    assert nearest_cell.net_area_m2 > 0
+
+
+def test_merge_leftover_shared_boundary_into_that_cell():
+    """Leftover ze wspólną krawędzią z jedną komórką -> merguje do tej
+    komórki (nie do najbliższej), merged_disjoint zostaje False."""
+    cells = [
+        ApartmentCell(id="a", type="M2", polygon=_rect(0, 0, 5, 5)),
+        ApartmentCell(id="b", type="M2", polygon=_rect(10, 0, 15, 5)),
+    ]
+    # Leftover przyległ do prawa od komórki 'b'
+    leftover = _rect(15, 1, 17, 4)
+
+    cells_before_a = cells[0].polygon.area
+    cells_before_b = cells[1].polygon.area
+
+    _merge_leftover_into_cells(cells, leftover)
+
+    cell_a = cells[0]
+    cell_b = cells[1]
+
+    # Komórka 'a' powinna być bez zmian (nie jest najbliższa tutaj)
+    assert abs(cell_a.polygon.area - cells_before_a) < 1e-6
+    # Komórka 'b' powinna zawierać leftover
+    assert abs(cell_b.polygon.area - (cells_before_b + leftover.area)) < 1e-6
+    # Merged disjoint powinno być False (była wspólna krawędź)
+    assert cell_b.merged_disjoint is False
+
+
+def test_derive_total_units_all_zero_shares_raises():
+    """derive_total_units z wszystkimi udziałami procentowymi = 0
+    powinien rzucić ValueError."""
+    zero_shares = [
+        ProgramShare(type="M1", percentage=0, area_min_m2=25, area_max_m2=32),
+        ProgramShare(type="M2", percentage=0, area_min_m2=38, area_max_m2=48),
+    ]
+    with pytest.raises(ValueError, match="wszystkie udziały procentowe są zerowe"):
+        derive_total_units(200.0, zero_shares)
+
+
+def test_allocate_counts_all_zero_shares_raises():
+    """allocate_counts z wszystkimi udziałami procentowymi = 0
+    powinien rzucić ValueError."""
+    zero_shares = [
+        ProgramShare(type="M1", percentage=0, area_min_m2=25, area_max_m2=32),
+        ProgramShare(type="M2", percentage=0, area_min_m2=38, area_max_m2=48),
+    ]
+    with pytest.raises(ValueError, match="wszystkie udziały procentowe są zerowe"):
+        allocate_counts(zero_shares, total_units=10)
