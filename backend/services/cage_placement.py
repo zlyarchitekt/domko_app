@@ -18,6 +18,7 @@ from services.circulation import (
     CirculationResult,
     Zone,
     _assemble_with_cages,
+    _build_corridor,
 )
 
 CANDIDATE_EDGE_STEP_M = 5.0
@@ -69,7 +70,7 @@ def _candidate_cages(footprint: Polygon, zones: list[Zone]) -> list[tuple[int, P
                 x0 = ax if ax + w <= maxx + 1e-6 else ax - w
                 y0 = ay if ay + d <= maxy + 1e-6 else ay - d
                 cage = box(x0, y0, x0 + w, y0 + d)
-                if fp.contains(cage):
+                if zone.polygon.buffer(1e-9).contains(cage) and fp.contains(cage):
                     candidates.append((zi, cage))
     # deduplikacja po zaokrąglonych bounds
     seen: set = set()
@@ -125,6 +126,22 @@ def _score_placement(
     return sum(active[key] * components[key] for key in active) / total_w, components
 
 
+def _cages_share_valid_corridor(
+    zone_polygon: Polygon, corridor_width_m: float, cages: list[Polygon]
+) -> bool:
+    """True gdy zadana lista klatek w jednej strefie może być obsłużona przez
+    JEDEN korytarz strefy (wyrównany do ich zunifikowanego centroidu) — tzn.
+    korytarz faktycznie styka się z KAŻDĄ z klatek, nie tylko z niektórymi."""
+    if len(cages) <= 1:
+        return True
+    cages_union = unary_union(cages)
+    zone_remaining = zone_polygon.difference(cages_union)
+    corridor = _build_corridor(zone_remaining, corridor_width_m, cages_union)
+    if corridor.is_empty or corridor.area <= 0:
+        return False
+    return all(corridor.distance(c) < 1e-6 for c in cages)
+
+
 def iterate_cage_placement(
     footprint: Polygon,
     corridor_width_m: float,
@@ -146,17 +163,27 @@ def iterate_cage_placement(
         k = rng.randint(1, max(1, num_cages))
         pool = list(candidates)
         rng.shuffle(pool)
-        # zachłannie bierz niekolidujące, max 1 klatka na strefę
-        # (_assemble_with_cages dostaje dict {indeks_strefy: klatka})
-        local_cages: dict[int, Polygon] = {}
+        # zachłannie bierz niekolidujące; wiele klatek na strefę dozwolone,
+        # o ile jeden korytarz strefy może obsłużyć wszystkie jej klatki
+        # (_cages_share_valid_corridor) -- (_assemble_with_cages dostaje dict
+        # {indeks_strefy: [klatki]})
+        local_cages: dict[int, list[Polygon]] = {}
+        placed_count = 0
         for zi, cage in pool:
-            if len(local_cages) >= k:
+            if placed_count >= k:
                 break
-            if zi in local_cages:
+            existing_all = [c for cages in local_cages.values() for c in cages]
+            if any(cage.intersects(existing) for existing in existing_all):
                 continue
-            if any(cage.intersects(existing) for existing in local_cages.values()):
-                continue
-            local_cages[zi] = cage
+            zone_existing = local_cages.get(zi)
+            if zone_existing:
+                candidate_list = zone_existing + [cage]
+                if not _cages_share_valid_corridor(zones[zi].polygon, corridor_width_m, candidate_list):
+                    continue
+                local_cages[zi] = candidate_list
+            else:
+                local_cages[zi] = [cage]
+            placed_count += 1
         if not local_cages:
             continue
         result = _assemble_with_cages(

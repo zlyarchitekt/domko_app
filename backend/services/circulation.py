@@ -431,20 +431,22 @@ def _make_centerline_segment(
 def _assemble_with_cages(
     footprint: Polygon,
     zones: list[Zone],
-    local_cages: dict[int, Polygon],
+    local_cages: dict[int, list[Polygon]],
     corridor_width_m: float,
     max_dist_single_m: float,
     max_dist_multi_m: float,
 ) -> CirculationResult:
     """Buduje korytarze, linię środkową i kropki ewakuacyjne dla zadanych klatek
     (wyznaczonych w place_circulation). Pobiera słownik local_cages (indeks strefy
-    → wielokąt klatki) i zwraca CirculationResult z auto-umieszczoną geometrią
-    (bez elementów ręcznych z Etapu 2).
+    → lista wielokątów klatek w tej strefie, może być pusta lub >1 element) i
+    zwraca CirculationResult z auto-umieszczoną geometrią (bez elementów ręcznych
+    z Etapu 2).
 
     Używane w place_circulation() do budowy wyniku auto-placement, przed dodaniem
     ręcznych klatek i korytarzy."""
-    circulation_geom = unary_union(list(local_cages.values())) if local_cages else Polygon()
-    cage_polygons = list(local_cages.values())
+    all_cages = [c for cages in local_cages.values() for c in cages]
+    circulation_geom = unary_union(all_cages) if all_cages else Polygon()
+    cage_polygons = all_cages
 
     remainder_parts: list[Polygon] = []
 
@@ -452,10 +454,11 @@ def _assemble_with_cages(
         if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
             continue
 
-        local_cage = local_cages.get(i)
-        zone_remaining = zone.polygon.difference(local_cage) if local_cage is not None else zone.polygon
+        zone_cages = local_cages.get(i, [])
+        cages_union = unary_union(zone_cages) if zone_cages else None
+        zone_remaining = zone.polygon.difference(cages_union) if cages_union is not None else zone.polygon
 
-        corridor = _build_corridor(zone_remaining, corridor_width_m, local_cage)
+        corridor = _build_corridor(zone_remaining, corridor_width_m, cages_union)
         if corridor.area > 0:
             circulation_geom = unary_union([circulation_geom, corridor])
             zone_remaining = zone_remaining.difference(corridor)
@@ -469,8 +472,9 @@ def _assemble_with_cages(
     for i, zone in enumerate(zones):
         if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
             continue
-        local_cage = local_cages.get(i)
-        seg = _corridor_centerline(zone.polygon, corridor_width_m, local_cage)
+        zone_cages = local_cages.get(i, [])
+        cages_union = unary_union(zone_cages) if zone_cages else None
+        seg = _corridor_centerline(zone.polygon, corridor_width_m, cages_union)
         if seg is not None:
             raw_segments.append(seg)
 
@@ -560,7 +564,7 @@ def place_circulation(
             remaining = [i for i in cage_zone_order if i not in matching]
             cage_zone_order = matching + remaining
 
-    local_cages: dict[int, Polygon] = {}
+    local_cages: dict[int, list[Polygon]] = {}
 
     if place_cage:
         cage_polygons: list[Polygon] = []
@@ -578,7 +582,7 @@ def place_circulation(
                 cage_polygon = None
             if cage_polygon is not None and cage_polygon.area > 0:
                 cage_polygons.append(cage_polygon)
-                local_cages[i] = cage_polygon
+                local_cages[i] = [cage_polygon]
 
     result = _assemble_with_cages(
         footprint, zones, local_cages, corridor_width_m,
