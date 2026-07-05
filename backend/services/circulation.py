@@ -589,9 +589,31 @@ def place_circulation(
         max_dist_single_m, max_dist_multi_m,
     )
 
-    # ── Manualne elementy (spec 2026-07-04 manual-circulation-drawing §3) ──
-    # Dokładane PO auto-pipeline: manual przeżywa każde ponowne auto-
-    # rozmieszczenie; znika tylko przez usunięcie z listy we froncie.
+    return _merge_manual_elements(
+        result, footprint, corridor_width_m,
+        manual_cages, manual_corridors,
+        max_dist_single_m, max_dist_multi_m,
+    )
+
+
+def _merge_manual_elements(
+    result: CirculationResult,
+    footprint: Polygon,
+    corridor_width_m: float,
+    manual_cages: list[Polygon] | list[list[tuple[float, float]]] | None,
+    manual_corridors: list[list[tuple[float, float]]] | None,
+    max_dist_single_m: float = CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M,
+    max_dist_multi_m: float = CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M,
+) -> CirculationResult:
+    """Dokłada ręcznie narysowane klatki/korytarze (spec 2026-07-04 manual-
+    circulation-drawing §3) DO ISTNIEJĄCEGO `result` -- mutuje i zwraca go.
+
+    Wydzielone z `place_circulation` (Etap 2b Task 3) żeby ten sam blok
+    scalania mógł być wywołany także po `iterate_cage_placement` (tryb
+    iteracyjny, spec 2026-07-04-cage-placement-iterations), nie tylko po
+    auto-placement klasycznym z `_assemble_with_cages`. Manual przeżywa
+    każde ponowne auto-rozmieszczenie (klasyczne i iteracyjne); znika tylko
+    przez usunięcie z listy we froncie."""
     manual_cages = manual_cages or []
     manual_corridors = manual_corridors or []
 

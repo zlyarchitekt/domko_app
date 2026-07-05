@@ -28,6 +28,21 @@ class ApartmentProgram(BaseModel):
     depth_m: float | None = Field(None, gt=0)
 
 
+class CageWeightsInput(BaseModel):
+    egress: float = Field(default=1.0, ge=0, le=1)
+    count: float = Field(default=0.5, ge=0, le=1)
+    corners: float = Field(default=0.3, ge=0, le=1)
+    ends: float = Field(default=0.3, ge=0, le=1)
+    spread: float = Field(default=0.5, ge=0, le=1)
+
+
+class CageIterationMetaResult(BaseModel):
+    seed: int
+    score: float
+    cages_count: int
+    components: dict[str, float] = {}
+
+
 class CirculationSpec(BaseModel):
     corridor_width_m: float = Field(default=1.5, gt=0)
     stair_width_m: float = Field(default=1.2, gt=0)
@@ -47,6 +62,10 @@ class CirculationSpec(BaseModel):
     """Edytowalny próg zielonej kropki (heurystyka usera, nie § WT)."""
     max_dist_multi_m: float = Field(default=CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M, gt=0)
     """Edytowalny próg szarej kropki (>=2 klatki osiągalne)."""
+    cage_iterations: int = Field(default=0, ge=0, le=50)
+    """0 = klasyczny auto-placement; >0 = tryb iteracyjny (spec 2026-07-04-
+    cage-placement-iterations §4)."""
+    cage_weights: CageWeightsInput = Field(default_factory=CageWeightsInput)
 
 
 class LayoutGenerateRequest(BaseModel):
@@ -106,6 +125,12 @@ class LayoutGenerateResponse(BaseModel):
     evacuation_dots: list[EvacuationDotResult] = []
     """Kropki ewakuacyjne co 1m wzdłuż osi -- spec 2026-07-04-evacuation-dots
     (dual-surface: musi być na wszystkich trzech odpowiedziach)."""
+    cage_iterations: list[CageIterationMetaResult] = []
+    """Metadane 1 na iterację trybu iteracyjnego (puste w trybie klasycznym)
+    -- spec 2026-07-04-cage-placement-iterations §4 (dual-surface z
+    /layout/circulation's CirculationResponse)."""
+    cage_best_seed: int = 0
+    """Seed zwycięskiej iteracji trybu iteracyjnego (0 w trybie klasycznym)."""
 
 
 @router.post("/generate", response_model=LayoutGenerateResponse)
@@ -133,6 +158,8 @@ def generate_layout_endpoint(request: LayoutGenerateRequest):
         for a in request.apartments
     ]
 
+    from services.cage_placement import CageWeights
+
     layout_input = LayoutInput(
         footprint=footprint,
         corridor_width_m=circulation.corridor_width_m,
@@ -147,6 +174,12 @@ def generate_layout_endpoint(request: LayoutGenerateRequest):
         local_law=request.local_law,
         max_dist_single_m=circulation.max_dist_single_m,
         max_dist_multi_m=circulation.max_dist_multi_m,
+        cage_iterations=circulation.cage_iterations,
+        cage_weights=(
+            CageWeights(**circulation.cage_weights.model_dump())
+            if circulation.cage_iterations > 0
+            else None
+        ),
     )
 
     try:
@@ -235,6 +268,12 @@ def layout_result_to_response(layout: LayoutResult, wt: WTValidationResult) -> L
         cage_geometries=[json.loads(json.dumps(c.__geo_interface__)) for c in layout.cage_polygons],
         wall_bands=wall_bands_out,
         evacuation_dots=_serialize_dots(layout.evacuation_dots),
+        cage_iterations=[
+            CageIterationMetaResult(seed=m.seed, score=m.score,
+                                     cages_count=m.cages_count, components=m.components)
+            for m in layout.cage_iteration_metas
+        ],
+        cage_best_seed=layout.cage_best_seed,
     )
 
 
@@ -314,6 +353,11 @@ class CirculationResponse(BaseModel):
     """Miękkie ostrzeżenia (np. korytarz niedotykający klatki) -- spec §4."""
     evacuation_dots: list[EvacuationDotResult] = []
     """Kropki ewakuacyjne co 1m wzdłuż osi -- spec 2026-07-04-evacuation-dots."""
+    cage_iterations: list[CageIterationMetaResult] = []
+    """Metadane 1 na iterację trybu iteracyjnego (puste w trybie klasycznym,
+    cage_iterations=0) -- spec 2026-07-04-cage-placement-iterations §4."""
+    cage_best_seed: int = 0
+    """Seed zwycięskiej iteracji (0 w trybie klasycznym)."""
 
 
 @router.post("/circulation", response_model=CirculationResponse)
@@ -331,22 +375,49 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
             detail=f"Invalid cage_position '{circulation.cage_position}'. Valid: {CAGE_POSITION_MODES}",
         )
 
-    try:
-        result = place_circulation(
-            footprint,
-            corridor_width_m=circulation.corridor_width_m,
-            stair_width_m=circulation.stair_width_m,
-            place_cage=circulation.place_cage,
-            cage_size_m=circulation.cage_size_m,
-            cage_position=circulation.cage_position,
-            num_cages=circulation.num_cages,
-            manual_cages=[[(p[0], p[1]) for p in ring] for ring in circulation.manual_cages],
-            manual_corridors=[[(p[0], p[1]) for p in path] for path in circulation.manual_corridors],
-            max_dist_single_m=circulation.max_dist_single_m,
-            max_dist_multi_m=circulation.max_dist_multi_m,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+    manual_cages = [[(p[0], p[1]) for p in ring] for ring in circulation.manual_cages]
+    manual_corridors = [[(p[0], p[1]) for p in path] for path in circulation.manual_corridors]
+
+    cage_iteration_metas: list = []
+    cage_best_seed = 0
+    if circulation.cage_iterations > 0:
+        from services.cage_placement import CageWeights, iterate_cage_placement
+        from services.circulation import _merge_manual_elements
+
+        try:
+            result, cage_iteration_metas, cage_best_seed = iterate_cage_placement(
+                footprint,
+                corridor_width_m=circulation.corridor_width_m,
+                num_cages=circulation.num_cages,
+                weights=CageWeights(**circulation.cage_weights.model_dump()),
+                iterations=circulation.cage_iterations,
+                max_dist_single_m=circulation.max_dist_single_m,
+                max_dist_multi_m=circulation.max_dist_multi_m,
+            )
+            result = _merge_manual_elements(
+                result, footprint, circulation.corridor_width_m,
+                manual_cages, manual_corridors,
+                circulation.max_dist_single_m, circulation.max_dist_multi_m,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    else:
+        try:
+            result = place_circulation(
+                footprint,
+                corridor_width_m=circulation.corridor_width_m,
+                stair_width_m=circulation.stair_width_m,
+                place_cage=circulation.place_cage,
+                cage_size_m=circulation.cage_size_m,
+                cage_position=circulation.cage_position,
+                num_cages=circulation.num_cages,
+                manual_cages=manual_cages,
+                manual_corridors=manual_corridors,
+                max_dist_single_m=circulation.max_dist_single_m,
+                max_dist_multi_m=circulation.max_dist_multi_m,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
     warnings: list[str] = []
     for i, path in enumerate(circulation.manual_corridors):
@@ -368,6 +439,12 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
         centerline=_serialize_centerline(result.centerline),
         warnings=warnings,
         evacuation_dots=_serialize_dots(result.evacuation_dots),
+        cage_iterations=[
+            CageIterationMetaResult(seed=m.seed, score=m.score,
+                                     cages_count=m.cages_count, components=m.components)
+            for m in cage_iteration_metas
+        ],
+        cage_best_seed=cage_best_seed,
     )
 
 

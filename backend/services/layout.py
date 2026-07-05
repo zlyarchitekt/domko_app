@@ -100,6 +100,13 @@ class LayoutInput:
     evacuation-dots) -- passthrough do place_circulation()."""
     max_dist_multi_m: float = CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M
     """Edytowalny próg szarej kropki ewakuacyjnej (>=2 klatki osiągalne)."""
+    cage_iterations: int = 0
+    """0 = klasyczny auto-placement (place_circulation); >0 = tryb iteracyjny
+    (iterate_cage_placement, spec 2026-07-04-cage-placement-iterations §4) --
+    passthrough dual-surface, mirror `/layout/circulation`'s CirculationSpec."""
+    cage_weights: object = None
+    """`services.cage_placement.CageWeights` gdy `cage_iterations > 0`; None
+    (=domyślne wagi) w trybie klasycznym."""
 
 
 @dataclass
@@ -139,6 +146,12 @@ class LayoutResult:
     evacuation_dots: list = field(default_factory=list)
     """Passthrough z CirculationResult -- /layout/generate serializuje kropki
     tak samo jak /layout/circulation (dual-surface gotcha)."""
+    cage_iteration_metas: list = field(default_factory=list)
+    """Passthrough z iterate_cage_placement (list[CageIterationMeta]) -- puste
+    w trybie klasycznym (cage_iterations=0), spec 2026-07-04-cage-placement-
+    iterations §4 (dual-surface z /layout/circulation)."""
+    cage_best_seed: int = 0
+    """Seed zwycięskiej iteracji trybu iteracyjnego (0 w trybie klasycznym)."""
 
 
 def generate_layout(input: LayoutInput) -> LayoutResult:
@@ -151,25 +164,46 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
     — oba etapy są też dostępne osobno (services.circulation.place_circulation,
     services.unit_mix.subdivide_units) dla nowych endpointów /layout/circulation
     i /layout/units."""
-    from services.circulation import place_circulation
+    from services.circulation import _merge_manual_elements, place_circulation
     from services.unit_mix import subdivide_units
 
     footprint = input.footprint
     footprint_area = footprint.area
 
-    circulation = place_circulation(
-        footprint,
-        corridor_width_m=input.corridor_width_m,
-        stair_width_m=input.stair_width_m,
-        place_cage=input.place_cage,
-        cage_size_m=input.cage_size_m,
-        cage_position=input.cage_position,
-        num_cages=input.num_cages,
-        manual_cages=input.manual_cages,
-        manual_corridors=input.manual_corridors,
-        max_dist_single_m=input.max_dist_single_m,
-        max_dist_multi_m=input.max_dist_multi_m,
-    )
+    cage_iteration_metas: list = []
+    cage_best_seed = 0
+    if input.cage_iterations > 0:
+        from services.cage_placement import CageWeights, iterate_cage_placement
+
+        weights = input.cage_weights if input.cage_weights is not None else CageWeights()
+        circulation, cage_iteration_metas, cage_best_seed = iterate_cage_placement(
+            footprint,
+            corridor_width_m=input.corridor_width_m,
+            num_cages=input.num_cages,
+            weights=weights,
+            iterations=input.cage_iterations,
+            max_dist_single_m=input.max_dist_single_m,
+            max_dist_multi_m=input.max_dist_multi_m,
+        )
+        circulation = _merge_manual_elements(
+            circulation, footprint, input.corridor_width_m,
+            input.manual_cages, input.manual_corridors,
+            input.max_dist_single_m, input.max_dist_multi_m,
+        )
+    else:
+        circulation = place_circulation(
+            footprint,
+            corridor_width_m=input.corridor_width_m,
+            stair_width_m=input.stair_width_m,
+            place_cage=input.place_cage,
+            cage_size_m=input.cage_size_m,
+            cage_position=input.cage_position,
+            num_cages=input.num_cages,
+            manual_cages=input.manual_cages,
+            manual_corridors=input.manual_corridors,
+            max_dist_single_m=input.max_dist_single_m,
+            max_dist_multi_m=input.max_dist_multi_m,
+        )
 
     apartments, leftover = subdivide_units(circulation.remainder, input.apartments)
 
@@ -192,6 +226,8 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
         corridor_width_m=input.corridor_width_m,
         stair_width_m=input.stair_width_m,
         evacuation_dots=circulation.evacuation_dots,
+        cage_iteration_metas=cage_iteration_metas,
+        cage_best_seed=cage_best_seed,
     )
 
 
