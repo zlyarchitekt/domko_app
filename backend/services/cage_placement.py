@@ -88,6 +88,22 @@ def _candidate_cages(footprint: Polygon, zones: list[Zone]) -> list[tuple[int, P
     return unique
 
 
+def assign_cages_to_zones(cages: list[Polygon], zones: list[Zone]) -> dict[int, list[Polygon]]:
+    """Przypisuje każdą klatkę do strefy, której bbox ją zawiera (spec
+    2026-07-05-circulation-iteration-selection-and-drag §2 -- przesunięta
+    klatka musi trafić do właściwej strefy przed przeliczeniem korytarza).
+    Klatka niepasująca do żadnej strefy (np. przeciągnięta poza obrys)
+    jest pomijana -- wywołujący (endpoint) waliduje osobno przez
+    `footprint.contains`, więc to nie powinno się zdarzyć w praktyce."""
+    result: dict[int, list[Polygon]] = {}
+    for cage in cages:
+        for zi, zone in enumerate(zones):
+            if zone.polygon.buffer(1e-9).contains(cage):
+                result.setdefault(zi, []).append(cage)
+                break
+    return result
+
+
 def _score_placement(
     result: CirculationResult, footprint: Polygon, num_cages: int, weights: CageWeights
 ) -> tuple[float, dict]:

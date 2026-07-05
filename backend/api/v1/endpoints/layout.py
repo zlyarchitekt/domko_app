@@ -797,6 +797,66 @@ def reshape_circulation_endpoint(request: ReshapeCirculationRequest):
     )
 
 
+class MoveCageRequest(BaseModel):
+    footprint: list[list[float]] = Field(..., min_length=3)
+    cage_geometries: list[dict] = Field(..., min_length=1)
+    """Aktualne wielokąty WSZYSTKICH klatek, z tą przesuniętą już podmienioną
+    na nową pozycję (frontend wysyła cały zestaw, nie tylko jedną)."""
+    corridor_width_m: float = Field(default=1.5, gt=0)
+    max_dist_single_m: float = Field(default=CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M, gt=0)
+    max_dist_multi_m: float = Field(default=CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M, gt=0)
+
+
+@router.post("/circulation/move-cage", response_model=CirculationResponse)
+def move_cage_endpoint(request: MoveCageRequest):
+    """Przelicza korytarz po przesunięciu jednej lub więcej klatek (spec
+    2026-07-05-circulation-iteration-selection-and-drag §2). Różni się od
+    /circulation/reshape (który kształtuje oś bez stref) -- tu klatki
+    wracają do zestawu stref (rectangle_decompose) i _assemble_with_cages
+    przelicza korytarz per strefa, tak jak przy pierwszym umieszczeniu."""
+    from services.bsp import rectangle_decompose
+    from services.cage_placement import assign_cages_to_zones
+    from services.circulation import Zone, _assemble_with_cages
+
+    try:
+        footprint = _points_to_polygon(request.footprint)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        cages = [_shape(g) for g in request.cage_geometries]
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid cage geometry: {exc}")
+
+    fp_buffered = footprint.buffer(1e-9)
+    for cage in cages:
+        if not fp_buffered.contains(cage):
+            raise HTTPException(status_code=422, detail="Klatka poza obrysem")
+    for i, a in enumerate(cages):
+        for b in cages[i + 1:]:
+            if a.intersects(b):
+                raise HTTPException(status_code=422, detail="Klatki kolidują ze sobą")
+
+    zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
+    local_cages = assign_cages_to_zones(cages, zones)
+
+    result = _assemble_with_cages(
+        footprint, zones, local_cages, request.corridor_width_m,
+        request.max_dist_single_m, request.max_dist_multi_m,
+    )
+
+    return CirculationResponse(
+        circulation_geometry=(
+            json.loads(json.dumps(result.circulation_geometry.__geo_interface__))
+            if result.circulation_geometry is not None else None
+        ),
+        cage_geometries=[json.loads(json.dumps(c.__geo_interface__)) for c in result.cage_polygons],
+        remainder=json.loads(json.dumps(result.remainder.__geo_interface__)),
+        centerline=_serialize_centerline(result.centerline),
+        evacuation_dots=_serialize_dots(result.evacuation_dots),
+    )
+
+
 class EvacuationRecomputeRequest(BaseModel):
     centerline: list[dict]
     """[{points: [[x,y],[x,y]]}] -- aktualna oś z frontendu (auto+manual+reshape)."""

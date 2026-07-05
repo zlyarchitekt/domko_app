@@ -1,14 +1,21 @@
 """Testy iteracyjnego auto-placementu klatek (spec 2026-07-04-cage-
 placement-iterations §7)."""
 
-import pytest
-from shapely.geometry import Polygon
+import json
 
-from services.cage_placement import CageWeights, iterate_cage_placement
+import pytest
+from shapely.geometry import Polygon, box, mapping
+
+from services.cage_placement import CageWeights, assign_cages_to_zones, iterate_cage_placement
+from services.circulation import Zone
 
 
 def _rect(x0, y0, x1, y1):
     return Polygon([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+
+
+def _shape_to_json(geom) -> str:
+    return json.dumps(mapping(geom))
 
 
 FOOTPRINT = _rect(0, 0, 40, 12)
@@ -188,6 +195,64 @@ def test_generate_endpoint_iterative_mode():
     assert len(body["cage_iterations"]) >= 1
     assert body["cage_best_seed"] in [m["seed"] for m in body["cage_iterations"]]
     assert body["cage_geometries"]
+
+
+def test_assign_cages_to_zones_matches_containing_bbox():
+    # Prostokąt 40x12: rectangle_decompose zwraca 1 strefę = cały footprint.
+    footprint = _rect(0, 0, 40, 12)
+    zones = [Zone(name="Z0", polygon=footprint)]
+    cage_a = box(2, 2, 6.2, 7.7)
+    cage_b = box(30, 2, 34.2, 7.7)
+    result = assign_cages_to_zones([cage_a, cage_b], zones)
+    assert result == {0: [cage_a, cage_b]}
+
+
+def test_assign_cages_to_zones_multi_zone():
+    left = _rect(0, 0, 8, 12)
+    right = _rect(8, 0, 40, 12)
+    zones = [Zone(name="Z0", polygon=left), Zone(name="Z1", polygon=right)]
+    cage_left = box(1, 2, 5.2, 7.7)
+    cage_right = box(30, 2, 34.2, 7.7)
+    result = assign_cages_to_zones([cage_left, cage_right], zones)
+    assert result == {0: [cage_left], 1: [cage_right]}
+
+
+def test_move_cage_endpoint_recomputes_zone_corridor():
+    from fastapi.testclient import TestClient
+    from main import app
+
+    client = TestClient(app)
+    footprint = [[0, 0], [40, 0], [40, 12], [0, 12]]
+    cage = box(2, 2, 6.2, 7.7)
+    payload = {
+        "footprint": footprint,
+        "cage_geometries": [json.loads(_shape_to_json(cage))],
+        "corridor_width_m": 1.5,
+        "max_dist_single_m": 20.0,
+        "max_dist_multi_m": 40.0,
+    }
+    res = client.post("/api/v1/layout/circulation/move-cage", json=payload)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert len(body["cage_geometries"]) == 1
+    assert body["circulation_geometry"] is not None
+    assert len(body["centerline"]) >= 1
+
+
+def test_move_cage_endpoint_rejects_cage_outside_footprint():
+    from fastapi.testclient import TestClient
+    from main import app
+
+    client = TestClient(app)
+    footprint = [[0, 0], [40, 0], [40, 12], [0, 12]]
+    cage = box(38, 10, 45, 16)  # wystaje poza obrys
+    payload = {
+        "footprint": footprint,
+        "cage_geometries": [json.loads(_shape_to_json(cage))],
+        "corridor_width_m": 1.5,
+    }
+    res = client.post("/api/v1/layout/circulation/move-cage", json=payload)
+    assert res.status_code == 422
 
 
 def test_circulation_endpoint_iterations_carry_geometry():
