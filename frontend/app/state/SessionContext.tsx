@@ -697,44 +697,6 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     [state.circulation, state.program]
   );
 
-  const regenerate = useCallback(async () => {
-    if (!state.footprint || state.footprint.length < 3) return;
-    dispatch({ type: "SET_LOADING", loading: true });
-    try {
-      const req: api.LayoutGenerateRequest = {
-        ...buildRequest(state.footprint),
-        // Same dual-surface fix as runPlaceCirculation: the one-shot
-        // /layout/generate path must also carry the current manual
-        // cages/corridors, otherwise they silently vanish on "Generuj układ"
-        // (see gotcha_dual_layout_api_surface.md).
-        circulation: {
-          ...state.circulation,
-          manual_cages: state.manualCages.map((c) => c.ring.map((p) => [p.x, p.y] as api.Point)),
-          manual_corridors: state.manualCorridors.map((c) => c.path.map((p) => [p.x, p.y] as api.Point)),
-        },
-        iterations: 10,
-        weights: state.unitWeights,
-      };
-      const [layout, validation] = await Promise.all([
-        api.generateLayout(req),
-        api.validateFullLayout(req),
-      ]);
-      dispatch({ type: "SET_LAYOUT_RESULT", result: layout });
-      dispatch({ type: "SET_VALIDATION", validation });
-      dispatch({
-        type: "SET_ITERATION_RESULTS",
-        iterations: layout.iterations ?? [],
-        derivedTotalUnits: layout.derived_total_units ?? 0,
-        netRemainderM2: layout.net_remainder_m2 ?? 0,
-      });
-      dispatch({ type: "SET_ERROR", error: null });
-    } catch (err) {
-      dispatch({ type: "SET_ERROR", error: err instanceof api.ApiError ? err.message : String(err) });
-    } finally {
-      dispatch({ type: "SET_LOADING", loading: false });
-    }
-  }, [state.footprint, buildRequest, state.circulation, state.manualCages, state.manualCorridors, state.unitWeights]);
-
   const runPlaceCirculation = useCallback(
     async (overrides?: {
       manualCages?: ManualCage[];
@@ -923,6 +885,56 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_LOADING", loading: false });
     }
   }, [state.circulationResult, state.program, state.footprint, state.circulation, state.unitWeights]);
+
+  const regenerate = useCallback(async () => {
+    if (!state.footprint || state.footprint.length < 3) return;
+    if (state.circulationResult) {
+      // Komunikacja już istnieje na canvasie (auto/iteracyjnie/ręcznie/
+      // przesunięta/zreshape'owana, wybrana z listy iteracji) -- użyj
+      // JEJ dokładnie zamiast liczyć nową od zera (spec 2026-07-05
+      // circulation-iteration-selection-and-drag §3). runSubdivideUnits
+      // już robi dokładnie to: dzieli aktualny state.circulationResult
+      // na mieszkania i liczy walidację -- to jest to samo co "Generuj
+      // układ" powinno zwrócić, tyle że bez ponownego liczenia korytarza.
+      await runSubdivideUnits();
+      return;
+    }
+    dispatch({ type: "SET_LOADING", loading: true });
+    try {
+      const req: api.LayoutGenerateRequest = {
+        ...buildRequest(state.footprint),
+        // Same dual-surface fix as runPlaceCirculation: the one-shot
+        // /layout/generate path must also carry the current manual
+        // cages/corridors, otherwise they silently vanish on "Generuj układ"
+        // (see gotcha_dual_layout_api_surface.md).
+        circulation: {
+          ...state.circulation,
+          manual_cages: state.manualCages.map((c) => c.ring.map((p) => [p.x, p.y] as api.Point)),
+          manual_corridors: state.manualCorridors.map((c) => c.path.map((p) => [p.x, p.y] as api.Point)),
+        },
+        iterations: 10,
+        weights: state.unitWeights,
+      };
+      const [layout, validation] = await Promise.all([
+        api.generateLayout(req),
+        api.validateFullLayout(req),
+      ]);
+      dispatch({ type: "SET_LAYOUT_RESULT", result: layout });
+      dispatch({ type: "SET_VALIDATION", validation });
+      dispatch({
+        type: "SET_ITERATION_RESULTS",
+        iterations: layout.iterations ?? [],
+        derivedTotalUnits: layout.derived_total_units ?? 0,
+        netRemainderM2: layout.net_remainder_m2 ?? 0,
+      });
+      dispatch({ type: "SET_ERROR", error: null });
+    } catch (err) {
+      dispatch({ type: "SET_ERROR", error: err instanceof api.ApiError ? err.message : String(err) });
+    } finally {
+      dispatch({ type: "SET_LOADING", loading: false });
+    }
+  }, [state.footprint, state.circulationResult, runSubdivideUnits, buildRequest,
+      state.circulation, state.manualCages, state.manualCorridors, state.unitWeights]);
 
   const refreshTypologySuggestion = useCallback(async () => {
     if (!state.footprint || state.footprint.length < 3) return;
