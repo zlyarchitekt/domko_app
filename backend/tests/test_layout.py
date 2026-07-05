@@ -61,3 +61,69 @@ def test_layout_generate_rejects_small_footprint():
     data = response.json()
     # May produce 0 apartments or leftover, but should not crash
     assert "apartments" in data
+
+
+from services.circulation import place_circulation as _pc
+
+
+def _square(x0, y0, x1, y1):
+    from shapely.geometry import Polygon
+    return Polygon([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+
+
+def test_manual_cage_merged_into_result():
+    footprint = _square(0, 0, 30, 12)
+    manual_cage = [(1.0, 1.0), (5.0, 1.0), (5.0, 6.0), (1.0, 6.0)]
+    result = _pc(
+        footprint, corridor_width_m=1.5, stair_width_m=1.2,
+        place_cage=False, cage_size_m=2.5, cage_position="auto", num_cages=1,
+        manual_cages=[manual_cage], manual_corridors=[],
+    )
+    assert len(result.cage_polygons) == 1
+    assert abs(result.cage_polygons[0].area - 20.0) < 1e-6
+    # remainder nie zawiera wnętrza klatki
+    from shapely.geometry import Point
+    assert not result.remainder.buffer(-1e-9).contains(Point(3.0, 3.5))
+
+
+def test_manual_corridor_buffered_and_in_centerline():
+    # NOTE: deviation from the plan's literal test. place_circulation() always
+    # auto-places a corridor per zone regardless of `place_cage` (that flag
+    # only gates the *cage*, see _build_corridor callsite) — for a single
+    # 30x12 rectangle footprint this puts the auto-corridor at the exact same
+    # y-center/width as the brief's manual path, making the manual band a
+    # strict subset of the auto band (confirmed: area came back as 51.0, the
+    # full auto-corridor, not 44.2). Use a taller footprint + a path placed
+    # away from the auto-corridor's centerline so the two bands don't
+    # overlap, and assert on the *delta* vs an auto-only run -- this isolates
+    # the manual-corridor buffer math the test is actually meant to check.
+    footprint = _square(0, 0, 30, 20)
+    path = [(2.0, 2.0), (28.0, 2.0)]
+    auto_only = _pc(
+        footprint, corridor_width_m=1.5, stair_width_m=1.2,
+        place_cage=False, cage_size_m=2.5, cage_position="auto", num_cages=1,
+        manual_cages=[], manual_corridors=[],
+    )
+    result = _pc(
+        footprint, corridor_width_m=1.5, stair_width_m=1.2,
+        place_cage=False, cage_size_m=2.5, cage_position="auto", num_cages=1,
+        manual_cages=[], manual_corridors=[path],
+    )
+    assert result.circulation_geometry is not None
+    added_area = result.circulation_geometry.area - auto_only.circulation_geometry.area
+    # pas: długość 26m x (1.5 + 2*0.10) szerokości, dodany PONAD auto-korytarz
+    assert abs(added_area - 26.0 * 1.7) < 0.5
+    manual_segs = [s for s in result.centerline if s.points == ((2.0, 2.0), (28.0, 2.0))]
+    assert len(manual_segs) == 1
+
+
+def test_manual_cage_outside_footprint_raises():
+    import pytest as _pytest
+    footprint = _square(0, 0, 10, 10)
+    outside = [(8.0, 8.0), (14.0, 8.0), (14.0, 12.0), (8.0, 12.0)]
+    with _pytest.raises(ValueError, match="wykracza poza obrys"):
+        _pc(
+            footprint, corridor_width_m=1.5, stair_width_m=1.2,
+            place_cage=False, cage_size_m=2.5, cage_position="auto", num_cages=1,
+            manual_cages=[outside], manual_corridors=[],
+        )

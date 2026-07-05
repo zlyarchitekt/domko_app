@@ -432,6 +432,8 @@ def place_circulation(
     cage_size_m: float,
     cage_position: str,
     num_cages: int = 1,
+    manual_cages: list[Polygon] | list[list[tuple[float, float]]] | None = None,
+    manual_corridors: list[list[tuple[float, float]]] | None = None,
 ) -> CirculationResult:
     """Etap 1: dzieli obrys na prawie-prostokątne strefy (rectangle_decompose),
     umieszcza klatkę i korytarz w każdej, zwraca zunifikowany wynik.
@@ -536,6 +538,40 @@ def place_circulation(
         loading = _classify_segment_loading(containing_zone, (p1, p2), corridor_width_m)
         d_start, d_end = arc_distances[i], arc_distances[i + 1]
         centerline.append(_make_centerline_segment(p1, p2, loading, d_start, d_end))
+
+    # ── Manualne elementy (spec 2026-07-04 manual-circulation-drawing §3) ──
+    # Dokładane PO auto-pipeline: manual przeżywa każde ponowne auto-
+    # rozmieszczenie; znika tylko przez usunięcie z listy we froncie.
+    manual_cages = manual_cages or []
+    manual_corridors = manual_corridors or []
+
+    for idx, ring in enumerate(manual_cages):
+        cage_poly = ring if isinstance(ring, Polygon) else Polygon(ring)
+        if not cage_poly.is_valid or cage_poly.area < 1e-6:
+            raise ValueError(f"Klatka {idx + 1}: nieprawidłowy wielokąt")
+        if not footprint.buffer(1e-6).contains(cage_poly):
+            raise ValueError(f"Klatka {idx + 1} wykracza poza obrys budynku")
+        circulation_geom = unary_union([circulation_geom, cage_poly])
+        cage_polygons.append(cage_poly)
+        remainder = remainder.difference(cage_poly)
+
+    half = (corridor_width_m + 2 * NET_SHRINK_M) / 2.0
+    all_cage_points = [(c.centroid.x, c.centroid.y) for c in cage_polygons]
+    for path in manual_corridors:
+        if len(path) < 2:
+            continue
+        band = LineString(path).buffer(half, cap_style="flat").intersection(footprint)
+        if band.is_empty:
+            continue
+        circulation_geom = unary_union([circulation_geom, band])
+        remainder = remainder.difference(band)
+        # Odległości liczone per manualna ścieżka (osobna od auto-ścieżki);
+        # Etap 3 (evacuation-dots) zastąpi to grafem całej sieci.
+        arc = _distances_along_centerline([tuple(p) for p in path], all_cage_points)
+        for i in range(len(path) - 1):
+            p1, p2 = tuple(path[i]), tuple(path[i + 1])
+            loading = _classify_segment_loading(footprint, (p1, p2), corridor_width_m)
+            centerline.append(_make_centerline_segment(p1, p2, loading, arc[i], arc[i + 1]))
 
     return CirculationResult(
         zones=zones,
