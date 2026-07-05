@@ -327,7 +327,7 @@ function moveSharedLine(
 }
 
 export default function CanvasEditor() {
-  const { state, addDrawPoint, removeLastDrawPoint, finishDrawing, updateVertex, setFootprintPoints, selectApartment, updateApartmentsAndValidate, runReshapeCirculation, dispatch } = useSession();
+  const { state, addDrawPoint, removeLastDrawPoint, finishDrawing, updateVertex, setFootprintPoints, selectApartment, updateApartmentsAndValidate, runReshapeCirculation, addManualCage, addManualCorridor, runPlaceCirculation, dispatch } = useSession();
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType>(null);
 
@@ -532,51 +532,81 @@ export default function CanvasEditor() {
 
   // (przeniesione wyżej)
 
+  // "draw" (obrys budynku), "draw-cage" (klatka) i "draw-corridor" (korytarz)
+  // dzielą ten sam mechanizm zbierania punktów w state.drawingPoints — patrz
+  // handleStageClick/handleStageDblClick i podgląd łamanej niżej.
+  const isDrawingMode = state.mode === "draw" || state.mode === "draw-cage" || state.mode === "draw-corridor";
+
   const handleStageClick = () => {
-    if (state.mode !== "draw") return;
+    if (!isDrawingMode) return;
     const stage = stageRef.current;
     const pointer = stage?.getPointerPosition();
     if (!pointer) return;
     const rawPx = worldToMeters(pointer.x, pointer.y);
     const px = { x: snap(rawPx.x), y: snap(rawPx.y) };
-    
+
     // Ignoruj kolejne punkty z-snapowane w tym samym miejscu
     if (state.drawingPoints.length > 0) {
       const last = state.drawingPoints[state.drawingPoints.length - 1];
       if (last.x === px.x && last.y === px.y) {
-         return; 
+         return;
       }
     }
 
-    if (state.drawingPoints.length >= 3) {
+    // Klik blisko pierwszego punktu domyka WYŁĄCZNIE obrys budynku — finishDrawing()
+    // jest specyficzny dla footprint (wywołuje footprintFromPoints + SET_FOOTPRINT).
+    // Klatkę/korytarz kończy tylko dblclick (handleStageDblClick niżej); korytarz
+    // i tak nigdy nie jest zamkniętym poligonem, więc "domykanie po bliskości"
+    // nie miałoby dla niego sensu.
+    if (state.mode === "draw" && state.drawingPoints.length >= 3) {
       const p0 = state.drawingPoints[0];
       const dist = Math.hypot(p0.x - px.x, p0.y - px.y);
-      if (dist < 1.5) { 
+      if (dist < 1.5) {
         void finishDrawing();
         return;
       }
     }
-    
+
     addDrawPoint(px);
   };
 
   const handleStageDblClick = () => {
-    if (state.mode !== "draw") return;
-    // Ponieważ kliknięcie w to samo miejsce jest odrzucane przez handleStageClick, 
-    // drugi klik nie stwarza zduplikowanego węzła po użyciu 'snap'. Nie usuwamy już węzłów.
-    void finishDrawing();
+    if (state.mode === "draw") {
+      // Ponieważ kliknięcie w to samo miejsce jest odrzucane przez handleStageClick,
+      // drugi klik nie stwarza zduplikowanego węzła po użyciu 'snap'. Nie usuwamy już węzłów.
+      void finishDrawing();
+      return;
+    }
+    if (state.mode === "draw-cage") {
+      if (state.drawingPoints.length < 3) return; // ring potrzebuje min. 3 wierzchołków
+      const ring = [...state.drawingPoints];
+      // Lista-override do requestu (id: "pending" nieużywane przez backend) —
+      // patrz komentarz w runPlaceCirculation o unikaniu stale-closure zaraz
+      // po dispatchu ADD_MANUAL_CAGE; reducer sam nada właściwy crypto.randomUUID().
+      const nextCages = [...state.manualCages, { id: "pending", ring }];
+      addManualCage(ring);
+      void runPlaceCirculation({ manualCages: nextCages });
+      return;
+    }
+    if (state.mode === "draw-corridor") {
+      if (state.drawingPoints.length < 2) return; // ścieżka potrzebuje min. 2 punktów
+      const path = [...state.drawingPoints];
+      const nextCorridors = [...state.manualCorridors, { id: "pending", path }];
+      addManualCorridor(path);
+      void runPlaceCirculation({ manualCorridors: nextCorridors });
+      return;
+    }
   };
 
-  const cursor =
-    state.mode === "draw"
-      ? "crosshair"
-      : state.mode === "edit-vertices" || state.mode === "edit-corridor-centerline"
-        ? "pointer"
-        : state.mode === "edit-lines" || state.mode === "edit-circulation"
-          ? "move"
-          : isPanning
-            ? "grabbing"
-            : "grab";
+  const cursor = isDrawingMode
+    ? "crosshair"
+    : state.mode === "edit-vertices" || state.mode === "edit-corridor-centerline"
+      ? "pointer"
+      : state.mode === "edit-lines" || state.mode === "edit-circulation"
+        ? "move"
+        : isPanning
+          ? "grabbing"
+          : "grab";
 
   return (
     <div
@@ -622,13 +652,17 @@ export default function CanvasEditor() {
         <span>
           {state.mode === "draw"
             ? "rysowanie · klik = punkt, dwuklik = zamknij"
-            : state.mode === "edit-vertices"
-              ? "edycja wierzchołków obrysu"
-              : state.mode === "edit-lines"
-                ? "przeciąganie linii podziału mieszkań"
-                : state.mode === "edit-circulation"
-                  ? "przeciąganie korytarza/klatki"
-                  : "przesuń: drag · zoom: kółko"}
+            : state.mode === "draw-cage"
+              ? "rysowanie klatki · klik = punkt (min. 3), dwuklik = zatwierdź"
+              : state.mode === "draw-corridor"
+                ? "rysowanie korytarza · klik = punkt (min. 2), dwuklik = zatwierdź"
+                : state.mode === "edit-vertices"
+                  ? "edycja wierzchołków obrysu"
+                  : state.mode === "edit-lines"
+                    ? "przeciąganie linii podziału mieszkań"
+                    : state.mode === "edit-circulation"
+                      ? "przeciąganie korytarza/klatki"
+                      : "przesuń: drag · zoom: kółko"}
         </span>
       </div>
 
@@ -659,7 +693,7 @@ export default function CanvasEditor() {
         scaleY={scale}
         x={position.x}
         y={position.y}
-        draggable={state.mode !== "draw"}
+        draggable={!isDrawingMode}
         onWheel={onWheel}
         onClick={handleStageClick}
         onDblClick={handleStageDblClick}
@@ -805,17 +839,30 @@ export default function CanvasEditor() {
           {/* Rysowanie w toku */}
 
           {drawingCanvasPoints.length > 0 && (
-            <Line 
-              points={drawingCanvasPoints} 
-              closed={state.drawingPoints.length >= 3} 
-              stroke="#60a5fa" 
-              strokeWidth={2 / scale} 
-              dash={[6 / scale, 4 / scale]} 
+            <Line
+              points={drawingCanvasPoints}
+              closed={state.mode !== "draw-corridor" && state.drawingPoints.length >= 3}
+              stroke="#60a5fa"
+              strokeWidth={2 / scale}
+              dash={[6 / scale, 4 / scale]}
             />
           )}
           {state.drawingPoints.map((p, i) => (
             <Circle key={`draw-pt-${i}`} x={p.x * METER_PX} y={-p.y * METER_PX} radius={4 / scale} fill="#60a5fa" />
           ))}
+
+          {/* Podgląd pasa korytarza przy rysowaniu osi (draw-corridor) */}
+          {state.mode === "draw-corridor" && drawingCanvasPoints.length >= 4 && (
+            <Line
+              points={drawingCanvasPoints}
+              stroke="#60a5fa"
+              opacity={0.25}
+              strokeWidth={(state.circulation.corridor_width_m + 0.2) * METER_PX}
+              lineCap="butt"
+              lineJoin="round"
+              listening={false}
+            />
+          )}
 
           {/* Korytarz (jasnoszary) */}
           {circulationParts.map((geom, i) => (
@@ -840,6 +887,33 @@ export default function CanvasEditor() {
               strokeWidth={1.5 / scale}
             />
           ))}
+
+          {/* Highlight elementu manualnego wskazanego w liście panelu (Task 4) */}
+          {state.hoveredManualId &&
+            state.manualCages
+              .filter((c) => c.id === state.hoveredManualId)
+              .map((c) => (
+                <Line
+                  key={`manual-hl-${c.id}`}
+                  points={toCanvasPoints(c.ring)}
+                  closed
+                  stroke="#60a5fa"
+                  strokeWidth={3 / scale}
+                  listening={false}
+                />
+              ))}
+          {state.hoveredManualId &&
+            state.manualCorridors
+              .filter((c) => c.id === state.hoveredManualId)
+              .map((c) => (
+                <Line
+                  key={`manual-hl-${c.id}`}
+                  points={toCanvasPoints(c.path)}
+                  stroke="#60a5fa"
+                  strokeWidth={4 / scale}
+                  listening={false}
+                />
+              ))}
 
           {/* Podział klatki: biegi/spoczniki/winda/szacht (dekoracja, spec 2026-07-03) */}
           {cageGeometries.flatMap((geom, i) =>
