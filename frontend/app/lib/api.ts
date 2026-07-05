@@ -140,6 +140,8 @@ export interface IterationMeta {
   score: number;
   units_count: number;
   components?: Record<string, number>;
+  apartments?: ApartmentResult[];
+  wall_bands?: GeoJsonPolygon[];
 }
 
 export interface CageWeightsInput {
@@ -155,6 +157,10 @@ export interface CageIterationMeta {
   score: number;
   cages_count: number;
   components?: Record<string, number>;
+  cage_geometries?: GeoJsonPolygon[];
+  circulation_geometry?: GeoJsonPolygon | null;
+  centerline?: CorridorCenterlineSegment[];
+  evacuation_dots?: EvacuationDot[];
 }
 
 export interface CirculationSpecInput {

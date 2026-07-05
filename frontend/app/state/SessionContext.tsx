@@ -92,6 +92,8 @@ interface SessionState {
   activeVariantId: string | null;
   isOptimizing: boolean;
   theme: "dark" | "light";
+  activeCageSeed: number | null;
+  activeUnitSeed: number | null;
 }
 
 const initialCirculation: api.CirculationSpecInput = {
@@ -162,6 +164,8 @@ const initialState: SessionState = {
   activeVariantId: null,
   isOptimizing: false,
   theme: "dark",
+  activeCageSeed: null,
+  activeUnitSeed: null,
 };
 
 type Action =
@@ -204,6 +208,8 @@ type Action =
   | { type: "TRANSLATE_CIRCULATION"; dx: number; dy: number }
   | { type: "RESHAPE_CIRCULATION"; result: api.ReshapeCirculationResponse }
   | { type: "SET_EVACUATION_DOTS"; dots: api.EvacuationDot[] }
+  | { type: "SELECT_CAGE_ITERATION"; seed: number }
+  | { type: "SELECT_UNIT_ITERATION"; seed: number }
   | { type: "RESTORE_STATE"; state: SessionState };
 
 function reducer(state: SessionState, action: Action): SessionState {
@@ -307,7 +313,45 @@ function reducer(state: SessionState, action: Action): SessionState {
     case "SET_CIRCULATION":
       return { ...state, circulation: { ...state.circulation, ...action.patch } };
     case "SET_CIRCULATION_RESULT":
-      return { ...state, circulationResult: action.result };
+      return { ...state, circulationResult: action.result, activeCageSeed: null };
+    case "SELECT_CAGE_ITERATION": {
+      if (!state.circulationResult?.cage_iterations) return state;
+      const meta = state.circulationResult.cage_iterations.find((m) => m.seed === action.seed);
+      if (!meta) return state;
+      return {
+        ...state,
+        activeCageSeed: action.seed,
+        circulationResult: {
+          ...state.circulationResult,
+          cage_geometries: meta.cage_geometries ?? state.circulationResult.cage_geometries,
+          circulation_geometry: meta.circulation_geometry ?? state.circulationResult.circulation_geometry,
+          centerline: meta.centerline ?? state.circulationResult.centerline,
+          evacuation_dots: meta.evacuation_dots ?? state.circulationResult.evacuation_dots,
+        },
+        // wybór innej iteracji unieważnia ewentualny wcześniejszy podział na
+        // mieszkania (ten sam wzorzec co ADD_MANUAL_CAGE/REMOVE_MANUAL_ELEMENT)
+        layoutResult: null,
+        validation: null,
+      };
+    }
+    case "SELECT_UNIT_ITERATION": {
+      // state.lastIterations (nie state.layoutResult.iterations) -- to jest
+      // dokładnie ta tablica którą renderuje ProgramSection.tsx, więc klik w
+      // wiersz zawsze trafia w meta z tej samej listy co user widzi.
+      if (!state.layoutResult) return state;
+      const meta = state.lastIterations.find((m) => m.seed === action.seed);
+      if (!meta || !meta.apartments) return state;
+      return {
+        ...state,
+        activeUnitSeed: action.seed,
+        layoutResult: {
+          ...state.layoutResult,
+          apartments: meta.apartments,
+          wall_bands: meta.wall_bands ?? state.layoutResult.wall_bands,
+          leftover: null,
+        },
+      };
+    }
     case "ADD_MANUAL_CAGE":
       return {
         ...state,
@@ -339,7 +383,7 @@ function reducer(state: SessionState, action: Action): SessionState {
       // apply-optimizer-variant) means the apartment geometry/IDs just changed --
       // any solarResult computed against the previous apartments is now stale
       // and must not linger on the canvas looking current.
-      return { ...state, layoutResult: action.result, solarResult: null };
+      return { ...state, layoutResult: action.result, solarResult: null, activeUnitSeed: null };
     case "SET_VALIDATION":
       return { ...state, validation: action.validation };
     case "SET_TYPOLOGY_SUGGESTION":
@@ -466,6 +510,10 @@ interface SessionContextValue {
   addManualCorridor: (path: Point2D[]) => void;
   removeManualElement: (id: string) => void;
   setHoveredManualId: (id: string | null) => void;
+  selectCageIteration: (seed: number) => void;
+  selectUnitIteration: (seed: number) => void;
+  activeCageSeed: number | null;
+  activeUnitSeed: number | null;
   regenerate: () => Promise<void>;
   runPlaceCirculation: (overrides?: {
     manualCages?: ManualCage[];
@@ -604,6 +652,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const addManualCorridor = useCallback((path: Point2D[]) => dispatch({ type: "ADD_MANUAL_CORRIDOR", path }), []);
   const removeManualElement = useCallback((id: string) => dispatch({ type: "REMOVE_MANUAL_ELEMENT", id }), []);
   const setHoveredManualId = useCallback((id: string | null) => dispatch({ type: "SET_HOVERED_MANUAL", id }), []);
+  const selectCageIteration = useCallback((seed: number) => {
+    dispatch({ type: "SELECT_CAGE_ITERATION", seed });
+  }, []);
+  const selectUnitIteration = useCallback((seed: number) => {
+    dispatch({ type: "SELECT_UNIT_ITERATION", seed });
+  }, []);
 
   const setGps = useCallback((gps: { lat: number; lng: number }) => dispatch({ type: "SET_GPS", gps }), []);
   const setAnalysisDate = useCallback((date: string) => dispatch({ type: "SET_ANALYSIS_DATE", date }), []);
@@ -1003,6 +1057,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       addManualCorridor,
       removeManualElement,
       setHoveredManualId,
+      selectCageIteration,
+      selectUnitIteration,
+      activeCageSeed: state.activeCageSeed,
+      activeUnitSeed: state.activeUnitSeed,
       regenerate,
       runPlaceCirculation,
       runSubdivideUnits,
@@ -1040,6 +1098,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       addManualCorridor,
       removeManualElement,
       setHoveredManualId,
+      selectCageIteration,
+      selectUnitIteration,
       regenerate,
       runPlaceCirculation,
       runSubdivideUnits,

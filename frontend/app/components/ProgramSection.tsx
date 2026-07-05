@@ -17,7 +17,15 @@ function polygonArea(points: { x: number; y: number }[]): number {
 }
 
 export default function ProgramSection() {
-  const { state, updateProgramRow, addProgramRow, removeProgramRow, setUnitWeight } = useSession();
+  const {
+    state,
+    updateProgramRow,
+    addProgramRow,
+    removeProgramRow,
+    setUnitWeight,
+    selectUnitIteration,
+    activeUnitSeed,
+  } = useSession();
 
   const footprintArea = state.footprint ? polygonArea(state.footprint) : 0;
   // min_area_m2/target_count są pochodne (środek zakresu × zaokrąglony udział %
@@ -190,19 +198,22 @@ export default function ProgramSection() {
           <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
             Iteracje ({state.lastIterations.length})
           </div>
+          <div className="text-[9px] text-zinc-600">niżej = lepiej, 0 = idealne dopasowanie do wag</div>
           {state.lastIterations.map((m) => {
             const isBest = state.lastIterations.every((o) => m.score <= o.score);
+            const isActive = activeUnitSeed === m.seed || (activeUnitSeed === null && isBest);
             return (
-              <div
+              <button
                 key={m.seed}
-                className={`flex items-center justify-between rounded px-2 py-0.5 font-mono text-[11px] ${
-                  isBest ? "bg-accent-500/15 text-accent-400" : "text-zinc-500"
-                }`}
+                onClick={() => selectUnitIteration(m.seed)}
+                className={`flex w-full items-center justify-between rounded px-2 py-0.5 font-mono text-[11px] transition-colors ${
+                  isBest ? "text-accent-400" : "text-zinc-500"
+                } ${isActive ? "bg-accent-500/15 ring-1 ring-inset ring-accent-500/40" : "hover:bg-zinc-800/50"}`}
               >
-                <span>#{m.seed}</span>
+                <span>#{m.seed}{isBest ? " ★" : ""}</span>
                 <span>{m.units_count} szt.</span>
-                <span>score {m.score.toFixed(3)}</span>
-              </div>
+                <span>odchylenie {m.score.toFixed(3)}</span>
+              </button>
             );
           })}
         </div>
