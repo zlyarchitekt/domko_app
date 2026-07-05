@@ -223,3 +223,78 @@ def test_units_endpoint_returns_iterations_and_no_leftover():
     assert body["derived_total_units"] >= 1
     assert len(body["iterations"]) == 5
     assert body["best_seed"] in [m["seed"] for m in body["iterations"]]
+
+
+def test_units_endpoint_classic_fallback_for_legacy_payload():
+    """Regression: /layout/units must still serve pre-Etap-4 callers whose
+    apartments carry no `percentage` at all (old min_area_m2/target_count
+    contract) -- subdivide_units_endpoint's `if shares:` gate (built by
+    filtering request.apartments to a.percentage > 0) must fall through to
+    the classic subdivide_units() path instead of raising derive_total_units's
+    422 "wszystkie udziały procentowe są zerowe" (percentage defaults to 0.0
+    on ApartmentProgram, so an all-legacy payload produces an empty `shares`
+    list, not a bad one). This locks in that the gate itself -- not just the
+    new-engine path exercised by test_units_endpoint_returns_iterations_and_
+    no_leftover above -- is protected by a test."""
+    from fastapi.testclient import TestClient
+
+    from main import app
+
+    client = TestClient(app)
+    remainder = Polygon([(0, 0), (30, 0), (30, 4), (0, 4)]).__geo_interface__
+    payload = {
+        "remainder": dict(remainder),
+        "apartments": [
+            # Old shape: no `percentage` key at all -- defaults to 0.0, so
+            # this apartment is filtered out of `shares` and the gate is
+            # False. target_count=2 * min_area_m2=40 = 80 m2 leaves 40 m2
+            # of the 120 m2 remainder un-programmed, so leftover is real
+            # (not None) -- this is the classic path's actual behavior,
+            # distinct from the new engine's zero-leftover guarantee.
+            {"type": "M2", "min_area_m2": 40, "target_count": 2},
+        ],
+    }
+    res = client.post("/api/v1/layout/units", json=payload)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    # Classic fallback ran (not the new iterative engine):
+    assert body["derived_total_units"] == 0
+    assert body["iterations"] == []
+    assert body["best_seed"] == 0
+    # subdivide_units() actually produced a real leftover here -- "leftover
+    # is always None" is a guarantee of the new engine only (spec §3), not
+    # a universal property of /layout/units.
+    assert body["leftover"] is not None
+    assert len(body["apartments"]) == 2
+
+
+def test_generate_endpoint_classic_fallback_for_legacy_payload():
+    """Same gate/branch-selection regression as the /layout/units test above,
+    but for /layout/generate's mirrored `if input.program_shares: ... else:
+    ...` gate in services.layout.generate_layout -- no existing test asserted
+    derived_total_units/iterations for this endpoint's classic branch
+    (test_layout.py's and test_cage_placement.py's old-style-apartments
+    /generate calls only check apartments/zones/cage_iterations, never these
+    fields)."""
+    from fastapi.testclient import TestClient
+
+    from main import app
+
+    client = TestClient(app)
+    payload = {
+        "footprint": [[0, 0], [20, 0], [20, 20], [0, 20]],
+        "circulation": {"corridor_width_m": 2.0, "cage_size_m": 3.0, "place_cage": False},
+        "apartments": [
+            # Old shape again: no `percentage` -- program_shares ends up
+            # empty, so generate_layout() takes its classic subdivide_units
+            # branch (services/layout.py else-branch).
+            {"type": "1-room", "min_area_m2": 25, "target_count": 4, "width_m": 4, "depth_m": 7},
+        ],
+    }
+    res = client.post("/api/v1/layout/generate", json=payload)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["derived_total_units"] == 0
+    assert body["iterations"] == []
+    assert body["best_seed"] == 0
+    assert len(body["apartments"]) > 0
