@@ -197,6 +197,12 @@ class IterationMeta:
     units_count: int
     components: dict = field(default_factory=dict)
     """dev per waga: {"size": ..., "mix": ..., ...} -- 0 = idealnie."""
+    cells: list = field(default_factory=list)
+    """list[ApartmentCell] -- pełne komórki TEJ iteracji (nie tylko
+    najlepszej), spec 2026-07-05-circulation-iteration-selection-and-drag
+    §1. Typ `list` bez parametru celowo -- ApartmentCell żyje w
+    services.layout, import tu utworzyłby cykl (layout.py importuje z
+    unit_mix.py)."""
 
 
 def derive_total_units(net_remainder_m2: float, shares: list[ProgramShare]) -> int:
@@ -388,7 +394,8 @@ def iterate_units(
             cells = [_Cell(id=str(_uuid.uuid4()), type=shares[0].type, polygon=whole)]
             cells[0].net_area_m2 = net_area
         score, components = _score_iteration(cells, shares, weights, footprint, circulation_geometry)
-        metas.append(IterationMeta(seed=seed, score=score, units_count=len(cells), components=components))
+        metas.append(IterationMeta(seed=seed, score=score, units_count=len(cells),
+                                   components=components, cells=list(cells)))
         if best is None or score < best[0]:
             best = (score, cells)
     best_seed = min(metas, key=lambda m: m.score).seed

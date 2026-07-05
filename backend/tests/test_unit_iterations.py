@@ -268,6 +268,42 @@ def test_units_endpoint_classic_fallback_for_legacy_payload():
     assert len(body["apartments"]) == 2
 
 
+def test_iterate_units_metas_carry_full_cells():
+    remainder = _rect(0, 0, 24, 10)
+    _, metas, best_seed, _ = iterate_units(remainder, SHARES, iterations=5)
+    for m in metas:
+        assert m.cells is not None
+        assert len(m.cells) == m.units_count
+        total_area = sum(c.polygon.area for c in m.cells)
+        assert abs(total_area - remainder.area) < 1e-6  # zero-leftover per iteracja
+
+
+def test_units_endpoint_iterations_carry_geometry_and_walls():
+    from fastapi.testclient import TestClient
+    from main import app
+
+    client = TestClient(app)
+    remainder = Polygon([(0, 0), (24, 0), (24, 10), (0, 10)]).__geo_interface__
+    payload = {
+        "remainder": dict(remainder),
+        "footprint": [[0, 0], [24, 0], [24, 10], [0, 10]],
+        "apartments": [
+            {"type": "M2", "percentage": 50, "area_min_m2": 38, "area_max_m2": 48,
+             "min_area_m2": 43, "target_count": 0},
+            {"type": "M3", "percentage": 50, "area_min_m2": 58, "area_max_m2": 70,
+             "min_area_m2": 64, "target_count": 0},
+        ],
+        "iterations": 5,
+    }
+    res = client.post("/api/v1/layout/units", json=payload)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert len(body["iterations"]) == 5
+    for it in body["iterations"]:
+        assert len(it["apartments"]) == it["units_count"]
+        assert len(it["wall_bands"]) > 0
+
+
 def test_generate_endpoint_classic_fallback_for_legacy_payload():
     """Same gate/branch-selection regression as the /layout/units test above,
     but for /layout/generate's mirrored `if input.program_shares: ... else:

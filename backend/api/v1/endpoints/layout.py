@@ -50,6 +50,8 @@ class IterationMetaResult(BaseModel):
     score: float
     units_count: int
     components: dict[str, float] = {}
+    apartments: list["ApartmentResult"] = []
+    wall_bands: list[dict] = []
 
 
 class CageWeightsInput(BaseModel):
@@ -281,34 +283,7 @@ def layout_result_to_response(layout: LayoutResult, wt: WTValidationResult) -> L
     wall_cells = [a.polygon for a in layout.apartments]
     if layout.circulation_geometry is not None:
         wall_cells.append(layout.circulation_geometry)
-    wall_geoms = [exterior_wall_band(layout.footprint)]
-    if wall_cells:
-        interior_bands = interior_wall_bands(layout.footprint, wall_cells)
-        if layout.leftover is not None and not layout.leftover.is_empty:
-            # interior_wall_bands() infers "wall" from "not covered by any real
-            # cell's net polygon" -- LayoutResult.leftover satisfies that same
-            # condition without being a wall (it's legitimately un-programmed
-            # floor space). Subtract the RAW leftover polygon (not a net-shrunk
-            # version) back out here so it renders as a fully open hole with no
-            # wall contour at all -- spec docs/superpowers/specs/2026-07-04-
-            # wall-thickness-design.md §3: "bez ściany dookoła" (no wall around
-            # it). Raw, not net_polygon(leftover), is correct: leftover is
-            # constructed disjoint from every real cell (core engine tiles space
-            # with zero gap), so `.difference(leftover)` can never erase a
-            # genuine inter-cell wall -- there's nothing to protect by shrinking
-            # the subtrahend first. Net-shrinking it first would instead leave a
-            # rim of fake wall exactly at leftover's boundary against a real
-            # neighbour (contradicting "no wall around it"), and degenerates to
-            # a silent no-op for any leftover sliver narrower than
-            # 2*NET_SHRINK_M=0.20m (net_polygon() returns empty for shapes that
-            # can't survive the shrink -- see test_wall_bands_excludes_thin_
-            # leftover_sliver). wall_geometry.py itself stays unaware of
-            # "leftover" -- that's a LayoutResult-level concept, not a generic
-            # geometry-helper concern -- so the exclusion lives here, at the
-            # integration point.
-            interior_bands = interior_bands.difference(layout.leftover)
-        wall_geoms.append(interior_bands)
-    wall_bands_out = [g for geom in wall_geoms for g in _decompose_to_polygons(geom)]
+    wall_bands_out = _compute_wall_bands(layout.footprint, wall_cells, layout.leftover)
 
     return LayoutGenerateResponse(
         footprint_area_m2=layout.footprint_area_m2,
@@ -338,7 +313,7 @@ def layout_result_to_response(layout: LayoutResult, wt: WTValidationResult) -> L
         derived_total_units=layout.derived_total_units,
         net_remainder_m2=layout.net_remainder_m2,
         iterations=[
-            IterationMetaResult(seed=m.seed, score=m.score, units_count=m.units_count, components=m.components)
+            _serialize_unit_iteration(m, layout.footprint, layout.circulation_geometry)
             for m in layout.iteration_metas
         ],
         best_seed=layout.best_seed,
@@ -367,6 +342,32 @@ def _decompose_to_polygons(geom: Polygon | None) -> list[dict]:
             if part.geom_type == "Polygon"
         ]
     return []
+
+
+def _compute_wall_bands(
+    footprint: Polygon, wall_cells: list[Polygon], leftover: Polygon | None
+) -> list[dict]:
+    """Pasy ścian (zewn.+wewn.) dla danego zestawu komórek -- wspólne dla
+    /layout/generate, /layout/units (wynik główny) i /layout/units (wynik
+    każdej iteracji, Task 2). `wall_cells` to apartments+circulation_geometry
+    (jeśli istnieje), BEZ leftover (patrz interior_wall_bands docstring).
+
+    Jeśli `leftover` jest podany (niepusty), jest odejmowany z powrotem od
+    interior_wall_bands jako RAW polygon (nie net_polygon(leftover)) --
+    interior_wall_bands() traktuje "niepokryte żadną realną komórką" jako
+    "ściana", a leftover to legalnie nieprzydzielona przestrzeń, nie ściana
+    (spec 2026-07-04-wall-thickness-design.md §3: "bez ściany dookoła").
+    Odjęcie surowego leftover jest bezpieczne, bo leftover jest zawsze
+    rozłączny z każdą realną komórką (silnik kafelkuje przestrzeń bez luk) --
+    nie może więc wymazać prawdziwej ściany międzykomórkowej (patrz commit
+    10341e3 i test_wall_bands_excludes_thin_leftover_sliver)."""
+    wall_geoms = [exterior_wall_band(footprint)]
+    if wall_cells:
+        interior_bands = interior_wall_bands(footprint, wall_cells)
+        if leftover is not None and not leftover.is_empty:
+            interior_bands = interior_bands.difference(leftover)
+        wall_geoms.append(interior_bands)
+    return [g for geom in wall_geoms for g in _decompose_to_polygons(geom)]
 
 
 def _finite_or_none(x: float) -> float | None:
@@ -416,6 +417,28 @@ def _serialize_cage_iteration(m) -> "CageIterationMetaResult":
         ),
         centerline=_serialize_centerline(m.result.centerline) if m.result is not None else [],
         evacuation_dots=_serialize_dots(m.result.evacuation_dots) if m.result is not None else [],
+    )
+
+
+def _serialize_unit_iteration(m, footprint: Polygon | None, circulation_geometry) -> "IterationMetaResult":
+    apartments_out = [
+        ApartmentResult(
+            id=c.id, type=c.type, area_m2=c.polygon.area, net_area_m2=c.net_area_m2,
+            geometry=json.loads(json.dumps(c.polygon.__geo_interface__)),
+        )
+        for c in m.cells
+    ]
+    wall_bands_out: list[dict] = []
+    if footprint is not None:
+        wall_cells = [c.polygon for c in m.cells]
+        if circulation_geometry is not None:
+            wall_cells.append(circulation_geometry)
+        # iterate_units gwarantuje zero resztek (spec Etap 4 §3) -- leftover
+        # zawsze None dla każdej iteracji tego silnika, nie tylko najlepszej.
+        wall_bands_out = _compute_wall_bands(footprint, wall_cells, None)
+    return IterationMetaResult(
+        seed=m.seed, score=m.score, units_count=m.units_count, components=m.components,
+        apartments=apartments_out, wall_bands=wall_bands_out,
     )
 
 
@@ -636,37 +659,26 @@ def subdivide_units_endpoint(request: UnitsRequest):
 
     wall_bands_out: list[dict] = []
     if footprint is not None:
-        # Same pattern as layout_result_to_response() (shared with
-        # /layout/generate and the optimizer endpoints): wall_cells is every
-        # real cell that should get a net-shrunk footprint carved out of the
-        # wall envelope -- apartments plus circulation/cage geometry.
+        # wall_cells is every real cell that should get a net-shrunk
+        # footprint carved out of the wall envelope -- apartments plus
+        # circulation/cage geometry. leftover is None whenever the
+        # %-structure iterate_units path ran above (zero-remainder
+        # guarantee, spec §3); it's only ever real for the classic
+        # subdivide_units fallback below.
         wall_cells = [c.polygon for c in cells]
         if circulation_geometry is not None:
             wall_cells.append(circulation_geometry)
-
-        wall_geoms = [exterior_wall_band(footprint)]
-        if wall_cells:
-            interior_bands = interior_wall_bands(footprint, wall_cells)
-            if leftover is not None and not leftover.is_empty:
-                # Subtract the RAW leftover polygon here too -- not
-                # net_polygon(leftover) -- exactly the fix from Wall Task 4
-                # (commit 10341e3, "revert leftover exclusion to subtract raw
-                # polygon, not net-shrunk, avoids thin-sliver regression").
-                # leftover is subdivide_units()'s own un-programmed slice,
-                # constructed disjoint from every real cell, so raw
-                # subtraction can never erase a genuine inter-cell wall.
-                # NOTE: leftover is None whenever the %-structure iterate_units
-                # path ran above (it guarantees zero remainder, spec §3) --
-                # this branch only ever fires for the classic subdivide_units
-                # fallback (no apartment carried a percentage).
-                interior_bands = interior_bands.difference(leftover)
-            wall_geoms.append(interior_bands)
-        wall_bands_out = [g for geom in wall_geoms for g in _decompose_to_polygons(geom)]
+        wall_bands_out = _compute_wall_bands(footprint, wall_cells, leftover)
 
     if hasattr(remainder, "geoms"):
         net_remainder_m2 = sum(net_polygon(p).area for p in remainder.geoms)
     else:
         net_remainder_m2 = net_polygon(remainder).area
+
+    iterations_out = (
+        [_serialize_unit_iteration(m, footprint, circulation_geometry) for m in iteration_metas]
+        if shares else []
+    )
 
     return UnitsResponse(
         apartments=apartments_out,
@@ -674,10 +686,7 @@ def subdivide_units_endpoint(request: UnitsRequest):
         wall_bands=wall_bands_out,
         derived_total_units=derived_total,
         net_remainder_m2=net_remainder_m2,
-        iterations=[
-            IterationMetaResult(seed=m.seed, score=m.score, units_count=m.units_count, components=m.components)
-            for m in iteration_metas
-        ],
+        iterations=iterations_out,
         best_seed=best_seed,
     )
 
