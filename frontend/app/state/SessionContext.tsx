@@ -98,6 +98,8 @@ const initialCirculation: api.CirculationSpecInput = {
   manual_corridors: [],
   max_dist_single_m: 20,
   max_dist_multi_m: 40,
+  cage_iterations: 0,
+  cage_weights: { egress: 1.0, count: 0.5, corners: 0.3, ends: 0.3, spread: 0.5 },
 };
 
 const INITIAL_TOTAL_UNITS = 10;
@@ -429,7 +431,11 @@ interface SessionContextValue {
   removeManualElement: (id: string) => void;
   setHoveredManualId: (id: string | null) => void;
   regenerate: () => Promise<void>;
-  runPlaceCirculation: (overrides?: { manualCages?: ManualCage[]; manualCorridors?: ManualCorridor[] }) => Promise<boolean>;
+  runPlaceCirculation: (overrides?: {
+    manualCages?: ManualCage[];
+    manualCorridors?: ManualCorridor[];
+    circulationOverride?: Partial<api.CirculationSpecInput>;
+  }) => Promise<boolean>;
   runSubdivideUnits: () => Promise<void>;
   runReshapeCirculation: (segments: [Point2D, Point2D][]) => Promise<void>;
   runRecomputeEvacuation: () => Promise<void>;
@@ -456,7 +462,19 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (parsed) dispatch({ type: "RESTORE_STATE", state: parsed });
+        // Backfill: sesje zapisane w localStorage przed dodaniem
+        // cage_iterations/cage_weights (Etap 2b) nie mają tych pól w
+        // parsed.circulation. Bez tego merge'a suwaki wag odczytujące
+        // state.circulation.cage_weights[key].toFixed(2) rzucają
+        // TypeError na undefined przy pierwszym renderze po wgraniu tej
+        // zmiany -- w przeciwieństwie do starszych pól (liczby proste),
+        // które w gorszym razie dają tylko "uncontrolled input".
+        if (parsed) {
+          dispatch({
+            type: "RESTORE_STATE",
+            state: { ...parsed, circulation: { ...initialCirculation, ...parsed.circulation } },
+          });
+        }
       } catch (err) {
         console.error("Nie udało się odtworzyć sesji z localStorage", err);
       }
@@ -599,7 +617,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, [state.footprint, buildRequest, state.circulation, state.manualCages, state.manualCorridors]);
 
   const runPlaceCirculation = useCallback(
-    async (overrides?: { manualCages?: ManualCage[]; manualCorridors?: ManualCorridor[] }): Promise<boolean> => {
+    async (overrides?: {
+      manualCages?: ManualCage[];
+      manualCorridors?: ManualCorridor[];
+      circulationOverride?: Partial<api.CirculationSpecInput>;
+    }): Promise<boolean> => {
       if (!state.footprint || state.footprint.length < 3) return false;
       // overrides: handler po dispatch(ADD_/REMOVE_) ma świeżą listę wcześniej
       // niż state z closure — bez tego pierwszy przelicz po dodaniu elementu
@@ -610,6 +632,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       try {
         const result = await api.placeCirculation(footprintToPoints(state.footprint), {
           ...state.circulation,
+          ...(overrides?.circulationOverride ?? {}),
+          // manual_cages/manual_corridors zawsze na końcu — circulationOverride
+          // (np. { cage_iterations: 10 } z przycisku "Rozmieść iteracyjnie")
+          // nigdy nie może po cichu nadpisać świeżej listy elementów ręcznych.
           manual_cages: cages.map((c) => c.ring.map((p) => [p.x, p.y] as api.Point)),
           manual_corridors: corridors.map((c) => c.path.map((p) => [p.x, p.y] as api.Point)),
         });

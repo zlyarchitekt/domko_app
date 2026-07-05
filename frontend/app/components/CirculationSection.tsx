@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { Move } from "lucide-react";
 import { useSession } from "../state/SessionContext";
+import * as api from "../lib/api";
 import { CagePosition } from "../lib/api";
 
 const CAGE_MODES: { value: CagePosition; label: string }[] = [
@@ -157,6 +158,37 @@ export default function CirculationSection() {
         />
       </label>
 
+      <details className="pt-1">
+        <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+          Wagi klatek
+        </summary>
+        <div className="space-y-1.5 pt-1.5">
+          {(
+            [
+              ["egress", "Minimalizuj złe dojścia"],
+              ["count", "Minimalizuj liczbę klatek"],
+              ["corners", "Klatki w narożnikach"],
+              ["ends", "Klatki na końcach"],
+              ["spread", "Równomierne rozmieszczenie"],
+            ] as [keyof api.CageWeightsInput, string][]
+          ).map(([key, label]) => (
+            <label key={key} className="flex items-center justify-between text-xs text-zinc-400">
+              <span>{label} ({state.circulation.cage_weights[key].toFixed(2)})</span>
+              <input
+                type="range" min={0} max={1} step={0.05}
+                value={state.circulation.cage_weights[key]}
+                onChange={(e) =>
+                  setCirculation({
+                    cage_weights: { ...state.circulation.cage_weights, [key]: Number(e.target.value) },
+                  })
+                }
+                className="ml-2 w-24 accent-accent-500"
+              />
+            </label>
+          ))}
+        </div>
+      </details>
+
       <div className="flex flex-col gap-1.5 pt-1">
         <button
           onClick={() => void runPlaceCirculation()}
@@ -165,6 +197,14 @@ export default function CirculationSection() {
         >
           <span className="flex h-4 w-4 items-center justify-center rounded-full bg-white/20 text-[10px]">1</span>
           {state.isLoading ? "Umieszczam..." : "Umieść korytarz i klatkę"}
+        </button>
+        <button
+          onClick={() => void runPlaceCirculation({ circulationOverride: { cage_iterations: 10 } })}
+          disabled={!state.footprint || state.isLoading}
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent-500 px-3 py-2 text-xs font-medium text-white transition-all hover:bg-accent-400 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 light:disabled:bg-zinc-200 light:disabled:text-zinc-400"
+          title="10 iteracji lokalizacji klatek, wygrywa najlepszy score wg wag"
+        >
+          {state.isLoading ? "Iteruję..." : "Rozmieść iteracyjnie"}
         </button>
         <button
           onClick={() => void runSubdivideUnits()}
@@ -233,6 +273,28 @@ export default function CirculationSection() {
           Rysuj korytarz
         </button>
       </div>
+
+      {(state.circulationResult?.cage_iterations?.length ?? 0) > 0 && (
+        <div className="space-y-0.5 pt-1">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+            Iteracje klatek ({state.circulationResult!.cage_iterations!.length})
+          </div>
+          {state.circulationResult!.cage_iterations!.map((m) => (
+            <div
+              key={m.seed}
+              className={`flex items-center justify-between rounded px-2 py-0.5 font-mono text-[11px] ${
+                m.seed === (state.circulationResult!.cage_best_seed ?? -1)
+                  ? "bg-accent-500/15 text-accent-400"
+                  : "text-zinc-500"
+              }`}
+            >
+              <span>#{m.seed}</span>
+              <span>{m.cages_count} klatek</span>
+              <span>score {m.score.toFixed(3)}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {(state.manualCages.length > 0 || state.manualCorridors.length > 0) && (
         <div className="space-y-1 pt-1">

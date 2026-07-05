@@ -121,6 +121,21 @@ export interface ApartmentProgramInput {
   depth_m?: number | null;
 }
 
+export interface CageWeightsInput {
+  egress: number;
+  count: number;
+  corners: number;
+  ends: number;
+  spread: number;
+}
+
+export interface CageIterationMeta {
+  seed: number;
+  score: number;
+  cages_count: number;
+  components?: Record<string, number>;
+}
+
 export interface CirculationSpecInput {
   corridor_width_m: number;
   stair_width_m: number;
@@ -132,6 +147,8 @@ export interface CirculationSpecInput {
   manual_corridors: Point[][];
   max_dist_single_m: number;
   max_dist_multi_m: number;
+  cage_iterations: number;
+  cage_weights: CageWeightsInput;
 }
 
 export interface LayoutGenerateRequest {
@@ -209,6 +226,8 @@ export interface CirculationResponse {
   centerline: CorridorCenterlineSegment[];
   warnings?: string[];
   evacuation_dots?: EvacuationDot[];
+  cage_iterations?: CageIterationMeta[];
+  cage_best_seed?: number;
 }
 
 export function placeCirculation(
