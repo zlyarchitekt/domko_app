@@ -150,6 +150,20 @@ def test_circulation_endpoint_iterative_mode():
     assert body["cage_geometries"]
 
 
+def test_iterate_cage_placement_metas_carry_full_result():
+    footprint = _rect(0, 0, 40, 12)
+    _, metas, best_seed = iterate_cage_placement(
+        footprint, 1.5, num_cages=2, weights=CageWeights(), iterations=5
+    )
+    for m in metas:
+        assert m.result is not None
+        assert isinstance(m.result.cage_polygons, list)
+        # liczba klatek w wyniku zgadza się z policzoną wcześniej cages_count
+        assert len(m.result.cage_polygons) == m.cages_count
+    best = next(m for m in metas if m.seed == best_seed)
+    assert len(best.result.centerline) >= 1
+
+
 def test_generate_endpoint_iterative_mode():
     from fastapi.testclient import TestClient
     from main import app
@@ -174,3 +188,29 @@ def test_generate_endpoint_iterative_mode():
     assert len(body["cage_iterations"]) >= 1
     assert body["cage_best_seed"] in [m["seed"] for m in body["cage_iterations"]]
     assert body["cage_geometries"]
+
+
+def test_circulation_endpoint_iterations_carry_geometry():
+    from fastapi.testclient import TestClient
+    from main import app
+
+    client = TestClient(app)
+    payload = {
+        "footprint": [[0, 0], [40, 0], [40, 12], [0, 12]],
+        "circulation": {
+            "corridor_width_m": 1.5, "stair_width_m": 1.2, "place_cage": True,
+            "cage_size_m": 2.5, "cage_position": "auto", "num_cages": 2,
+            "cage_iterations": 5,
+            "cage_weights": {"egress": 1.0, "count": 0.5, "corners": 0.3,
+                             "ends": 0.3, "spread": 0.5},
+        },
+        "apartments": [],
+    }
+    res = client.post("/api/v1/layout/circulation", json=payload)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert len(body["cage_iterations"]) >= 1
+    for it in body["cage_iterations"]:
+        assert "cage_geometries" in it
+        assert isinstance(it["cage_geometries"], list)
+        assert len(it["cage_geometries"]) == it["cages_count"]

@@ -65,6 +65,10 @@ class CageIterationMetaResult(BaseModel):
     score: float
     cages_count: int
     components: dict[str, float] = {}
+    cage_geometries: list[dict] = []
+    circulation_geometry: dict | None = None
+    centerline: list["CenterlineSegmentResult"] = []
+    evacuation_dots: list["EvacuationDotResult"] = []
 
 
 class CirculationSpec(BaseModel):
@@ -129,6 +133,15 @@ class EvacuationDotResult(BaseModel):
     y: float
     status: str
     distance_m: float | None = None
+
+
+class CenterlineSegmentResult(BaseModel):
+    points: list[list[float]]
+    loading: str
+    distance_start_m: float | None
+    distance_end_m: float | None
+    max_distance_m: float
+    exceeds_max: bool
 
 
 class LayoutGenerateResponse(BaseModel):
@@ -320,11 +333,7 @@ def layout_result_to_response(layout: LayoutResult, wt: WTValidationResult) -> L
         cage_geometries=[json.loads(json.dumps(c.__geo_interface__)) for c in layout.cage_polygons],
         wall_bands=wall_bands_out,
         evacuation_dots=_serialize_dots(layout.evacuation_dots),
-        cage_iterations=[
-            CageIterationMetaResult(seed=m.seed, score=m.score,
-                                     cages_count=m.cages_count, components=m.components)
-            for m in layout.cage_iteration_metas
-        ],
+        cage_iterations=[_serialize_cage_iteration(m) for m in layout.cage_iteration_metas],
         cage_best_seed=layout.cage_best_seed,
         derived_total_units=layout.derived_total_units,
         net_remainder_m2=layout.net_remainder_m2,
@@ -384,15 +393,6 @@ def _serialize_centerline(segments) -> list["CenterlineSegmentResult"]:
     ]
 
 
-class CenterlineSegmentResult(BaseModel):
-    points: list[list[float]]
-    loading: str
-    distance_start_m: float | None
-    distance_end_m: float | None
-    max_distance_m: float
-    exceeds_max: bool
-
-
 def _serialize_dots(dots) -> list["EvacuationDotResult"]:
     return [
         EvacuationDotResult(
@@ -401,6 +401,22 @@ def _serialize_dots(dots) -> list["EvacuationDotResult"]:
         )
         for d in dots
     ]
+
+
+def _serialize_cage_iteration(m) -> "CageIterationMetaResult":
+    return CageIterationMetaResult(
+        seed=m.seed, score=m.score, cages_count=m.cages_count, components=m.components,
+        cage_geometries=(
+            [json.loads(json.dumps(c.__geo_interface__)) for c in m.result.cage_polygons]
+            if m.result is not None else []
+        ),
+        circulation_geometry=(
+            json.loads(json.dumps(m.result.circulation_geometry.__geo_interface__))
+            if m.result is not None and m.result.circulation_geometry is not None else None
+        ),
+        centerline=_serialize_centerline(m.result.centerline) if m.result is not None else [],
+        evacuation_dots=_serialize_dots(m.result.evacuation_dots) if m.result is not None else [],
+    )
 
 
 class CirculationResponse(BaseModel):
@@ -498,11 +514,7 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
         centerline=_serialize_centerline(result.centerline),
         warnings=warnings,
         evacuation_dots=_serialize_dots(result.evacuation_dots),
-        cage_iterations=[
-            CageIterationMetaResult(seed=m.seed, score=m.score,
-                                     cages_count=m.cages_count, components=m.components)
-            for m in cage_iteration_metas
-        ],
+        cage_iterations=[_serialize_cage_iteration(m) for m in cage_iteration_metas],
         cage_best_seed=cage_best_seed,
     )
 

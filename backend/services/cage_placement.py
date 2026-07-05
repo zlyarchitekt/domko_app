@@ -41,6 +41,11 @@ class CageIterationMeta:
     score: float
     cages_count: int
     components: dict = field(default_factory=dict)
+    result: "CirculationResult | None" = None
+    """Pełny wynik TEJ iteracji (klatki, korytarz, centerline, kropki) —
+    spec 2026-07-05-circulation-iteration-selection-and-drag §1. None
+    tylko jeśli ktoś konstruuje CageIterationMeta ręcznie bez wyniku
+    (nie zdarza się w iterate_cage_placement)."""
 
 
 def _candidate_cages(footprint: Polygon, zones: list[Zone]) -> list[tuple[int, Polygon]]:
@@ -193,7 +198,7 @@ def iterate_cage_placement(
         score, components = _score_placement(result, footprint, num_cages, weights)
         metas.append(CageIterationMeta(seed=seed, score=score,
                                        cages_count=len(result.cage_polygons),
-                                       components=components))
+                                       components=components, result=result))
         if best is None or score < best[0]:
             best = (score, result)
     if best is None:
