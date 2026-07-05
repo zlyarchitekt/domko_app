@@ -314,3 +314,55 @@ def test_circulation_endpoint_iterations_carry_geometry():
         assert isinstance(it["cage_geometries"], list)
         assert len(it["cage_geometries"]) == it["cages_count"]
         assert it["remainder"] is not None
+
+
+def test_manual_cage_merged_into_every_iteration_not_just_winner():
+    """Finding 1 (Etap 5 review, `/layout/circulation` endpoint fix): a
+    manually-drawn cage must be merged into EVERY cage iteration's result,
+    not just the winning one -- `_merge_manual_elements` mutates its
+    `result` argument in place, and the winning iteration's `.result` is the
+    SAME object as the loop-local `result` variable (aliased), so only that
+    one got merged before this fix. Every other (non-winning) iteration's
+    `.result` is a distinct `CirculationResult` from its own seed and
+    silently kept missing the manual cage."""
+    from fastapi.testclient import TestClient
+    from main import app
+
+    client = TestClient(app)
+    manual_cage_ring = [[35.0, 9.5], [38.0, 9.5], [38.0, 11.5], [35.0, 11.5]]
+    payload = {
+        "footprint": [[0, 0], [40, 0], [40, 12], [0, 12]],
+        "circulation": {
+            "corridor_width_m": 1.5, "stair_width_m": 1.2, "place_cage": True,
+            "cage_size_m": 2.5, "cage_position": "auto", "num_cages": 2,
+            "cage_iterations": 8,
+            "cage_weights": {"egress": 1.0, "count": 0.5, "corners": 0.3,
+                             "ends": 0.3, "spread": 0.5},
+            "manual_cages": [manual_cage_ring],
+        },
+        "apartments": [],
+    }
+    res = client.post("/api/v1/layout/circulation", json=payload)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert len(body["cage_iterations"]) >= 2, "need at least one non-winning iteration to test"
+
+    best_seed = body["cage_best_seed"]
+    non_winning = [it for it in body["cage_iterations"] if it["seed"] != best_seed]
+    assert non_winning, "expected at least one non-winning iteration"
+
+    manual_cage_area = Polygon(manual_cage_ring).area
+    for it in non_winning:
+        # cages_count only ever counts AUTO-placed cages (computed inside
+        # iterate_cage_placement before any manual merge happens) -- so
+        # len(cage_geometries) == cages_count + 1 proves the manual cage
+        # made it into THIS iteration's serialized geometry too.
+        assert len(it["cage_geometries"]) == it["cages_count"] + 1, (
+            f"seed={it['seed']}: manual cage missing from non-winning iteration's "
+            f"cage_geometries (got {len(it['cage_geometries'])}, expected "
+            f"{it['cages_count'] + 1})"
+        )
+        areas = [Polygon(g["coordinates"][0]).area for g in it["cage_geometries"]]
+        assert any(abs(a - manual_cage_area) < 1e-6 for a in areas), (
+            f"seed={it['seed']}: no cage_geometries entry matches the manual cage's area"
+        )

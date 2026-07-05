@@ -162,6 +162,7 @@ export interface CageIterationMeta {
   centerline?: CorridorCenterlineSegment[];
   evacuation_dots?: EvacuationDot[];
   remainder?: GeoJsonPolygon;
+  warnings?: string[];
 }
 
 export interface CirculationSpecInput {

@@ -212,6 +212,24 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
             input.manual_cages, input.manual_corridors,
             input.max_dist_single_m, input.max_dist_multi_m,
         )
+        # Finding 1 (Etap 5 review, dual-surface with the /layout/circulation
+        # endpoint's identical fix): the winning iteration's `.result` IS
+        # `circulation` (same object, aliased -- see iterate_cage_placement's
+        # `best = (score, result)` / `metas.append(..., result=result)`), so
+        # it's already merged above. Every OTHER iteration's `.result` is a
+        # distinct CirculationResult from its own seed and never got manual
+        # elements merged in -- without this, clicking a non-winning cage
+        # iteration silently drops manually-drawn cages/corridors from its
+        # serialized geometry.
+        for m in cage_iteration_metas:
+            if m.result is circulation:
+                continue
+            if m.result is not None:
+                m.result = _merge_manual_elements(
+                    m.result, footprint, input.corridor_width_m,
+                    input.manual_cages, input.manual_corridors,
+                    input.max_dist_single_m, input.max_dist_multi_m,
+                )
     else:
         circulation = place_circulation(
             footprint,

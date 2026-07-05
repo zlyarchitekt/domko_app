@@ -328,6 +328,7 @@ function reducer(state: SessionState, action: Action): SessionState {
           centerline: meta.centerline ?? state.circulationResult.centerline,
           evacuation_dots: meta.evacuation_dots ?? state.circulationResult.evacuation_dots,
           remainder: meta.remainder ?? state.circulationResult.remainder,
+          warnings: meta.warnings ?? state.circulationResult.warnings,
         },
         // wybór innej iteracji unieważnia ewentualny wcześniejszy podział na
         // mieszkania (ten sam wzorzec co ADD_MANUAL_CAGE/REMOVE_MANUAL_ELEMENT)
@@ -351,6 +352,10 @@ function reducer(state: SessionState, action: Action): SessionState {
           wall_bands: meta.wall_bands ?? state.layoutResult.wall_bands,
           leftover: null,
         },
+        // Same rationale as SET_LAYOUT_RESULT: apartment ids just changed,
+        // so any solarResult (keyed by apartment_id) computed against the
+        // previous apartments is now stale and must not linger.
+        solarResult: null,
       };
     }
     case "ADD_MANUAL_CAGE":

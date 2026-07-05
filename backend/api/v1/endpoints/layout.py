@@ -72,6 +72,11 @@ class CageIterationMetaResult(BaseModel):
     centerline: list["CenterlineSegmentResult"] = []
     evacuation_dots: list["EvacuationDotResult"] = []
     remainder: dict | None = None
+    warnings: list[str] = []
+    """Miękkie ostrzeżenia (np. korytarz niedotykający klatki) TEJ konkretnej
+    iteracji -- puste gdy manual_corridors nie podano przy serializacji
+    (np. z /layout/generate, który nie ma warnings na top-levelu),
+    naprawa Finding 2 (Etap 5 review)."""
 
 
 class CirculationSpec(BaseModel):
@@ -405,7 +410,23 @@ def _serialize_dots(dots) -> list["EvacuationDotResult"]:
     ]
 
 
-def _serialize_cage_iteration(m) -> "CageIterationMetaResult":
+def _compute_manual_corridor_warnings(manual_corridors, cage_polygons) -> list[str]:
+    """Miękkie ostrzeżenia gdy ręcznie narysowany korytarz nie styka się z
+    żadną klatką -- wydzielone z `place_circulation_endpoint` (Finding 2,
+    Etap 5 review) żeby dało się policzyć je PER ITERACJA cage_iterations,
+    a nie tylko raz przeciwko zwycięskiemu `result.cage_polygons`."""
+    warnings: list[str] = []
+    for i, path in enumerate(manual_corridors):
+        if len(path) < 2:
+            continue
+        axis = LineString([(p[0], p[1]) for p in path])
+        touches_any = any(axis.distance(c) <= 0.25 for c in cage_polygons)
+        if not touches_any:
+            warnings.append(f"Korytarz {i + 1} nie styka się z żadną klatką")
+    return warnings
+
+
+def _serialize_cage_iteration(m, manual_corridors: list | None = None) -> "CageIterationMetaResult":
     return CageIterationMetaResult(
         seed=m.seed, score=m.score, cages_count=m.cages_count, components=m.components,
         cage_geometries=(
@@ -421,6 +442,10 @@ def _serialize_cage_iteration(m) -> "CageIterationMetaResult":
         remainder=(
             json.loads(json.dumps(m.result.remainder.__geo_interface__))
             if m.result is not None else None
+        ),
+        warnings=(
+            _compute_manual_corridor_warnings(manual_corridors, m.result.cage_polygons)
+            if manual_corridors is not None and m.result is not None else []
         ),
     )
 
@@ -502,6 +527,23 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
                 manual_cages, manual_corridors,
                 circulation.max_dist_single_m, circulation.max_dist_multi_m,
             )
+            # Finding 1 (Etap 5 review): the winning iteration's `.result` IS
+            # `result` (same object, aliased -- see iterate_cage_placement's
+            # `best = (score, result)` / `metas.append(..., result=result)`),
+            # so it's already merged above. Every OTHER iteration's `.result`
+            # is a distinct CirculationResult from its own seed and never got
+            # manual elements merged in -- without this, clicking a
+            # non-winning cage iteration silently drops manually-drawn
+            # cages/corridors from its serialized geometry.
+            for m in cage_iteration_metas:
+                if m.result is result:
+                    continue
+                if m.result is not None:
+                    m.result = _merge_manual_elements(
+                        m.result, footprint, circulation.corridor_width_m,
+                        manual_cages, manual_corridors,
+                        circulation.max_dist_single_m, circulation.max_dist_multi_m,
+                    )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
     else:
@@ -522,14 +564,7 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
 
-    warnings: list[str] = []
-    for i, path in enumerate(circulation.manual_corridors):
-        if len(path) < 2:
-            continue
-        axis = LineString([(p[0], p[1]) for p in path])
-        touches_any = any(axis.distance(c) <= 0.25 for c in result.cage_polygons)
-        if not touches_any:
-            warnings.append(f"Korytarz {i + 1} nie styka się z żadną klatką")
+    warnings = _compute_manual_corridor_warnings(circulation.manual_corridors, result.cage_polygons)
 
     return CirculationResponse(
         circulation_geometry=(
@@ -542,7 +577,9 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
         centerline=_serialize_centerline(result.centerline),
         warnings=warnings,
         evacuation_dots=_serialize_dots(result.evacuation_dots),
-        cage_iterations=[_serialize_cage_iteration(m) for m in cage_iteration_metas],
+        cage_iterations=[
+            _serialize_cage_iteration(m, circulation.manual_corridors) for m in cage_iteration_metas
+        ],
         cage_best_seed=cage_best_seed,
     )
 
