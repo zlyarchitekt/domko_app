@@ -91,6 +91,11 @@ class LayoutInput:
     manual_corridors: list[list[tuple[float, float]]] = field(default_factory=list)
     apartments: list[ApartmentSpec] = field(default_factory=list)
     local_law: str | None = None
+    max_dist_single_m: float = 20.0
+    """Edytowalny próg zielonej kropki ewakuacyjnej (spec 2026-07-04-
+    evacuation-dots) -- passthrough do place_circulation()."""
+    max_dist_multi_m: float = 40.0
+    """Edytowalny próg szarej kropki ewakuacyjnej (>=2 klatki osiągalne)."""
 
 
 @dataclass
@@ -127,6 +132,9 @@ class LayoutResult:
     """Corridor width used at generation time — exact by construction, not re-measured."""
     stair_width_m: float = 0.0
     """Stair/cage width parameter used at generation time — exact by construction."""
+    evacuation_dots: list = field(default_factory=list)
+    """Passthrough z CirculationResult -- /layout/generate serializuje kropki
+    tak samo jak /layout/circulation (dual-surface gotcha)."""
 
 
 def generate_layout(input: LayoutInput) -> LayoutResult:
@@ -155,6 +163,8 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
         num_cages=input.num_cages,
         manual_cages=input.manual_cages,
         manual_corridors=input.manual_corridors,
+        max_dist_single_m=input.max_dist_single_m,
+        max_dist_multi_m=input.max_dist_multi_m,
     )
 
     apartments, leftover = subdivide_units(circulation.remainder, input.apartments)
@@ -177,6 +187,7 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
         cage_polygons=circulation.cage_polygons,
         corridor_width_m=input.corridor_width_m,
         stair_width_m=input.stair_width_m,
+        evacuation_dots=circulation.evacuation_dots,
     )
 
 

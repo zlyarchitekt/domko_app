@@ -385,6 +385,10 @@ class CirculationResult:
     """Może być MultiPolygon w praktyce mimo adnotacji typu (patrz spec §9) —
     konsumenci muszą sprawdzać hasattr(geom, "geoms")."""
     centerline: list[CorridorCenterlineSegment] = field(default_factory=list)
+    evacuation_dots: list = field(default_factory=list)
+    """list[EvacuationDot] -- spec 2026-07-04-evacuation-dots. Typ `list`
+    bez parametru, żeby uniknąć importu cyklicznego (evacuation.py importuje
+    stałe z tego modułu)."""
 
 
 @dataclass
@@ -434,6 +438,8 @@ def place_circulation(
     num_cages: int = 1,
     manual_cages: list[Polygon] | list[list[tuple[float, float]]] | None = None,
     manual_corridors: list[list[tuple[float, float]]] | None = None,
+    max_dist_single_m: float = CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M,
+    max_dist_multi_m: float = CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M,
 ) -> CirculationResult:
     """Etap 1: dzieli obrys na prawie-prostokątne strefy (rectangle_decompose),
     umieszcza klatkę i korytarz w każdej, zwraca zunifikowany wynik.
@@ -573,12 +579,25 @@ def place_circulation(
             loading = _classify_segment_loading(footprint, (p1, p2), corridor_width_m)
             centerline.append(_make_centerline_segment(p1, p2, loading, arc[i], arc[i + 1]))
 
+    # ── Kropki ewakuacyjne (spec 2026-07-04-evacuation-dots) ──
+    # Musi biec PO scaleniu manuali powyżej: `centerline` tutaj to już pełna
+    # lista auto+manual, `cage_polygons` też pełna auto+manual -- inaczej
+    # kropki ignorowałyby ręcznie dorysowane klatki/korytarze.
+    from services.evacuation import compute_evacuation_dots
+
+    all_segments = [seg.points for seg in centerline]
+    evacuation_dots = compute_evacuation_dots(
+        all_segments, cage_polygons,
+        green_max_m=max_dist_single_m, gray_max_m=max_dist_multi_m,
+    )
+
     return CirculationResult(
         zones=zones,
         circulation_geometry=circulation_geom if not circulation_geom.is_empty else None,
         cage_polygons=cage_polygons,
         remainder=remainder,
         centerline=centerline,
+        evacuation_dots=evacuation_dots,
     )
 
 
@@ -587,6 +606,8 @@ def reshape_circulation(
     centerline_points: list[tuple[tuple[float, float], tuple[float, float]]],
     corridor_width_m: float,
     cage_polygons: list[Polygon],
+    max_dist_single_m: float = CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M,
+    max_dist_multi_m: float = CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M,
 ) -> CirculationResult:
     """Przelicza geometrię korytarza + klasyfikację/odległości segmentów po
     edycji linii środkowej przez użytkownika (spec §3.6). Buduje geometrię
@@ -622,10 +643,18 @@ def reshape_circulation(
         d_start, d_end = arc_distances[i], arc_distances[i + 1]
         centerline.append(_make_centerline_segment(p1, p2, loading, d_start, d_end))
 
+    from services.evacuation import compute_evacuation_dots
+
+    evacuation_dots = compute_evacuation_dots(
+        centerline_points, cage_polygons,
+        green_max_m=max_dist_single_m, gray_max_m=max_dist_multi_m,
+    )
+
     return CirculationResult(
         zones=[],
         circulation_geometry=circulation_geom if not circulation_geom.is_empty else None,
         cage_polygons=cage_polygons,
         remainder=remainder,
         centerline=centerline,
+        evacuation_dots=evacuation_dots,
     )

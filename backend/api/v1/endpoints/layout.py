@@ -38,6 +38,10 @@ class CirculationSpec(BaseModel):
     (spec 2026-07-04 manual-circulation-drawing §3)."""
     manual_corridors: list[list[list[float]]] = Field(default_factory=list)
     """Łamane osi ręcznie narysowanych korytarzy [[x,y],...]."""
+    max_dist_single_m: float = Field(default=20.0, gt=0)
+    """Edytowalny próg zielonej kropki (heurystyka usera, nie § WT)."""
+    max_dist_multi_m: float = Field(default=40.0, gt=0)
+    """Edytowalny próg szarej kropki (>=2 klatki osiągalne)."""
 
 
 class LayoutGenerateRequest(BaseModel):
@@ -70,6 +74,13 @@ class WTResult(BaseModel):
     issues: list[str]
 
 
+class EvacuationDotResult(BaseModel):
+    x: float
+    y: float
+    status: str
+    distance_m: float | None = None
+
+
 class LayoutGenerateResponse(BaseModel):
     footprint_area_m2: float
     circulation_area_m2: float
@@ -87,6 +98,9 @@ class LayoutGenerateResponse(BaseModel):
     wall_bands: list[dict] = []
     """Pasy ścian (zewnętrzne + wewnętrzne), GeoJSON, do narysowania na
     płótnie -- spec 2026-07-04 wall-thickness §5.2."""
+    evacuation_dots: list[EvacuationDotResult] = []
+    """Kropki ewakuacyjne co 1m wzdłuż osi -- spec 2026-07-04-evacuation-dots
+    (dual-surface: musi być na wszystkich trzech odpowiedziach)."""
 
 
 @router.post("/generate", response_model=LayoutGenerateResponse)
@@ -126,6 +140,8 @@ def generate_layout_endpoint(request: LayoutGenerateRequest):
         manual_corridors=[[(p[0], p[1]) for p in path] for path in circulation.manual_corridors],
         apartments=specs,
         local_law=request.local_law,
+        max_dist_single_m=circulation.max_dist_single_m,
+        max_dist_multi_m=circulation.max_dist_multi_m,
     )
 
     try:
@@ -213,6 +229,7 @@ def layout_result_to_response(layout: LayoutResult, wt: WTValidationResult) -> L
         circulation_parts=_decompose_to_polygons(layout.circulation_geometry),
         cage_geometries=[json.loads(json.dumps(c.__geo_interface__)) for c in layout.cage_polygons],
         wall_bands=wall_bands_out,
+        evacuation_dots=_serialize_dots(layout.evacuation_dots),
     )
 
 
@@ -273,6 +290,16 @@ class CenterlineSegmentResult(BaseModel):
     exceeds_max: bool
 
 
+def _serialize_dots(dots) -> list["EvacuationDotResult"]:
+    return [
+        EvacuationDotResult(
+            x=d.x, y=d.y, status=d.status,
+            distance_m=_finite_or_none(d.distance_m) if d.distance_m is not None else None,
+        )
+        for d in dots
+    ]
+
+
 class CirculationResponse(BaseModel):
     circulation_geometry: dict | None = None
     cage_geometries: list[dict] = []
@@ -280,6 +307,8 @@ class CirculationResponse(BaseModel):
     centerline: list[CenterlineSegmentResult] = []
     warnings: list[str] = []
     """Miękkie ostrzeżenia (np. korytarz niedotykający klatki) -- spec §4."""
+    evacuation_dots: list[EvacuationDotResult] = []
+    """Kropki ewakuacyjne co 1m wzdłuż osi -- spec 2026-07-04-evacuation-dots."""
 
 
 @router.post("/circulation", response_model=CirculationResponse)
@@ -308,6 +337,8 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
             num_cages=circulation.num_cages,
             manual_cages=[[(p[0], p[1]) for p in ring] for ring in circulation.manual_cages],
             manual_corridors=[[(p[0], p[1]) for p in path] for path in circulation.manual_corridors],
+            max_dist_single_m=circulation.max_dist_single_m,
+            max_dist_multi_m=circulation.max_dist_multi_m,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -331,6 +362,7 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
         remainder=json.loads(json.dumps(result.remainder.__geo_interface__)),
         centerline=_serialize_centerline(result.centerline),
         warnings=warnings,
+        evacuation_dots=_serialize_dots(result.evacuation_dots),
     )
 
 
@@ -483,12 +515,18 @@ class ReshapeCirculationRequest(BaseModel):
     centerline: list[ReshapeSegmentInput] = Field(..., min_length=1)
     corridor_width_m: float = Field(..., gt=0)
     cage_geometries: list[dict] = Field(default_factory=list)
+    max_dist_single_m: float = Field(default=20.0, gt=0)
+    """Edytowalny próg zielonej kropki (heurystyka usera, nie § WT)."""
+    max_dist_multi_m: float = Field(default=40.0, gt=0)
+    """Edytowalny próg szarej kropki (>=2 klatki osiągalne)."""
 
 
 class ReshapeCirculationResponse(BaseModel):
     circulation_geometry: dict | None = None
     remainder: dict
     centerline: list[CenterlineSegmentResult] = []
+    evacuation_dots: list[EvacuationDotResult] = []
+    """Kropki ewakuacyjne co 1m wzdłuż osi -- spec 2026-07-04-evacuation-dots."""
 
 
 @router.post("/circulation/reshape", response_model=ReshapeCirculationResponse)
@@ -510,7 +548,14 @@ def reshape_circulation_endpoint(request: ReshapeCirculationRequest):
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid cage geometry: {exc}")
 
-    result = reshape_circulation(footprint, centerline_points, request.corridor_width_m, cage_polygons)
+    result = reshape_circulation(
+        footprint,
+        centerline_points,
+        request.corridor_width_m,
+        cage_polygons,
+        max_dist_single_m=request.max_dist_single_m,
+        max_dist_multi_m=request.max_dist_multi_m,
+    )
 
     return ReshapeCirculationResponse(
         circulation_geometry=(
@@ -520,4 +565,5 @@ def reshape_circulation_endpoint(request: ReshapeCirculationRequest):
         ),
         remainder=json.loads(json.dumps(result.remainder.__geo_interface__)),
         centerline=_serialize_centerline(result.centerline),
+        evacuation_dots=_serialize_dots(result.evacuation_dots),
     )

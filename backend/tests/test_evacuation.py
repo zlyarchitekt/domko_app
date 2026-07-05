@@ -67,3 +67,17 @@ def test_no_cages_all_red():
     segments = [((0.0, 0.0), (10.0, 0.0))]
     dots = compute_evacuation_dots(segments, [])
     assert dots and all(d.status == "red" and d.distance_m is None for d in dots)
+
+
+def test_place_circulation_returns_dots():
+    from shapely.geometry import Polygon as _P
+    from services.circulation import place_circulation
+
+    footprint = _P([(0, 0), (30, 0), (30, 12), (0, 12)])
+    result = place_circulation(
+        footprint, corridor_width_m=1.5, stair_width_m=1.2,
+        place_cage=True, cage_size_m=2.5, cage_position="auto", num_cages=1,
+    )
+    assert result.centerline  # sanity
+    assert result.evacuation_dots
+    assert {d.status for d in result.evacuation_dots} <= {"green", "gray", "red"}
