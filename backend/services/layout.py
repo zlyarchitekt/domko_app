@@ -123,6 +123,10 @@ class ApartmentCell:
     """Powierzchnia w świetle ścian (wall_geometry.net_polygon(polygon).area)
     -- spec 2026-07-04 wall-thickness §5.1. Domyślnie 0.0 dla ścieżek, które
     jej nie liczą (np. ręczna edycja mieszkania przed ponownym przeliczeniem)."""
+    merged_disjoint: bool = False
+    """True gdy zero-leftover merge dokleił do tej komórki część bez wspólnej
+    krawędzi (enklawę) -- kara +0.5 w komponencie adjacency scoringu, spec
+    2026-07-04-apartment-division-iterations §3."""
 
 
 @dataclass
