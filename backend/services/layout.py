@@ -87,6 +87,8 @@ class LayoutInput:
     cage_size_m: float = 2.5
     cage_position: str = "auto"
     num_cages: int = 1
+    manual_cages: list[list[tuple[float, float]]] = field(default_factory=list)
+    manual_corridors: list[list[tuple[float, float]]] = field(default_factory=list)
     apartments: list[ApartmentSpec] = field(default_factory=list)
     local_law: str | None = None
 
@@ -151,6 +153,8 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
         cage_size_m=input.cage_size_m,
         cage_position=input.cage_position,
         num_cages=input.num_cages,
+        manual_cages=input.manual_cages,
+        manual_corridors=input.manual_corridors,
     )
 
     apartments, leftover = subdivide_units(circulation.remainder, input.apartments)

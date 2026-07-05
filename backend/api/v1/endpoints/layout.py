@@ -3,7 +3,7 @@ import math
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from shapely.geometry import Polygon
+from shapely.geometry import LineString, Polygon
 from shapely.geometry import shape as _shape
 
 from services.circulation import CAGE_POSITION_MODES, place_circulation
@@ -33,6 +33,11 @@ class CirculationSpec(BaseModel):
         description=f"Tryb pozycji klatki wg plan.md §4.3: {CAGE_POSITION_MODES}",
     )
     num_cages: int = Field(default=1, ge=1)
+    manual_cages: list[list[list[float]]] = Field(default_factory=list)
+    """Ringi ręcznie narysowanych klatek [[x,y],...] bez duplikatu 1. punktu
+    (spec 2026-07-04 manual-circulation-drawing §3)."""
+    manual_corridors: list[list[list[float]]] = Field(default_factory=list)
+    """Łamane osi ręcznie narysowanych korytarzy [[x,y],...]."""
 
 
 class LayoutGenerateRequest(BaseModel):
@@ -117,12 +122,16 @@ def generate_layout_endpoint(request: LayoutGenerateRequest):
         cage_size_m=circulation.cage_size_m,
         cage_position=circulation.cage_position,
         num_cages=circulation.num_cages,
+        manual_cages=[[(p[0], p[1]) for p in ring] for ring in circulation.manual_cages],
+        manual_corridors=[[(p[0], p[1]) for p in path] for path in circulation.manual_corridors],
         apartments=specs,
         local_law=request.local_law,
     )
 
     try:
         layout = generate_layout(layout_input)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Layout generation failed: {exc}")
 
@@ -269,6 +278,8 @@ class CirculationResponse(BaseModel):
     cage_geometries: list[dict] = []
     remainder: dict
     centerline: list[CenterlineSegmentResult] = []
+    warnings: list[str] = []
+    """Miękkie ostrzeżenia (np. korytarz niedotykający klatki) -- spec §4."""
 
 
 @router.post("/circulation", response_model=CirculationResponse)
@@ -286,15 +297,29 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
             detail=f"Invalid cage_position '{circulation.cage_position}'. Valid: {CAGE_POSITION_MODES}",
         )
 
-    result = place_circulation(
-        footprint,
-        corridor_width_m=circulation.corridor_width_m,
-        stair_width_m=circulation.stair_width_m,
-        place_cage=circulation.place_cage,
-        cage_size_m=circulation.cage_size_m,
-        cage_position=circulation.cage_position,
-        num_cages=circulation.num_cages,
-    )
+    try:
+        result = place_circulation(
+            footprint,
+            corridor_width_m=circulation.corridor_width_m,
+            stair_width_m=circulation.stair_width_m,
+            place_cage=circulation.place_cage,
+            cage_size_m=circulation.cage_size_m,
+            cage_position=circulation.cage_position,
+            num_cages=circulation.num_cages,
+            manual_cages=[[(p[0], p[1]) for p in ring] for ring in circulation.manual_cages],
+            manual_corridors=[[(p[0], p[1]) for p in path] for path in circulation.manual_corridors],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    warnings: list[str] = []
+    for i, path in enumerate(circulation.manual_corridors):
+        if len(path) < 2:
+            continue
+        axis = LineString([(p[0], p[1]) for p in path])
+        touches_any = any(axis.distance(c) <= 0.25 for c in result.cage_polygons)
+        if not touches_any:
+            warnings.append(f"Korytarz {i + 1} nie styka się z żadną klatką")
 
     return CirculationResponse(
         circulation_geometry=(
@@ -305,6 +330,7 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
         cage_geometries=[json.loads(json.dumps(c.__geo_interface__)) for c in result.cage_polygons],
         remainder=json.loads(json.dumps(result.remainder.__geo_interface__)),
         centerline=_serialize_centerline(result.centerline),
+        warnings=warnings,
     )
 
 
