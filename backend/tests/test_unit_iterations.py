@@ -195,3 +195,31 @@ def test_allocate_counts_all_zero_shares_raises():
     ]
     with pytest.raises(ValueError, match="wszystkie udziały procentowe są zerowe"):
         allocate_counts(zero_shares, total_units=10)
+
+
+def test_units_endpoint_returns_iterations_and_no_leftover():
+    from fastapi.testclient import TestClient
+
+    from main import app
+
+    client = TestClient(app)
+    remainder = Polygon([(0, 0), (24, 0), (24, 10), (0, 10)]).__geo_interface__
+    payload = {
+        "remainder": dict(remainder),
+        "apartments": [
+            {"type": "M2", "percentage": 50, "area_min_m2": 38, "area_max_m2": 48,
+             "min_area_m2": 43, "target_count": 0},
+            {"type": "M3", "percentage": 50, "area_min_m2": 58, "area_max_m2": 70,
+             "min_area_m2": 64, "target_count": 0},
+        ],
+        "iterations": 5,
+        "weights": {"size": 1.0, "mix": 1.0, "grid": 0, "shape": 0,
+                    "daylight": 0, "squareness": 0, "adjacency": 0},
+    }
+    res = client.post("/api/v1/layout/units", json=payload)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["leftover"] is None
+    assert body["derived_total_units"] >= 1
+    assert len(body["iterations"]) == 5
+    assert body["best_seed"] in [m["seed"] for m in body["iterations"]]

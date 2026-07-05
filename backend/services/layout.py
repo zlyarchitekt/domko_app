@@ -107,6 +107,11 @@ class LayoutInput:
     cage_weights: object = None
     """`services.cage_placement.CageWeights` gdy `cage_iterations > 0`; None
     (=domyślne wagi) w trybie klasycznym."""
+    iterations: int = 10
+    unit_weights: object = None
+    """services.unit_mix.UnitWeights | None."""
+    program_shares: list = field(default_factory=list)
+    """list[ProgramShare] -- gdy niepuste, generate_layout używa iterate_units."""
 
 
 @dataclass
@@ -156,6 +161,19 @@ class LayoutResult:
     iterations §4 (dual-surface z /layout/circulation)."""
     cage_best_seed: int = 0
     """Seed zwycięskiej iteracji trybu iteracyjnego (0 w trybie klasycznym)."""
+    iteration_metas: list = field(default_factory=list)
+    """Passthrough z iterate_units (list[IterationMeta]) -- puste gdy
+    generate_layout użył klasycznego subdivide_units (input.program_shares
+    puste), spec 2026-07-04-apartment-division-iterations §4 (dual-surface
+    z /layout/units)."""
+    best_seed: int = 0
+    """Seed zwycięskiej iteracji trybu iteracyjnego podziału na mieszkania
+    (0 w trybie klasycznym)."""
+    derived_total_units: int = 0
+    """Liczba mieszkań wyliczona ze struktury % (0 w trybie klasycznym)."""
+    net_remainder_m2: float = 0.0
+    """Powierzchnia netto pozostałości po komunikacji, wejście do
+    derive_total_units (0.0 w trybie klasycznym)."""
 
 
 def generate_layout(input: LayoutInput) -> LayoutResult:
@@ -209,7 +227,25 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
             max_dist_multi_m=input.max_dist_multi_m,
         )
 
-    apartments, leftover = subdivide_units(circulation.remainder, input.apartments)
+    if input.program_shares:
+        from services.unit_mix import UnitWeights, iterate_units
+        from services.wall_geometry import net_polygon as _np
+
+        apartments, iteration_metas, best_seed, derived_total_units = iterate_units(
+            circulation.remainder, input.program_shares,
+            iterations=input.iterations,
+            weights=input.unit_weights or UnitWeights(),
+            footprint=footprint,
+            circulation_geometry=circulation.circulation_geometry,
+        )
+        leftover = None
+        rem = circulation.remainder
+        net_remainder_m2 = (
+            sum(_np(p).area for p in rem.geoms) if hasattr(rem, "geoms") else _np(rem).area
+        )
+    else:
+        apartments, leftover = subdivide_units(circulation.remainder, input.apartments)
+        iteration_metas, best_seed, derived_total_units, net_remainder_m2 = [], 0, 0, 0.0
 
     usable_area = sum(a.polygon.area for a in apartments)
     circulation_area = (
@@ -232,6 +268,10 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
         evacuation_dots=circulation.evacuation_dots,
         cage_iteration_metas=cage_iteration_metas,
         cage_best_seed=cage_best_seed,
+        iteration_metas=iteration_metas,
+        best_seed=best_seed,
+        derived_total_units=derived_total_units,
+        net_remainder_m2=net_remainder_m2,
     )
 
 

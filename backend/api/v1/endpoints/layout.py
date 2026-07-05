@@ -13,8 +13,8 @@ from services.circulation import (
     place_circulation,
 )
 from services.layout import ApartmentSpec, LayoutInput, LayoutResult, generate_layout
-from services.unit_mix import subdivide_units
-from services.wall_geometry import exterior_wall_band, interior_wall_bands
+from services.unit_mix import ProgramShare, UnitWeights, iterate_units, subdivide_units
+from services.wall_geometry import exterior_wall_band, interior_wall_bands, net_polygon
 from services.wt_validation import WTValidationResult, validate_layout_wt
 
 router = APIRouter()
@@ -26,6 +26,30 @@ class ApartmentProgram(BaseModel):
     target_count: int = Field(..., ge=0)
     width_m: float | None = Field(None, gt=0)
     depth_m: float | None = Field(None, gt=0)
+    percentage: float = Field(default=0.0, ge=0)
+    area_min_m2: float = Field(default=0.0, ge=0)
+    area_max_m2: float = Field(default=0.0, ge=0)
+    min_facade_m: float = Field(default=3.0, ge=0)
+    """Min. styk typu ze ścianą zewnętrzną [m] -- komponent daylight."""
+
+
+class UnitWeightsInput(BaseModel):
+    """7 wag scoringu (spec §4) -- defaulty jak services.unit_mix.UnitWeights."""
+
+    size: float = Field(default=0.8, ge=0, le=1)
+    mix: float = Field(default=0.6, ge=0, le=1)
+    grid: float = Field(default=0.3, ge=0, le=1)
+    shape: float = Field(default=0.5, ge=0, le=1)
+    daylight: float = Field(default=0.7, ge=0, le=1)
+    squareness: float = Field(default=0.5, ge=0, le=1)
+    adjacency: float = Field(default=1.0, ge=0, le=1)
+
+
+class IterationMetaResult(BaseModel):
+    seed: int
+    score: float
+    units_count: int
+    components: dict[str, float] = {}
 
 
 class CageWeightsInput(BaseModel):
@@ -73,6 +97,8 @@ class LayoutGenerateRequest(BaseModel):
     circulation: CirculationSpec = Field(default_factory=CirculationSpec)
     apartments: list[ApartmentProgram] = Field(default_factory=list)
     local_law: str | None = Field(default=None)
+    iterations: int = Field(default=10, ge=1, le=50)
+    weights: UnitWeightsInput = Field(default_factory=UnitWeightsInput)
 
 
 class ApartmentResult(BaseModel):
@@ -131,6 +157,20 @@ class LayoutGenerateResponse(BaseModel):
     /layout/circulation's CirculationResponse)."""
     cage_best_seed: int = 0
     """Seed zwycięskiej iteracji trybu iteracyjnego (0 w trybie klasycznym)."""
+    derived_total_units: int = 0
+    """Liczba mieszkań wyliczona ze struktury % i powierzchni netto
+    (spec 2026-07-04-apartment-division-iterations §1, dual-surface z
+    /layout/units)."""
+    net_remainder_m2: float = 0.0
+    """Powierzchnia netto pozostałości po komunikacji, wejście do
+    derive_total_units (spec §1)."""
+    iterations: list[IterationMetaResult] = []
+    """Metadane 1 na iterację trybu iteracyjnego podziału na mieszkania
+    (puste, gdy request nie podał program_shares -- klasyczny subdivide_units),
+    spec §4 (dual-surface z /layout/units)."""
+    best_seed: int = 0
+    """Seed zwycięskiej iteracji trybu iteracyjnego podziału na mieszkania
+    (0 w trybie klasycznym)."""
 
 
 @router.post("/generate", response_model=LayoutGenerateResponse)
@@ -180,6 +220,18 @@ def generate_layout_endpoint(request: LayoutGenerateRequest):
             if circulation.cage_iterations > 0
             else None
         ),
+        iterations=request.iterations,
+        unit_weights=UnitWeights(**request.weights.model_dump()),
+        program_shares=[
+            ProgramShare(
+                type=a.type, percentage=a.percentage,
+                area_min_m2=a.area_min_m2 or a.min_area_m2,
+                area_max_m2=a.area_max_m2 or a.min_area_m2,
+                min_facade_m=a.min_facade_m,
+            )
+            for a in request.apartments
+            if a.percentage > 0
+        ],
     )
 
     try:
@@ -274,6 +326,13 @@ def layout_result_to_response(layout: LayoutResult, wt: WTValidationResult) -> L
             for m in layout.cage_iteration_metas
         ],
         cage_best_seed=layout.cage_best_seed,
+        derived_total_units=layout.derived_total_units,
+        net_remainder_m2=layout.net_remainder_m2,
+        iterations=[
+            IterationMetaResult(seed=m.seed, score=m.score, units_count=m.units_count, components=m.components)
+            for m in layout.iteration_metas
+        ],
+        best_seed=layout.best_seed,
     )
 
 
@@ -461,6 +520,8 @@ class UnitsRequest(BaseModel):
     wall_cells tak samo jak layout.circulation_geometry w
     layout_result_to_response(), żeby ściana między mieszkaniem a
     korytarzem/klatką też się narysowała."""
+    iterations: int = Field(default=10, ge=1, le=50)
+    weights: UnitWeightsInput = Field(default_factory=UnitWeightsInput)
 
 
 class UnitsResponse(BaseModel):
@@ -470,6 +531,17 @@ class UnitsResponse(BaseModel):
     """Pasy ścian (zewn.+wewn.), GeoJSON -- patrz UnitsRequest.footprint.
     Puste, gdy request nie podał footprint (nie da się policzyć bez pełnego
     obrysu)."""
+    derived_total_units: int = 0
+    """Liczba mieszkań wyliczona ze struktury % i powierzchni netto remainder
+    (spec 2026-07-04-apartment-division-iterations §1)."""
+    net_remainder_m2: float = 0.0
+    """Powierzchnia netto pozostałości po komunikacji, wejście do
+    derive_total_units (spec §1)."""
+    iterations: list[IterationMetaResult] = []
+    """Metadane 1 na iterację trybu iteracyjnego podziału na mieszkania,
+    spec §4 (dual-surface z /layout/generate)."""
+    best_seed: int = 0
+    """Seed zwycięskiej iteracji trybu iteracyjnego."""
 
 
 @router.post("/units", response_model=UnitsResponse)
@@ -482,15 +554,64 @@ def subdivide_units_endpoint(request: UnitsRequest):
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid remainder geometry: {exc}")
 
-    specs = [
-        ApartmentSpec(
-            type=a.type, min_area_m2=a.min_area_m2, target_count=a.target_count,
-            width_m=a.width_m, depth_m=a.depth_m,
+    # Footprint/circulation_geometry parsed up-front now (used to be parsed
+    # lazily inside the wall_bands block below) -- iterate_units() needs both
+    # for its daylight (footprint) and adjacency (circulation_geometry)
+    # scoring components (spec 2026-07-04-apartment-division-iterations §4).
+    footprint = None
+    if request.footprint is not None:
+        try:
+            footprint = _points_to_polygon(request.footprint)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    circulation_geometry = None
+    if request.circulation_geometry is not None:
+        try:
+            circulation_geometry = _shape(request.circulation_geometry)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid circulation_geometry: {exc}")
+
+    # Same gate as generate_layout_endpoint's `program_shares` (dual-surface):
+    # only opt into the %-structure iterative engine when at least one
+    # apartment actually carries a percentage -- otherwise fall back to the
+    # classic target_count-based subdivide_units(), so callers still using
+    # the pre-Etap-4 contract (min_area_m2 + target_count, no percentage)
+    # keep getting 200s instead of a "wszystkie udziały procentowe są
+    # zerowe" 422 from derive_total_units (percentage defaults to 0.0).
+    shares = [
+        ProgramShare(
+            type=a.type,
+            percentage=a.percentage,
+            area_min_m2=a.area_min_m2 or a.min_area_m2,
+            area_max_m2=a.area_max_m2 or a.min_area_m2,
+            min_facade_m=a.min_facade_m,
         )
         for a in request.apartments
+        if a.percentage > 0
     ]
 
-    cells, leftover = subdivide_units(remainder, specs)
+    if shares:
+        weights = UnitWeights(**request.weights.model_dump())
+        try:
+            cells, iteration_metas, best_seed, derived_total = iterate_units(
+                remainder, shares,
+                iterations=request.iterations, weights=weights,
+                footprint=footprint, circulation_geometry=circulation_geometry,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        leftover = None  # iterate_units gwarantuje zero resztek (spec §3)
+    else:
+        specs = [
+            ApartmentSpec(
+                type=a.type, min_area_m2=a.min_area_m2, target_count=a.target_count,
+                width_m=a.width_m, depth_m=a.depth_m,
+            )
+            for a in request.apartments
+        ]
+        cells, leftover = subdivide_units(remainder, specs)
+        iteration_metas, best_seed, derived_total = [], 0, 0
 
     apartments_out = [
         ApartmentResult(
@@ -502,19 +623,7 @@ def subdivide_units_endpoint(request: UnitsRequest):
     ]
 
     wall_bands_out: list[dict] = []
-    if request.footprint is not None:
-        try:
-            footprint = _points_to_polygon(request.footprint)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
-        circulation_geometry = None
-        if request.circulation_geometry is not None:
-            try:
-                circulation_geometry = _shape(request.circulation_geometry)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=f"Invalid circulation_geometry: {exc}")
-
+    if footprint is not None:
         # Same pattern as layout_result_to_response() (shared with
         # /layout/generate and the optimizer endpoints): wall_cells is every
         # real cell that should get a net-shrunk footprint carved out of the
@@ -534,14 +643,30 @@ def subdivide_units_endpoint(request: UnitsRequest):
                 # leftover is subdivide_units()'s own un-programmed slice,
                 # constructed disjoint from every real cell, so raw
                 # subtraction can never erase a genuine inter-cell wall.
+                # NOTE: leftover is None whenever the %-structure iterate_units
+                # path ran above (it guarantees zero remainder, spec §3) --
+                # this branch only ever fires for the classic subdivide_units
+                # fallback (no apartment carried a percentage).
                 interior_bands = interior_bands.difference(leftover)
             wall_geoms.append(interior_bands)
         wall_bands_out = [g for geom in wall_geoms for g in _decompose_to_polygons(geom)]
+
+    if hasattr(remainder, "geoms"):
+        net_remainder_m2 = sum(net_polygon(p).area for p in remainder.geoms)
+    else:
+        net_remainder_m2 = net_polygon(remainder).area
 
     return UnitsResponse(
         apartments=apartments_out,
         leftover=json.loads(json.dumps(leftover.__geo_interface__)) if leftover else None,
         wall_bands=wall_bands_out,
+        derived_total_units=derived_total,
+        net_remainder_m2=net_remainder_m2,
+        iterations=[
+            IterationMetaResult(seed=m.seed, score=m.score, units_count=m.units_count, components=m.components)
+            for m in iteration_metas
+        ],
+        best_seed=best_seed,
     )
 
 
