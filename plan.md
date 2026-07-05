@@ -1,3 +1,13 @@
+Tematy do ogarnięcia:
+1 czerwone kropki, jeśli nie doda się węzła koryarza przy klatce
+2 przesuwanie oddzielnie klatek
+3 przy generowaniu układu nie może resetować pozycji klatki i korytarza
+4 liczba iteracji do wpisania przez użytkownika
+5 lista iteracji w pasku o prawej stronie i do tego przy klikaniu powinny się wyświetlać, więc musza się gdzieś zapisywać tymczasowo
+6 wyświetlanie stref nie może nachodzić na ściany
+7 dodać możliwość zmiany kolory stref
+8 komunikacja czyli klatki i korytarze powinny być na szaro i niech też się wyświetla ich powierzchnia, przyda się do liczenia bilansów powierzchniowych w budynku
+
 # DOMKO_APP — Dokumentacja Projektowa
 
 > **Status:** DRAFT v0.3 — gotowy do akceptacji przez Bartosza  
