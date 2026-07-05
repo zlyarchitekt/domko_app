@@ -583,17 +583,23 @@ export default function CanvasEditor() {
       // Lista-override do requestu (id: "pending" nieużywane przez backend) —
       // patrz komentarz w runPlaceCirculation o unikaniu stale-closure zaraz
       // po dispatchu ADD_MANUAL_CAGE; reducer sam nada właściwy crypto.randomUUID().
+      // Kolejność ma znaczenie: addManualCage() dopiero PO potwierdzeniu przez
+      // backend (await) — inaczej klatka odrzucona jako 422 (np. poza obrysem)
+      // zostawałaby w state.manualCages mimo że request się nie powiódł
+      // (weryfikacja ręczna Etap 2 §5 pkt 5).
       const nextCages = [...state.manualCages, { id: "pending", ring }];
-      addManualCage(ring);
-      void runPlaceCirculation({ manualCages: nextCages });
+      void runPlaceCirculation({ manualCages: nextCages }).then((ok) => {
+        if (ok) addManualCage(ring);
+      });
       return;
     }
     if (state.mode === "draw-corridor") {
       if (state.drawingPoints.length < 2) return; // ścieżka potrzebuje min. 2 punktów
       const path = [...state.drawingPoints];
       const nextCorridors = [...state.manualCorridors, { id: "pending", path }];
-      addManualCorridor(path);
-      void runPlaceCirculation({ manualCorridors: nextCorridors });
+      void runPlaceCirculation({ manualCorridors: nextCorridors }).then((ok) => {
+        if (ok) addManualCorridor(path);
+      });
       return;
     }
   };

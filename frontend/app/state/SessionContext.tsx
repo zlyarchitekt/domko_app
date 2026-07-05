@@ -419,7 +419,7 @@ interface SessionContextValue {
   removeManualElement: (id: string) => void;
   setHoveredManualId: (id: string | null) => void;
   regenerate: () => Promise<void>;
-  runPlaceCirculation: (overrides?: { manualCages?: ManualCage[]; manualCorridors?: ManualCorridor[] }) => Promise<void>;
+  runPlaceCirculation: (overrides?: { manualCages?: ManualCage[]; manualCorridors?: ManualCorridor[] }) => Promise<boolean>;
   runSubdivideUnits: () => Promise<void>;
   runReshapeCirculation: (segments: [Point2D, Point2D][]) => Promise<void>;
   refreshTypologySuggestion: () => Promise<void>;
@@ -588,8 +588,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, [state.footprint, buildRequest, state.circulation, state.manualCages, state.manualCorridors]);
 
   const runPlaceCirculation = useCallback(
-    async (overrides?: { manualCages?: ManualCage[]; manualCorridors?: ManualCorridor[] }) => {
-      if (!state.footprint || state.footprint.length < 3) return;
+    async (overrides?: { manualCages?: ManualCage[]; manualCorridors?: ManualCorridor[] }): Promise<boolean> => {
+      if (!state.footprint || state.footprint.length < 3) return false;
       // overrides: handler po dispatch(ADD_/REMOVE_) ma świeżą listę wcześniej
       // niż state z closure — bez tego pierwszy przelicz po dodaniu elementu
       // wysyłałby listę sprzed dodania.
@@ -606,8 +606,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: "SET_LAYOUT_RESULT", result: null });
         dispatch({ type: "SET_VALIDATION", validation: null });
         dispatch({ type: "SET_ERROR", error: null });
+        return true;
       } catch (err) {
         dispatch({ type: "SET_ERROR", error: err instanceof api.ApiError ? err.message : String(err) });
+        return false;
       } finally {
         dispatch({ type: "SET_LOADING", loading: false });
       }
