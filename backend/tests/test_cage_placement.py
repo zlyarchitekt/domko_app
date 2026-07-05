@@ -110,7 +110,14 @@ def test_spread_prefers_separated_cages():
         "oczekiwano zróżnicowanych (niezerowych) wartości spread wśród wyników 2-klatkowych"
     )
     best_two_cage = min(two_cage_metas, key=lambda m: m.components["spread"])
-    assert best_two_cage.components["spread"] == min(m.components["spread"] for m in two_cage_metas)
+    worst_two_cage = max(two_cage_metas, key=lambda m: m.components["spread"])
+    # Real test: verify spread formula ranks placements correctly (best < worst),
+    # not tautology. Different cage positions on discrete grid → different spread values.
+    assert best_two_cage.components["spread"] < worst_two_cage.components["spread"], (
+        f"spread formuła powinna różnicować 2-klatkowe rozstawienia: "
+        f"best={best_two_cage.components['spread']:.4f}, "
+        f"worst={worst_two_cage.components['spread']:.4f}"
+    )
 
 
 def test_footprint_too_small_raises():
