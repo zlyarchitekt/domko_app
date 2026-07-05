@@ -29,6 +29,9 @@ export interface ProgramRow {
    * optymalizator, walidacja) już czytają te dwie nazwy pól wprost. */
   target_count: number;
   min_area_m2: number;
+  /** Min. styk mieszkań tego typu ze ścianą zewnętrzną [m] -- komponent
+   * scoringu "daylight" w silniku iteracyjnym (spec §4). */
+  min_facade_m: number;
 }
 
 /** Zaokrągla `percentage`% z `totalUnits` do liczby całkowitej mieszkań i
@@ -65,6 +68,10 @@ interface SessionState {
   mode: EditorMode;
   program: ProgramRow[];
   totalUnits: number;
+  unitWeights: api.UnitWeightsInput;
+  lastIterations: api.IterationMeta[];
+  derivedTotalUnits: number | null;
+  netRemainderM2: number | null;
   circulation: api.CirculationSpecInput;
   circulationResult: api.CirculationResponse | null;
   manualCages: ManualCage[];
@@ -104,6 +111,16 @@ const initialCirculation: api.CirculationSpecInput = {
 
 const INITIAL_TOTAL_UNITS = 10;
 
+export const DEFAULT_UNIT_WEIGHTS: api.UnitWeightsInput = {
+  size: 0.8,
+  mix: 0.6,
+  grid: 0.3,
+  shape: 0.5,
+  daylight: 0.7,
+  squareness: 0.5,
+  adjacency: 1.0,
+};
+
 // Domyślna struktura mieszkań: M1 10% (25-32m²) / M2 40% (38-48m²) /
 // M3 40% (58-70m²) / M4 10% (72-90m²) — przy 10 mieszkaniach daje dokładnie
 // 1/4/4/1 bez zaokrągleń.
@@ -113,14 +130,18 @@ const initialState: SessionState = {
   mode: "idle",
   program: recomputeDerivedProgram(
     [
-      { id: crypto.randomUUID(), type: "M1", percentage: 10, area_min_m2: 25, area_max_m2: 32, target_count: 0, min_area_m2: 0 },
-      { id: crypto.randomUUID(), type: "M2", percentage: 40, area_min_m2: 38, area_max_m2: 48, target_count: 0, min_area_m2: 0 },
-      { id: crypto.randomUUID(), type: "M3", percentage: 40, area_min_m2: 58, area_max_m2: 70, target_count: 0, min_area_m2: 0 },
-      { id: crypto.randomUUID(), type: "M4", percentage: 10, area_min_m2: 72, area_max_m2: 90, target_count: 0, min_area_m2: 0 },
+      { id: crypto.randomUUID(), type: "M1", percentage: 10, area_min_m2: 25, area_max_m2: 32, target_count: 0, min_area_m2: 0, min_facade_m: 3.0 },
+      { id: crypto.randomUUID(), type: "M2", percentage: 40, area_min_m2: 38, area_max_m2: 48, target_count: 0, min_area_m2: 0, min_facade_m: 3.0 },
+      { id: crypto.randomUUID(), type: "M3", percentage: 40, area_min_m2: 58, area_max_m2: 70, target_count: 0, min_area_m2: 0, min_facade_m: 3.0 },
+      { id: crypto.randomUUID(), type: "M4", percentage: 10, area_min_m2: 72, area_max_m2: 90, target_count: 0, min_area_m2: 0, min_facade_m: 3.0 },
     ],
     INITIAL_TOTAL_UNITS
   ),
   totalUnits: INITIAL_TOTAL_UNITS,
+  unitWeights: DEFAULT_UNIT_WEIGHTS,
+  lastIterations: [],
+  derivedTotalUnits: null,
+  netRemainderM2: null,
   circulation: initialCirculation,
   circulationResult: null,
   manualCages: [],
@@ -156,6 +177,8 @@ type Action =
   | { type: "UPDATE_PROGRAM_ROW"; id: string; patch: Partial<ProgramRow> }
   | { type: "REMOVE_PROGRAM_ROW"; id: string }
   | { type: "SET_TOTAL_UNITS"; totalUnits: number }
+  | { type: "SET_UNIT_WEIGHT"; key: keyof api.UnitWeightsInput; value: number }
+  | { type: "SET_ITERATION_RESULTS"; iterations: api.IterationMeta[]; derivedTotalUnits: number; netRemainderM2: number }
   | { type: "SET_CIRCULATION"; patch: Partial<api.CirculationSpecInput> }
   | { type: "SET_CIRCULATION_RESULT"; result: api.CirculationResponse | null }
   | { type: "ADD_MANUAL_CAGE"; ring: Point2D[] }
@@ -249,7 +272,7 @@ function reducer(state: SessionState, action: Action): SessionState {
         program: recomputeDerivedProgram(
           [
             ...state.program,
-            { id: crypto.randomUUID(), type: "M2", percentage: 0, area_min_m2: 38, area_max_m2: 48, target_count: 0, min_area_m2: 0 },
+            { id: crypto.randomUUID(), type: "M2", percentage: 0, area_min_m2: 38, area_max_m2: 48, target_count: 0, min_area_m2: 0, min_facade_m: 3.0 },
           ],
           state.totalUnits
         ),
@@ -269,6 +292,18 @@ function reducer(state: SessionState, action: Action): SessionState {
       };
     case "SET_TOTAL_UNITS":
       return { ...state, totalUnits: action.totalUnits, program: recomputeDerivedProgram(state.program, action.totalUnits) };
+    case "SET_UNIT_WEIGHT":
+      return { ...state, unitWeights: { ...state.unitWeights, [action.key]: action.value } };
+    case "SET_ITERATION_RESULTS":
+      return {
+        ...state,
+        lastIterations: action.iterations,
+        derivedTotalUnits: action.derivedTotalUnits,
+        netRemainderM2: action.netRemainderM2,
+        // liczba pochodna zasila dotychczasowy mechanizm ≈sztuk w wierszach
+        totalUnits: action.derivedTotalUnits,
+        program: recomputeDerivedProgram(state.program, action.derivedTotalUnits),
+      };
     case "SET_CIRCULATION":
       return { ...state, circulation: { ...state.circulation, ...action.patch } };
     case "SET_CIRCULATION_RESULT":
@@ -424,6 +459,7 @@ interface SessionContextValue {
   addProgramRow: () => void;
   removeProgramRow: (id: string) => void;
   setTotalUnits: (totalUnits: number) => void;
+  setUnitWeight: (key: keyof api.UnitWeightsInput, value: number) => void;
   setCirculation: (patch: Partial<api.CirculationSpecInput>) => void;
   selectApartment: (id: string | null) => void;
   addManualCage: (ring: Point2D[]) => void;
@@ -555,6 +591,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const addProgramRow = useCallback(() => dispatch({ type: "ADD_PROGRAM_ROW" }), []);
   const removeProgramRow = useCallback((id: string) => dispatch({ type: "REMOVE_PROGRAM_ROW", id }), []);
   const setTotalUnits = useCallback((totalUnits: number) => dispatch({ type: "SET_TOTAL_UNITS", totalUnits }), []);
+  const setUnitWeight = useCallback(
+    (key: keyof api.UnitWeightsInput, value: number) => dispatch({ type: "SET_UNIT_WEIGHT", key, value }),
+    []
+  );
   const setCirculation = useCallback(
     (patch: Partial<api.CirculationSpecInput>) => dispatch({ type: "SET_CIRCULATION", patch }),
     []
@@ -581,6 +621,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         type: row.type,
         min_area_m2: row.min_area_m2,
         target_count: row.target_count,
+        percentage: row.percentage,
+        area_min_m2: row.area_min_m2,
+        area_max_m2: row.area_max_m2,
+        min_facade_m: row.min_facade_m,
       })),
     }),
     [state.circulation, state.program]
@@ -601,6 +645,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           manual_cages: state.manualCages.map((c) => c.ring.map((p) => [p.x, p.y] as api.Point)),
           manual_corridors: state.manualCorridors.map((c) => c.path.map((p) => [p.x, p.y] as api.Point)),
         },
+        iterations: 10,
+        weights: state.unitWeights,
       };
       const [layout, validation] = await Promise.all([
         api.generateLayout(req),
@@ -608,13 +654,19 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       ]);
       dispatch({ type: "SET_LAYOUT_RESULT", result: layout });
       dispatch({ type: "SET_VALIDATION", validation });
+      dispatch({
+        type: "SET_ITERATION_RESULTS",
+        iterations: layout.iterations ?? [],
+        derivedTotalUnits: layout.derived_total_units ?? 0,
+        netRemainderM2: layout.net_remainder_m2 ?? 0,
+      });
       dispatch({ type: "SET_ERROR", error: null });
     } catch (err) {
       dispatch({ type: "SET_ERROR", error: err instanceof api.ApiError ? err.message : String(err) });
     } finally {
       dispatch({ type: "SET_LOADING", loading: false });
     }
-  }, [state.footprint, buildRequest, state.circulation, state.manualCages, state.manualCorridors]);
+  }, [state.footprint, buildRequest, state.circulation, state.manualCages, state.manualCorridors, state.unitWeights]);
 
   const runPlaceCirculation = useCallback(
     async (overrides?: {
@@ -716,12 +768,18 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         type: row.type,
         min_area_m2: row.min_area_m2,
         target_count: row.target_count,
+        percentage: row.percentage,
+        area_min_m2: row.area_min_m2,
+        area_max_m2: row.area_max_m2,
+        min_facade_m: row.min_facade_m,
       }));
       const unitsRes = await api.subdivideUnits(
         state.circulationResult.remainder,
         unitsReq,
         state.footprint ? footprintToPoints(state.footprint) : undefined,
-        state.circulationResult.circulation_geometry
+        state.circulationResult.circulation_geometry,
+        10,
+        state.unitWeights
       );
       const layoutResult: api.LayoutGenerateResponse = {
         footprint_area_m2: state.footprint ? polygonAreaFromPoints(state.footprint) : 0,
@@ -736,8 +794,18 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           : [],
         cage_geometries: state.circulationResult.cage_geometries,
         wall_bands: unitsRes.wall_bands,
+        derived_total_units: unitsRes.derived_total_units,
+        net_remainder_m2: unitsRes.net_remainder_m2,
+        iterations: unitsRes.iterations,
+        best_seed: unitsRes.best_seed,
       };
       dispatch({ type: "SET_LAYOUT_RESULT", result: layoutResult });
+      dispatch({
+        type: "SET_ITERATION_RESULTS",
+        iterations: unitsRes.iterations ?? [],
+        derivedTotalUnits: unitsRes.derived_total_units ?? 0,
+        netRemainderM2: unitsRes.net_remainder_m2 ?? 0,
+      });
       dispatch({ type: "SET_ERROR", error: null });
       // Fetch real WT validation for the combined result (score/rules were
       // left as placeholders above since /layout/units doesn't compute WT).
@@ -755,7 +823,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     } finally {
       dispatch({ type: "SET_LOADING", loading: false });
     }
-  }, [state.circulationResult, state.program, state.footprint, state.circulation]);
+  }, [state.circulationResult, state.program, state.footprint, state.circulation, state.unitWeights]);
 
   const refreshTypologySuggestion = useCallback(async () => {
     if (!state.footprint || state.footprint.length < 3) return;
@@ -844,6 +912,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           type: row.type,
           min_area_m2: row.min_area_m2,
           target_count: row.target_count,
+          percentage: row.percentage,
+          area_min_m2: row.area_min_m2,
+          area_max_m2: row.area_max_m2,
+          min_facade_m: row.min_facade_m,
         })),
         latitude: state.gps.lat,
         longitude: state.gps.lng,
@@ -872,6 +944,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           type: row.type,
           min_area_m2: row.min_area_m2,
           target_count: row.target_count,
+          percentage: row.percentage,
+          area_min_m2: row.area_min_m2,
+          area_max_m2: row.area_max_m2,
+          min_facade_m: row.min_facade_m,
         })),
         latitude: state.gps.lat,
         longitude: state.gps.lng,
@@ -920,6 +996,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       addProgramRow,
       removeProgramRow,
       setTotalUnits,
+      setUnitWeight,
       setCirculation,
       selectApartment,
       addManualCage,
@@ -956,6 +1033,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       addProgramRow,
       removeProgramRow,
       setTotalUnits,
+      setUnitWeight,
       setCirculation,
       selectApartment,
       addManualCage,

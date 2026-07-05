@@ -119,6 +119,27 @@ export interface ApartmentProgramInput {
   target_count: number;
   width_m?: number | null;
   depth_m?: number | null;
+  percentage: number;
+  area_min_m2: number;
+  area_max_m2: number;
+  min_facade_m: number;
+}
+
+export interface UnitWeightsInput {
+  size: number;
+  mix: number;
+  grid: number;
+  shape: number;
+  daylight: number;
+  squareness: number;
+  adjacency: number;
+}
+
+export interface IterationMeta {
+  seed: number;
+  score: number;
+  units_count: number;
+  components?: Record<string, number>;
 }
 
 export interface CageWeightsInput {
@@ -156,6 +177,8 @@ export interface LayoutGenerateRequest {
   circulation: CirculationSpecInput;
   apartments: ApartmentProgramInput[];
   local_law?: string | null;
+  iterations?: number;
+  weights?: UnitWeightsInput;
 }
 
 export interface ApartmentResult {
@@ -192,6 +215,10 @@ export interface LayoutGenerateResponse {
   cage_geometries: GeoJsonPolygon[];
   wall_bands: GeoJsonPolygon[];
   evacuation_dots?: EvacuationDot[];
+  derived_total_units?: number;
+  net_remainder_m2?: number;
+  iterations?: IterationMeta[];
+  best_seed?: number;
 }
 
 export function generateLayout(req: LayoutGenerateRequest): Promise<LayoutGenerateResponse> {
@@ -270,13 +297,19 @@ export interface UnitsResponse {
   apartments: ApartmentResult[];
   leftover: GeoJsonPolygon | null;
   wall_bands: GeoJsonPolygon[];
+  derived_total_units?: number;
+  net_remainder_m2?: number;
+  iterations?: IterationMeta[];
+  best_seed?: number;
 }
 
 export function subdivideUnits(
   remainder: GeoJsonPolygon,
   apartments: ApartmentProgramInput[],
   footprint?: Point[],
-  circulationGeometry?: GeoJsonPolygon | null
+  circulationGeometry?: GeoJsonPolygon | null,
+  iterations?: number,
+  weights?: UnitWeightsInput
 ): Promise<UnitsResponse> {
   // footprint/circulation_geometry are optional on the backend (older calls
   // still work without them) but required for it to compute wall_bands --
@@ -287,6 +320,8 @@ export function subdivideUnits(
     apartments,
     footprint,
     circulation_geometry: circulationGeometry,
+    iterations,
+    weights,
   });
 }
 

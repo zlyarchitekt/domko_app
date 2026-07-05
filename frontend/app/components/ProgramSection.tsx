@@ -2,6 +2,7 @@
 
 import { Plus, X } from "lucide-react";
 import { useSession } from "../state/SessionContext";
+import * as api from "../lib/api";
 
 const APARTMENT_TYPES = ["M1", "M2", "M3", "M4", "M5"];
 
@@ -16,7 +17,7 @@ function polygonArea(points: { x: number; y: number }[]): number {
 }
 
 export default function ProgramSection() {
-  const { state, updateProgramRow, addProgramRow, removeProgramRow, setTotalUnits } = useSession();
+  const { state, updateProgramRow, addProgramRow, removeProgramRow, setUnitWeight } = useSession();
 
   const footprintArea = state.footprint ? polygonArea(state.footprint) : 0;
   // min_area_m2/target_count są pochodne (środek zakresu × zaokrąglony udział %
@@ -31,16 +32,14 @@ export default function ProgramSection() {
     <section className="space-y-2.5 rounded-xl border border-zinc-800/70 bg-zinc-950/40 p-3 light:border-zinc-200 light:bg-white">
       <h2 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Struktura mieszkań</h2>
 
-      <label className="flex items-center justify-between text-xs text-zinc-400">
-        Łączna liczba mieszkań
-        <input
-          type="number"
-          min={1}
-          value={state.totalUnits}
-          onChange={(e) => setTotalUnits(Math.max(1, Number(e.target.value)))}
-          className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
-        />
-      </label>
+      <div className="flex items-center justify-between text-xs text-zinc-400">
+        Liczba mieszkań (z powierzchni)
+        <span className="font-mono text-zinc-200 light:text-zinc-800">
+          {state.derivedTotalUnits !== null
+            ? `≈ ${state.derivedTotalUnits}${state.netRemainderM2 !== null ? ` (${state.netRemainderM2.toFixed(0)} m² netto)` : ""}`
+            : "—"}
+        </span>
+      </div>
 
       <div className="space-y-1.5">
         {state.program.map((row) => (
@@ -102,6 +101,19 @@ export default function ProgramSection() {
               />
               <span>m²</span>
             </div>
+            <div className="mt-1.5 flex items-center gap-1.5 text-xs text-zinc-500">
+              <span className="shrink-0">Min. styk z elewacją</span>
+              <input
+                type="number"
+                step={0.5}
+                min={0}
+                value={row.min_facade_m}
+                onChange={(e) => updateProgramRow(row.id, { min_facade_m: Number(e.target.value) })}
+                title="Minimalny styk mieszkań tego typu ze ścianą zewnętrzną (komponent Daylight)"
+                className="w-14 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-1.5 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+              />
+              <span>m</span>
+            </div>
           </div>
         ))}
       </div>
@@ -144,6 +156,57 @@ export default function ProgramSection() {
           <span className="font-mono">{balance.toFixed(0)}%</span>
         </div>
       </div>
+
+      <div className="space-y-1.5 pt-1">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Wagi układu</div>
+        {(
+          [
+            ["size", "Wielkość m²"],
+            ["mix", "Struktura mieszkań"],
+            ["grid", "Siatka 0.5m"],
+            ["shape", "Prostokątność"],
+            ["daylight", "Dostęp do elewacji"],
+            ["squareness", "Proporcje boków"],
+            ["adjacency", "Dostęp do komunikacji"],
+          ] as [keyof api.UnitWeightsInput, string][]
+        ).map(([key, label]) => (
+          <label key={key} className="flex items-center justify-between text-xs text-zinc-400">
+            <span>{label} ({state.unitWeights[key].toFixed(2)})</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={state.unitWeights[key]}
+              onChange={(e) => setUnitWeight(key, Number(e.target.value))}
+              className="ml-2 w-24 accent-accent-500"
+            />
+          </label>
+        ))}
+      </div>
+
+      {state.lastIterations.length > 0 && (
+        <div className="space-y-0.5 pt-1">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+            Iteracje ({state.lastIterations.length})
+          </div>
+          {state.lastIterations.map((m) => {
+            const isBest = state.lastIterations.every((o) => m.score <= o.score);
+            return (
+              <div
+                key={m.seed}
+                className={`flex items-center justify-between rounded px-2 py-0.5 font-mono text-[11px] ${
+                  isBest ? "bg-accent-500/15 text-accent-400" : "text-zinc-500"
+                }`}
+              >
+                <span>#{m.seed}</span>
+                <span>{m.units_count} szt.</span>
+                <span>score {m.score.toFixed(3)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }
