@@ -643,6 +643,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           })),
           corridor_width_m: state.circulation.corridor_width_m,
           cage_geometries: state.circulationResult.cage_geometries,
+          max_dist_single_m: state.circulation.max_dist_single_m,
+          max_dist_multi_m: state.circulation.max_dist_multi_m,
         });
         dispatch({ type: "RESHAPE_CIRCULATION", result });
         dispatch({ type: "SET_ERROR", error: null });
@@ -652,7 +654,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: "SET_LOADING", loading: false });
       }
     },
-    [state.footprint, state.circulationResult, state.circulation.corridor_width_m]
+    [
+      state.footprint,
+      state.circulationResult,
+      state.circulation.corridor_width_m,
+      state.circulation.max_dist_single_m,
+      state.circulation.max_dist_multi_m,
+    ]
   );
 
   const runRecomputeEvacuation = useCallback(async () => {

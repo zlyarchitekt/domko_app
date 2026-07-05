@@ -223,6 +223,8 @@ export interface ReshapeCirculationRequest {
   centerline: { points: [Point, Point] }[];
   corridor_width_m: number;
   cage_geometries: GeoJsonPolygon[];
+  max_dist_single_m: number;
+  max_dist_multi_m: number;
 }
 
 export interface ReshapeCirculationResponse {
