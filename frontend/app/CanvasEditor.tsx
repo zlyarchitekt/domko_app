@@ -9,7 +9,14 @@ import { useSession, Point2D } from "./state/SessionContext";
 import { deriveApartmentStatuses } from "./lib/deriveStatus";
 import { GeoJsonPolygon } from "./lib/api";
 import * as api from "./lib/api";
-import { snap, insertVertexAt, removeVertexAt } from "./lib/polygonEdit";
+import {
+  snap,
+  insertVertexAt,
+  removeVertexAt,
+  constrainSegmentDelta,
+  translateSegment,
+  type Delta,
+} from "./lib/polygonEdit";
 const METER_PX = 50; // base scale: 1m = 50px
 
 function clamp(n: number, min: number, max: number) {
@@ -333,6 +340,10 @@ export default function CanvasEditor() {
   const [hoveredFacade, setHoveredFacade] = useState<{ x: number, y: number, text: string } | null>(null);
   const [hoveredOutlineSegment, setHoveredOutlineSegment] = useState<number | null>(null);
   const [hoveredOutlineVertex, setHoveredOutlineVertex] = useState<number | null>(null);
+  // Podgląd przeciąganego segmentu obrysu: delta już po constrainie
+  // (Shift-rzut na normalną + snap 0.5m) — render liczy translateSegment
+  // z aktualnego footprint, commit robi to samo w onDragEnd.
+  const [segmentDrag, setSegmentDrag] = useState<{ index: number; delta: Delta } | null>(null);
 
   // Konva shape fills/strokes are literal hex props, not Tailwind classes, so
   // theme-following them needs its own small palette instead of `light:`.
@@ -706,6 +717,25 @@ export default function CanvasEditor() {
               />
             )}
 
+          {/* Podgląd obrysu podczas draga ściany (dashed, jak rysowanie) */}
+          {state.mode === "edit-vertices" &&
+            segmentDrag &&
+            footprint &&
+            (() => {
+              const preview = translateSegment(footprint, segmentDrag.index, segmentDrag.delta);
+              if (!preview) return null;
+              return (
+                <Line
+                  points={toCanvasPoints(preview)}
+                  closed
+                  stroke="#60a5fa"
+                  strokeWidth={2 / scale}
+                  dash={[6 / scale, 4 / scale]}
+                  listening={false}
+                />
+              );
+            })()}
+
           {/* Niewidoczne hitboxy segmentów obrysu: hover (Task 4),
               dblclick-wstaw (Task 5), drag ściany (Task 6) */}
           {state.mode === "edit-vertices" &&
@@ -717,6 +747,7 @@ export default function CanvasEditor() {
                 opacity={0}
                 strokeWidth={2 / scale}
                 hitStrokeWidth={14 / scale}
+                draggable
                 onMouseEnter={() => setHoveredOutlineSegment(i)}
                 onMouseLeave={() => setHoveredOutlineSegment(null)}
                 onDblClick={(e) => {
@@ -727,6 +758,31 @@ export default function CanvasEditor() {
                   if (!pointer) return;
                   const clicked = worldToMeters(pointer.x, pointer.y);
                   const next = insertVertexAt(footprint, i, clicked);
+                  if (next) setFootprintPoints(next);
+                }}
+                onDragStart={(e) => {
+                  e.cancelBubble = true;
+                }}
+                onDragMove={(e) => {
+                  const node = e.target;
+                  const [a, b] = footprintSegments[i];
+                  // node.x/y to translacja w px świata (Stage skaluje potomków)
+                  const raw: Delta = { dx: node.x() / METER_PX, dy: -node.y() / METER_PX };
+                  const d = constrainSegmentDelta(a, b, raw, e.evt.shiftKey);
+                  setSegmentDrag({ index: i, delta: d });
+                }}
+                onDragEnd={(e) => {
+                  // cancelBubble: patrz komentarz przy onDragEnd wierzchołków —
+                  // bez tego Stage czyta surowe współrzędne node'a i „odlatuje".
+                  e.cancelBubble = true;
+                  const node = e.target;
+                  const [a, b] = footprintSegments[i];
+                  const raw: Delta = { dx: node.x() / METER_PX, dy: -node.y() / METER_PX };
+                  node.position({ x: 0, y: 0 });
+                  setSegmentDrag(null);
+                  if (!footprint) return;
+                  const d = constrainSegmentDelta(a, b, raw, e.evt.shiftKey);
+                  const next = translateSegment(footprint, i, d);
                   if (next) setFootprintPoints(next);
                 }}
               />
