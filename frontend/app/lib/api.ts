@@ -292,6 +292,18 @@ export function reshapeCirculation(req: ReshapeCirculationRequest): Promise<Resh
   return postJson("/layout/circulation/reshape", req);
 }
 
+export interface MoveCageRequest {
+  footprint: Point[];
+  cage_geometries: GeoJsonPolygon[];
+  corridor_width_m: number;
+  max_dist_single_m: number;
+  max_dist_multi_m: number;
+}
+
+export function moveCage(req: MoveCageRequest): Promise<CirculationResponse> {
+  return postJson("/layout/circulation/move-cage", req);
+}
+
 export function recomputeEvacuation(req: {
   centerline: { points: [Point, Point] }[];
   cage_geometries: GeoJsonPolygon[];

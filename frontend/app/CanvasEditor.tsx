@@ -327,7 +327,7 @@ function moveSharedLine(
 }
 
 export default function CanvasEditor() {
-  const { state, addDrawPoint, removeLastDrawPoint, finishDrawing, updateVertex, setFootprintPoints, selectApartment, updateApartmentsAndValidate, runReshapeCirculation, addManualCage, addManualCorridor, runPlaceCirculation, dispatch } = useSession();
+  const { state, addDrawPoint, removeLastDrawPoint, finishDrawing, updateVertex, setFootprintPoints, selectApartment, updateApartmentsAndValidate, runReshapeCirculation, addManualCage, addManualCorridor, runPlaceCirculation, runMoveCage, dispatch } = useSession();
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType>(null);
 
@@ -1052,7 +1052,7 @@ export default function CanvasEditor() {
             ));
           })()}
 
-          {/* Przesuwanie korytarza/klatki jako sztywnej bryły (edit-circulation) */}
+          {/* Przesuwanie CAŁEJ komunikacji jako sztywnej bryły (edit-circulation) */}
           {state.mode === "edit-circulation" && state.circulationResult && (
             <Group
               draggable
@@ -1082,21 +1082,35 @@ export default function CanvasEditor() {
                   strokeWidth={2 / scale}
                 />
               ))}
-              {cageGeometries.map((geom, i) => (
-                <Line
-                  key={`edit-cage-${i}`}
-                  points={toCanvasPoints(ringToPoints(geom))}
-                  closed
-                  fill="rgba(128,128,128,0.7)"
-                  stroke="#60a5fa"
-                  strokeWidth={2 / scale}
-                />
-              ))}
-              {cageGeometries.flatMap((geom, i) =>
-                cageSubdivisionShapes(geom, `edit-cage-sub-${i}`, scale, canvasColors.axis, canvasColors.axisText)
-              )}
             </Group>
           )}
+          {/* Przesuwanie KAŻDEJ klatki osobno (spec 2026-07-05 §2) */}
+          {state.mode === "edit-circulation" && state.circulationResult && cageGeometries.map((geom, i) => (
+            <Group
+              key={`edit-cage-group-${i}`}
+              draggable
+              onDragStart={(e) => {
+                e.cancelBubble = true;
+              }}
+              onDragEnd={(e) => {
+                e.cancelBubble = true;
+                const node = e.target;
+                const dxM = node.x() / METER_PX;
+                const dyM = -node.y() / METER_PX;
+                node.position({ x: 0, y: 0 });
+                void runMoveCage(i, dxM, dyM);
+              }}
+            >
+              <Line
+                points={toCanvasPoints(ringToPoints(geom))}
+                closed
+                fill="rgba(128,128,128,0.7)"
+                stroke="#60a5fa"
+                strokeWidth={2 / scale}
+              />
+              {cageSubdivisionShapes(geom, `edit-cage-sub-${i}`, scale, canvasColors.axis, canvasColors.axisText)}
+            </Group>
+          ))}
 
           {/* Mieszkania — kolor wg statusu walidacji (F3-06) lub Solara (F4) */}
           {apartments.map((apt) => {

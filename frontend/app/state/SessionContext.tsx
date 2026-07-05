@@ -313,7 +313,13 @@ function reducer(state: SessionState, action: Action): SessionState {
     case "SET_CIRCULATION":
       return { ...state, circulation: { ...state.circulation, ...action.patch } };
     case "SET_CIRCULATION_RESULT":
-      return { ...state, circulationResult: action.result, activeCageSeed: null };
+      return {
+        ...state,
+        circulationResult: action.result,
+        activeCageSeed: null,
+        layoutResult: null,
+        validation: null,
+      };
     case "SELECT_CAGE_ITERATION": {
       if (!state.circulationResult?.cage_iterations) return state;
       const meta = state.circulationResult.cage_iterations.find((m) => m.seed === action.seed);
@@ -526,6 +532,7 @@ interface SessionContextValue {
     manualCorridors?: ManualCorridor[];
     circulationOverride?: Partial<api.CirculationSpecInput>;
   }) => Promise<boolean>;
+  runMoveCage: (cageIndex: number, dx: number, dy: number) => Promise<boolean>;
   runSubdivideUnits: () => Promise<void>;
   runReshapeCirculation: (segments: [Point2D, Point2D][]) => Promise<void>;
   runRecomputeEvacuation: () => Promise<void>;
@@ -764,6 +771,38 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       }
     },
     [state.footprint, state.circulation, state.manualCages, state.manualCorridors]
+  );
+
+  const runMoveCage = useCallback(
+    async (cageIndex: number, dxM: number, dyM: number): Promise<boolean> => {
+      if (!state.footprint || !state.circulationResult) return false;
+      const cages = state.circulationResult.cage_geometries.map((g, i) => {
+        if (i !== cageIndex) return g;
+        // przesunięcie wielokąta o (dxM, dyM) w metrach -- ring GeoJSON
+        const coords = g.coordinates[0].map(([x, y]) => [x + dxM, y + dyM] as [number, number]);
+        return { type: "Polygon" as const, coordinates: [coords] };
+      });
+      dispatch({ type: "SET_LOADING", loading: true });
+      try {
+        const result = await api.moveCage({
+          footprint: footprintToPoints(state.footprint),
+          cage_geometries: cages,
+          corridor_width_m: state.circulation.corridor_width_m,
+          max_dist_single_m: state.circulation.max_dist_single_m,
+          max_dist_multi_m: state.circulation.max_dist_multi_m,
+        });
+        dispatch({ type: "SET_CIRCULATION_RESULT", result });
+        dispatch({ type: "SET_ERROR", error: null });
+        return true;
+      } catch (err) {
+        dispatch({ type: "SET_ERROR", error: err instanceof api.ApiError ? err.message : String(err) });
+        return false;
+      } finally {
+        dispatch({ type: "SET_LOADING", loading: false });
+      }
+    },
+    [state.footprint, state.circulationResult, state.circulation.corridor_width_m,
+     state.circulation.max_dist_single_m, state.circulation.max_dist_multi_m]
   );
 
   const runReshapeCirculation = useCallback(
@@ -1069,6 +1108,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       activeUnitSeed: state.activeUnitSeed,
       regenerate,
       runPlaceCirculation,
+      runMoveCage,
       runSubdivideUnits,
       runReshapeCirculation,
       runRecomputeEvacuation,
@@ -1108,6 +1148,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       selectUnitIteration,
       regenerate,
       runPlaceCirculation,
+      runMoveCage,
       runSubdivideUnits,
       runReshapeCirculation,
       runRecomputeEvacuation,
