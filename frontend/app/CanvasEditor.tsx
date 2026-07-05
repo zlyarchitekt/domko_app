@@ -9,7 +9,7 @@ import { useSession, Point2D } from "./state/SessionContext";
 import { deriveApartmentStatuses } from "./lib/deriveStatus";
 import { GeoJsonPolygon } from "./lib/api";
 import * as api from "./lib/api";
-import { snap } from "./lib/polygonEdit";
+import { snap, insertVertexAt, removeVertexAt } from "./lib/polygonEdit";
 const METER_PX = 50; // base scale: 1m = 50px
 
 function clamp(n: number, min: number, max: number) {
@@ -320,7 +320,7 @@ function moveSharedLine(
 }
 
 export default function CanvasEditor() {
-  const { state, addDrawPoint, removeLastDrawPoint, finishDrawing, updateVertex, selectApartment, updateApartmentsAndValidate, runReshapeCirculation, dispatch } = useSession();
+  const { state, addDrawPoint, removeLastDrawPoint, finishDrawing, updateVertex, setFootprintPoints, selectApartment, updateApartmentsAndValidate, runReshapeCirculation, dispatch } = useSession();
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType>(null);
 
@@ -719,6 +719,16 @@ export default function CanvasEditor() {
                 hitStrokeWidth={14 / scale}
                 onMouseEnter={() => setHoveredOutlineSegment(i)}
                 onMouseLeave={() => setHoveredOutlineSegment(null)}
+                onDblClick={(e) => {
+                  e.cancelBubble = true;
+                  if (!footprint) return;
+                  const stage = stageRef.current;
+                  const pointer = stage?.getPointerPosition();
+                  if (!pointer) return;
+                  const clicked = worldToMeters(pointer.x, pointer.y);
+                  const next = insertVertexAt(footprint, i, clicked);
+                  if (next) setFootprintPoints(next);
+                }}
               />
             ))}
 
@@ -1206,6 +1216,12 @@ export default function CanvasEditor() {
                     e.target.y() * scale + position.y
                   );
                   updateVertex(i, snapped);
+                }}
+                onDblClick={(e) => {
+                  e.cancelBubble = true;
+                  if (!footprint) return;
+                  const next = removeVertexAt(footprint, i);
+                  if (next) setFootprintPoints(next);
                 }}
               />
             ))}
