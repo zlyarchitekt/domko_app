@@ -128,6 +128,8 @@ export interface CirculationSpecInput {
   cage_size_m: number;
   cage_position: CagePosition;
   num_cages: number;
+  manual_cages: Point[][];
+  manual_corridors: Point[][];
 }
 
 export interface LayoutGenerateRequest {
@@ -195,6 +197,7 @@ export interface CirculationResponse {
   cage_geometries: GeoJsonPolygon[];
   remainder: GeoJsonPolygon; // może być Polygon lub MultiPolygon (patrz backend CirculationResult.remainder)
   centerline: CorridorCenterlineSegment[];
+  warnings?: string[];
 }
 
 export function placeCirculation(

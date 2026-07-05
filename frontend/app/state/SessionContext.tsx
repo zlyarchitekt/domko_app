@@ -5,7 +5,15 @@ import * as api from "../lib/api";
 
 export type Point2D = { x: number; y: number };
 
-export type EditorMode = "idle" | "draw" | "edit-vertices" | "edit-lines" | "edit-circulation" | "edit-corridor-centerline";
+export type EditorMode =
+  | "idle"
+  | "draw"
+  | "edit-vertices"
+  | "edit-lines"
+  | "edit-circulation"
+  | "edit-corridor-centerline"
+  | "draw-cage"
+  | "draw-corridor";
 
 export interface ProgramRow {
   id: string;
@@ -41,6 +49,16 @@ function recomputeDerivedProgram(rows: ProgramRow[], totalUnits: number): Progra
   }));
 }
 
+export interface ManualCage {
+  id: string;
+  ring: Point2D[];
+}
+
+export interface ManualCorridor {
+  id: string;
+  path: Point2D[];
+}
+
 interface SessionState {
   footprint: Point2D[] | null;
   drawingPoints: Point2D[];
@@ -49,6 +67,9 @@ interface SessionState {
   totalUnits: number;
   circulation: api.CirculationSpecInput;
   circulationResult: api.CirculationResponse | null;
+  manualCages: ManualCage[];
+  manualCorridors: ManualCorridor[];
+  hoveredManualId: string | null;
   layoutResult: api.LayoutGenerateResponse | null;
   validation: api.FullLayoutValidateResponse | null;
   typologySuggestion: api.TypologySuggestResponse | null;
@@ -73,6 +94,8 @@ const initialCirculation: api.CirculationSpecInput = {
   cage_size_m: 2.5,
   cage_position: "auto",
   num_cages: 1,
+  manual_cages: [],
+  manual_corridors: [],
 };
 
 const INITIAL_TOTAL_UNITS = 10;
@@ -96,6 +119,9 @@ const initialState: SessionState = {
   totalUnits: INITIAL_TOTAL_UNITS,
   circulation: initialCirculation,
   circulationResult: null,
+  manualCages: [],
+  manualCorridors: [],
+  hoveredManualId: null,
   layoutResult: null,
   validation: null,
   typologySuggestion: null,
@@ -128,6 +154,10 @@ type Action =
   | { type: "SET_TOTAL_UNITS"; totalUnits: number }
   | { type: "SET_CIRCULATION"; patch: Partial<api.CirculationSpecInput> }
   | { type: "SET_CIRCULATION_RESULT"; result: api.CirculationResponse | null }
+  | { type: "ADD_MANUAL_CAGE"; ring: Point2D[] }
+  | { type: "ADD_MANUAL_CORRIDOR"; path: Point2D[] }
+  | { type: "REMOVE_MANUAL_ELEMENT"; id: string }
+  | { type: "SET_HOVERED_MANUAL"; id: string | null }
   | { type: "SET_LAYOUT_RESULT"; result: api.LayoutGenerateResponse | null }
   | { type: "SET_VALIDATION"; validation: api.FullLayoutValidateResponse | null }
   | { type: "SET_TYPOLOGY_SUGGESTION"; suggestion: api.TypologySuggestResponse | null }
@@ -159,7 +189,11 @@ function reducer(state: SessionState, action: Action): SessionState {
       return {
         ...state,
         mode: action.mode,
-        drawingPoints: action.mode === "draw" || state.mode === "draw" ? [] : state.drawingPoints,
+        drawingPoints:
+          ["draw", "draw-cage", "draw-corridor"].includes(action.mode) ||
+          ["draw", "draw-cage", "draw-corridor"].includes(state.mode)
+            ? []
+            : state.drawingPoints,
       };
     case "ADD_DRAW_POINT":
       return { ...state, drawingPoints: [...state.drawingPoints, action.point] };
@@ -234,6 +268,32 @@ function reducer(state: SessionState, action: Action): SessionState {
       return { ...state, circulation: { ...state.circulation, ...action.patch } };
     case "SET_CIRCULATION_RESULT":
       return { ...state, circulationResult: action.result };
+    case "ADD_MANUAL_CAGE":
+      return {
+        ...state,
+        manualCages: [...state.manualCages, { id: crypto.randomUUID(), ring: action.ring }],
+        drawingPoints: [],
+        mode: "idle",
+        // jak UPDATE_VERTEX: wyniki pochodne są nieaktualne do czasu przeliczenia
+        layoutResult: null, validation: null,
+      };
+    case "ADD_MANUAL_CORRIDOR":
+      return {
+        ...state,
+        manualCorridors: [...state.manualCorridors, { id: crypto.randomUUID(), path: action.path }],
+        drawingPoints: [],
+        mode: "idle",
+        layoutResult: null, validation: null,
+      };
+    case "REMOVE_MANUAL_ELEMENT":
+      return {
+        ...state,
+        manualCages: state.manualCages.filter((c) => c.id !== action.id),
+        manualCorridors: state.manualCorridors.filter((c) => c.id !== action.id),
+        layoutResult: null, validation: null,
+      };
+    case "SET_HOVERED_MANUAL":
+      return { ...state, hoveredManualId: action.id };
     case "SET_LAYOUT_RESULT":
       // Every dispatch site (regenerate, runPlaceCirculation, runSubdivideUnits,
       // apply-optimizer-variant) means the apartment geometry/IDs just changed --
@@ -354,8 +414,12 @@ interface SessionContextValue {
   setTotalUnits: (totalUnits: number) => void;
   setCirculation: (patch: Partial<api.CirculationSpecInput>) => void;
   selectApartment: (id: string | null) => void;
+  addManualCage: (ring: Point2D[]) => void;
+  addManualCorridor: (path: Point2D[]) => void;
+  removeManualElement: (id: string) => void;
+  setHoveredManualId: (id: string | null) => void;
   regenerate: () => Promise<void>;
-  runPlaceCirculation: () => Promise<void>;
+  runPlaceCirculation: (overrides?: { manualCages?: ManualCage[]; manualCorridors?: ManualCorridor[] }) => Promise<void>;
   runSubdivideUnits: () => Promise<void>;
   runReshapeCirculation: (segments: [Point2D, Point2D][]) => Promise<void>;
   refreshTypologySuggestion: () => Promise<void>;
@@ -467,6 +531,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     []
   );
   const selectApartment = useCallback((id: string | null) => dispatch({ type: "SELECT_APARTMENT", id }), []);
+  const addManualCage = useCallback((ring: Point2D[]) => dispatch({ type: "ADD_MANUAL_CAGE", ring }), []);
+  const addManualCorridor = useCallback((path: Point2D[]) => dispatch({ type: "ADD_MANUAL_CORRIDOR", path }), []);
+  const removeManualElement = useCallback((id: string) => dispatch({ type: "REMOVE_MANUAL_ELEMENT", id }), []);
+  const setHoveredManualId = useCallback((id: string | null) => dispatch({ type: "SET_HOVERED_MANUAL", id }), []);
 
   const setGps = useCallback((gps: { lat: number; lng: number }) => dispatch({ type: "SET_GPS", gps }), []);
   const setAnalysisDate = useCallback((date: string) => dispatch({ type: "SET_ANALYSIS_DATE", date }), []);
@@ -493,7 +561,18 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (!state.footprint || state.footprint.length < 3) return;
     dispatch({ type: "SET_LOADING", loading: true });
     try {
-      const req = buildRequest(state.footprint);
+      const req: api.LayoutGenerateRequest = {
+        ...buildRequest(state.footprint),
+        // Same dual-surface fix as runPlaceCirculation: the one-shot
+        // /layout/generate path must also carry the current manual
+        // cages/corridors, otherwise they silently vanish on "Generuj układ"
+        // (see gotcha_dual_layout_api_surface.md).
+        circulation: {
+          ...state.circulation,
+          manual_cages: state.manualCages.map((c) => c.ring.map((p) => [p.x, p.y] as api.Point)),
+          manual_corridors: state.manualCorridors.map((c) => c.path.map((p) => [p.x, p.y] as api.Point)),
+        },
+      };
       const [layout, validation] = await Promise.all([
         api.generateLayout(req),
         api.validateFullLayout(req),
@@ -506,23 +585,35 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     } finally {
       dispatch({ type: "SET_LOADING", loading: false });
     }
-  }, [state.footprint, buildRequest]);
+  }, [state.footprint, buildRequest, state.circulation, state.manualCages, state.manualCorridors]);
 
-  const runPlaceCirculation = useCallback(async () => {
-    if (!state.footprint || state.footprint.length < 3) return;
-    dispatch({ type: "SET_LOADING", loading: true });
-    try {
-      const result = await api.placeCirculation(footprintToPoints(state.footprint), state.circulation);
-      dispatch({ type: "SET_CIRCULATION_RESULT", result });
-      dispatch({ type: "SET_LAYOUT_RESULT", result: null });
-      dispatch({ type: "SET_VALIDATION", validation: null });
-      dispatch({ type: "SET_ERROR", error: null });
-    } catch (err) {
-      dispatch({ type: "SET_ERROR", error: err instanceof api.ApiError ? err.message : String(err) });
-    } finally {
-      dispatch({ type: "SET_LOADING", loading: false });
-    }
-  }, [state.footprint, state.circulation]);
+  const runPlaceCirculation = useCallback(
+    async (overrides?: { manualCages?: ManualCage[]; manualCorridors?: ManualCorridor[] }) => {
+      if (!state.footprint || state.footprint.length < 3) return;
+      // overrides: handler po dispatch(ADD_/REMOVE_) ma świeżą listę wcześniej
+      // niż state z closure — bez tego pierwszy przelicz po dodaniu elementu
+      // wysyłałby listę sprzed dodania.
+      const cages = overrides?.manualCages ?? state.manualCages;
+      const corridors = overrides?.manualCorridors ?? state.manualCorridors;
+      dispatch({ type: "SET_LOADING", loading: true });
+      try {
+        const result = await api.placeCirculation(footprintToPoints(state.footprint), {
+          ...state.circulation,
+          manual_cages: cages.map((c) => c.ring.map((p) => [p.x, p.y] as api.Point)),
+          manual_corridors: corridors.map((c) => c.path.map((p) => [p.x, p.y] as api.Point)),
+        });
+        dispatch({ type: "SET_CIRCULATION_RESULT", result });
+        dispatch({ type: "SET_LAYOUT_RESULT", result: null });
+        dispatch({ type: "SET_VALIDATION", validation: null });
+        dispatch({ type: "SET_ERROR", error: null });
+      } catch (err) {
+        dispatch({ type: "SET_ERROR", error: err instanceof api.ApiError ? err.message : String(err) });
+      } finally {
+        dispatch({ type: "SET_LOADING", loading: false });
+      }
+    },
+    [state.footprint, state.circulation, state.manualCages, state.manualCorridors]
+  );
 
   const runReshapeCirculation = useCallback(
     async (segments: [Point2D, Point2D][]) => {
@@ -765,6 +856,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setTotalUnits,
       setCirculation,
       selectApartment,
+      addManualCage,
+      addManualCorridor,
+      removeManualElement,
+      setHoveredManualId,
       regenerate,
       runPlaceCirculation,
       runSubdivideUnits,
@@ -796,6 +891,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setTotalUnits,
       setCirculation,
       selectApartment,
+      addManualCage,
+      addManualCorridor,
+      removeManualElement,
+      setHoveredManualId,
       regenerate,
       runPlaceCirculation,
       runSubdivideUnits,
