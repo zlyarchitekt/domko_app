@@ -30,3 +30,6 @@ Thumbs.db
 
 # Hermes / project
 *.log
+
+# superpowers scratch (ledger, briefs, review packages, brainstorm mockups)
+.superpowers/
