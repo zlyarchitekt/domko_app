@@ -255,6 +255,40 @@ def test_move_cage_endpoint_rejects_cage_outside_footprint():
     assert res.status_code == 422
 
 
+def test_move_cage_endpoint_rejects_colliding_cages():
+    from fastapi.testclient import TestClient
+    from main import app
+
+    client = TestClient(app)
+    footprint = [[0, 0], [40, 0], [40, 12], [0, 12]]
+    cage_a = box(2, 2, 6.2, 7.7)
+    cage_b = box(4, 3, 8.2, 8.7)  # overlaps cage_a
+    payload = {
+        "footprint": footprint,
+        "cage_geometries": [json.loads(_shape_to_json(cage_a)), json.loads(_shape_to_json(cage_b))],
+        "corridor_width_m": 1.5,
+    }
+    res = client.post("/api/v1/layout/circulation/move-cage", json=payload)
+    assert res.status_code == 422
+
+
+def test_move_cage_endpoint_rejects_cage_straddling_zone_boundary():
+    from fastapi.testclient import TestClient
+    from main import app
+
+    client = TestClient(app)
+    # L-shape: rectangle_decompose splits this into 2 zones at the y=8 seam.
+    footprint = [[0, 0], [40, 0], [40, 8], [24, 8], [24, 12], [0, 12]]
+    straddling_cage = box(5, 6, 9, 10)  # crosses the y=8 zone boundary
+    payload = {
+        "footprint": footprint,
+        "cage_geometries": [json.loads(_shape_to_json(straddling_cage))],
+        "corridor_width_m": 1.5,
+    }
+    res = client.post("/api/v1/layout/circulation/move-cage", json=payload)
+    assert res.status_code == 422
+
+
 def test_circulation_endpoint_iterations_carry_geometry():
     from fastapi.testclient import TestClient
     from main import app

@@ -828,17 +828,25 @@ def move_cage_endpoint(request: MoveCageRequest):
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid cage geometry: {exc}")
 
-    fp_buffered = footprint.buffer(1e-9)
-    for cage in cages:
+    fp_buffered = footprint.buffer(1e-6)
+    for i, cage in enumerate(cages):
         if not fp_buffered.contains(cage):
-            raise HTTPException(status_code=422, detail="Klatka poza obrysem")
+            raise HTTPException(status_code=422, detail=f"Klatka {i + 1} poza obrysem")
     for i, a in enumerate(cages):
-        for b in cages[i + 1:]:
+        for j, b in enumerate(cages[i + 1:], start=i + 1):
             if a.intersects(b):
-                raise HTTPException(status_code=422, detail="Klatki kolidują ze sobą")
+                raise HTTPException(
+                    status_code=422, detail=f"Klatka {i + 1} koliduje z klatką {j + 1}"
+                )
 
     zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
     local_cages = assign_cages_to_zones(cages, zones)
+
+    if sum(len(v) for v in local_cages.values()) != len(cages):
+        raise HTTPException(
+            status_code=422,
+            detail="Klatka nie mieści się w całości w żadnej strefie (obrys wklęsły dzieli ją na dwie części)",
+        )
 
     result = _assemble_with_cages(
         footprint, zones, local_cages, request.corridor_width_m,

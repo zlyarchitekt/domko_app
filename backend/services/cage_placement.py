@@ -92,13 +92,17 @@ def assign_cages_to_zones(cages: list[Polygon], zones: list[Zone]) -> dict[int, 
     """Przypisuje każdą klatkę do strefy, której bbox ją zawiera (spec
     2026-07-05-circulation-iteration-selection-and-drag §2 -- przesunięta
     klatka musi trafić do właściwej strefy przed przeliczeniem korytarza).
-    Klatka niepasująca do żadnej strefy (np. przeciągnięta poza obrys)
-    jest pomijana -- wywołujący (endpoint) waliduje osobno przez
-    `footprint.contains`, więc to nie powinno się zdarzyć w praktyce."""
+    Klatka niepasująca w całości do żadnej pojedynczej strefy (np.
+    przeciągnięta poza obrys, ALBO leżąca w całości wewnątrz obrysu, ale
+    okraczająca szew między dwiema strefami wklęsłego footprintu po
+    `rectangle_decompose`) jest tu pomijana -- wywołujący (endpoint) MUSI
+    sprawdzić, że `sum(len(v) for v in result.values()) == len(cages)`,
+    inaczej klatka po cichu znika z wyniku (patrz reviewer finding
+    2026-07-06: cage-straddles-zone-boundary)."""
     result: dict[int, list[Polygon]] = {}
     for cage in cages:
         for zi, zone in enumerate(zones):
-            if zone.polygon.buffer(1e-9).contains(cage):
+            if zone.polygon.buffer(1e-6).contains(cage):
                 result.setdefault(zi, []).append(cage)
                 break
     return result
