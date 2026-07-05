@@ -9,6 +9,10 @@ from shapely.geometry import LineString, Polygon
 from shapely.ops import split, unary_union
 
 from services.bsp import Zone
+from services.circulation import (
+    CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M,
+    CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M,
+)
 
 _CARDINAL_DIRECTIONS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 
@@ -91,10 +95,10 @@ class LayoutInput:
     manual_corridors: list[list[tuple[float, float]]] = field(default_factory=list)
     apartments: list[ApartmentSpec] = field(default_factory=list)
     local_law: str | None = None
-    max_dist_single_m: float = 20.0
+    max_dist_single_m: float = CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M
     """Edytowalny próg zielonej kropki ewakuacyjnej (spec 2026-07-04-
     evacuation-dots) -- passthrough do place_circulation()."""
-    max_dist_multi_m: float = 40.0
+    max_dist_multi_m: float = CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M
     """Edytowalny próg szarej kropki ewakuacyjnej (>=2 klatki osiągalne)."""
 
 

@@ -81,3 +81,47 @@ def test_place_circulation_returns_dots():
     assert result.centerline  # sanity
     assert result.evacuation_dots
     assert {d.status for d in result.evacuation_dots} <= {"green", "gray", "red"}
+
+
+def test_place_circulation_threshold_override_changes_classification():
+    from shapely.geometry import Polygon as _P
+    from services.circulation import place_circulation
+
+    footprint = _P([(0, 0), (30, 0), (30, 12), (0, 12)])
+    tight = place_circulation(
+        footprint, corridor_width_m=1.5, stair_width_m=1.2,
+        place_cage=True, cage_size_m=2.5, cage_position="auto", num_cages=1,
+        max_dist_single_m=1.0, max_dist_multi_m=1.0,
+    )
+    loose = place_circulation(
+        footprint, corridor_width_m=1.5, stair_width_m=1.2,
+        place_cage=True, cage_size_m=2.5, cage_position="auto", num_cages=1,
+        max_dist_single_m=100.0, max_dist_multi_m=100.0,
+    )
+    tight_reds = sum(1 for d in tight.evacuation_dots if d.status == "red")
+    loose_reds = sum(1 for d in loose.evacuation_dots if d.status == "red")
+    assert tight_reds > loose_reds
+    assert loose_reds == 0
+
+
+def test_circulation_endpoint_serializes_evacuation_dots():
+    from fastapi.testclient import TestClient
+    from main import app
+
+    client = TestClient(app)
+    payload = {
+        "footprint": [[0, 0], [30, 0], [30, 12], [0, 12]],
+        "circulation": {
+            "corridor_width_m": 1.5, "stair_width_m": 1.2, "place_cage": True,
+            "cage_size_m": 2.5, "cage_position": "auto", "num_cages": 1,
+        },
+        "apartments": [],
+    }
+    res = client.post("/api/v1/layout/circulation", json=payload)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert "evacuation_dots" in body
+    assert len(body["evacuation_dots"]) > 0
+    dot = body["evacuation_dots"][0]
+    assert set(dot.keys()) >= {"x", "y", "status", "distance_m"}
+    assert dot["status"] in {"green", "gray", "red"}

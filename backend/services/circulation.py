@@ -572,7 +572,11 @@ def place_circulation(
         circulation_geom = unary_union([circulation_geom, band])
         remainder = remainder.difference(band)
         # Odległości liczone per manualna ścieżka (osobna od auto-ścieżki);
-        # Etap 3 (evacuation-dots) zastąpi to grafem całej sieci.
+        # zasila CorridorCenterlineSegment.distance_start_m/distance_end_m/
+        # exceeds_max (używane gdzie indziej). Etap 3 (evacuation-dots) NIE
+        # zastąpił tego -- dodał compute_evacuation_dots() jako osobne,
+        # dodatkowe liczenie na grafie całej sieci (zasila evacuation_dots/UI
+        # kropek), obok tego istniejącego liczenia per-ścieżka.
         arc = _distances_along_centerline([tuple(p) for p in path], all_cage_points)
         for i in range(len(path) - 1):
             p1, p2 = tuple(path[i]), tuple(path[i + 1])

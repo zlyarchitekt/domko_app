@@ -6,7 +6,12 @@ from pydantic import BaseModel, Field
 from shapely.geometry import LineString, Polygon
 from shapely.geometry import shape as _shape
 
-from services.circulation import CAGE_POSITION_MODES, place_circulation
+from services.circulation import (
+    CAGE_POSITION_MODES,
+    CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M,
+    CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M,
+    place_circulation,
+)
 from services.layout import ApartmentSpec, LayoutInput, LayoutResult, generate_layout
 from services.unit_mix import subdivide_units
 from services.wall_geometry import exterior_wall_band, interior_wall_bands
@@ -38,9 +43,9 @@ class CirculationSpec(BaseModel):
     (spec 2026-07-04 manual-circulation-drawing §3)."""
     manual_corridors: list[list[list[float]]] = Field(default_factory=list)
     """Łamane osi ręcznie narysowanych korytarzy [[x,y],...]."""
-    max_dist_single_m: float = Field(default=20.0, gt=0)
+    max_dist_single_m: float = Field(default=CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M, gt=0)
     """Edytowalny próg zielonej kropki (heurystyka usera, nie § WT)."""
-    max_dist_multi_m: float = Field(default=40.0, gt=0)
+    max_dist_multi_m: float = Field(default=CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M, gt=0)
     """Edytowalny próg szarej kropki (>=2 klatki osiągalne)."""
 
 
@@ -515,9 +520,9 @@ class ReshapeCirculationRequest(BaseModel):
     centerline: list[ReshapeSegmentInput] = Field(..., min_length=1)
     corridor_width_m: float = Field(..., gt=0)
     cage_geometries: list[dict] = Field(default_factory=list)
-    max_dist_single_m: float = Field(default=20.0, gt=0)
+    max_dist_single_m: float = Field(default=CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M, gt=0)
     """Edytowalny próg zielonej kropki (heurystyka usera, nie § WT)."""
-    max_dist_multi_m: float = Field(default=40.0, gt=0)
+    max_dist_multi_m: float = Field(default=CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M, gt=0)
     """Edytowalny próg szarej kropki (>=2 klatki osiągalne)."""
 
 
