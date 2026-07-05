@@ -30,6 +30,8 @@ export default function CirculationSection() {
     runPlaceCirculation,
     runSubdivideUnits,
     setMode,
+    removeManualElement,
+    setHoveredManualId,
   } = useSession();
 
   useEffect(() => {
@@ -178,7 +180,85 @@ export default function CirculationSection() {
           <Move size={13} />
           Edytuj linię korytarza
         </button>
+        <button
+          onClick={() => setMode(state.mode === "draw-cage" ? "idle" : "draw-cage")}
+          disabled={!state.footprint}
+          className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-30 ${
+            state.mode === "draw-cage"
+              ? "bg-accent-500/20 text-accent-400 ring-1 ring-inset ring-accent-500/30"
+              : "bg-zinc-800/70 text-zinc-300 hover:bg-zinc-700/70 light:bg-zinc-100 light:text-zinc-700 light:hover:bg-zinc-200"
+          }`}
+          title={!state.footprint ? "Najpierw narysuj obrys" : "Klikaj punkty, dblclick zamyka klatkę"}
+        >
+          Rysuj klatkę
+        </button>
+        <button
+          onClick={() => setMode(state.mode === "draw-corridor" ? "idle" : "draw-corridor")}
+          disabled={!state.footprint}
+          className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-30 ${
+            state.mode === "draw-corridor"
+              ? "bg-accent-500/20 text-accent-400 ring-1 ring-inset ring-accent-500/30"
+              : "bg-zinc-800/70 text-zinc-300 hover:bg-zinc-700/70 light:bg-zinc-100 light:text-zinc-700 light:hover:bg-zinc-200"
+          }`}
+          title={!state.footprint ? "Najpierw narysuj obrys" : "Klikaj punkty osi, dblclick kończy korytarz"}
+        >
+          Rysuj korytarz
+        </button>
       </div>
+
+      {(state.manualCages.length > 0 || state.manualCorridors.length > 0) && (
+        <div className="space-y-1 pt-1">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Elementy ręczne</div>
+          {state.manualCages.map((c, i) => (
+            <div
+              key={c.id}
+              onMouseEnter={() => setHoveredManualId(c.id)}
+              onMouseLeave={() => setHoveredManualId(null)}
+              className="flex items-center justify-between rounded-lg bg-zinc-900/70 px-2 py-1 text-xs text-zinc-300 light:bg-zinc-100 light:text-zinc-700"
+            >
+              <span>Klatka {i + 1}</span>
+              <button
+                onClick={() => {
+                  removeManualElement(c.id);
+                  void runPlaceCirculation({ manualCages: state.manualCages.filter((x) => x.id !== c.id) });
+                }}
+                className="text-zinc-500 hover:text-red-400"
+                title="Usuń"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          {state.manualCorridors.map((c, i) => (
+            <div
+              key={c.id}
+              onMouseEnter={() => setHoveredManualId(c.id)}
+              onMouseLeave={() => setHoveredManualId(null)}
+              className="flex items-center justify-between rounded-lg bg-zinc-900/70 px-2 py-1 text-xs text-zinc-300 light:bg-zinc-100 light:text-zinc-700"
+            >
+              <span>Korytarz {i + 1}</span>
+              <button
+                onClick={() => {
+                  removeManualElement(c.id);
+                  void runPlaceCirculation({ manualCorridors: state.manualCorridors.filter((x) => x.id !== c.id) });
+                }}
+                className="text-zinc-500 hover:text-red-400"
+                title="Usuń"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(state.circulationResult?.warnings?.length ?? 0) > 0 && (
+        <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-300 light:text-amber-700">
+          {state.circulationResult!.warnings!.map((w, i) => (
+            <div key={i}>{w}</div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
