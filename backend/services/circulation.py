@@ -428,6 +428,87 @@ def _make_centerline_segment(
     )
 
 
+def _assemble_with_cages(
+    footprint: Polygon,
+    zones: list[Zone],
+    local_cages: dict[int, Polygon],
+    corridor_width_m: float,
+    max_dist_single_m: float,
+    max_dist_multi_m: float,
+) -> CirculationResult:
+    """Buduje korytarze, linię środkową i kropki ewakuacyjne dla zadanych klatek
+    (wyznaczonych w place_circulation). Pobiera słownik local_cages (indeks strefy
+    → wielokąt klatki) i zwraca CirculationResult z auto-umieszczoną geometrią
+    (bez elementów ręcznych z Etapu 2).
+
+    Używane w place_circulation() do budowy wyniku auto-placement, przed dodaniem
+    ręcznych klatek i korytarzy."""
+    circulation_geom = unary_union(list(local_cages.values())) if local_cages else Polygon()
+    cage_polygons = list(local_cages.values())
+
+    remainder_parts: list[Polygon] = []
+
+    for i, zone in enumerate(zones):
+        if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
+            continue
+
+        local_cage = local_cages.get(i)
+        zone_remaining = zone.polygon.difference(local_cage) if local_cage is not None else zone.polygon
+
+        corridor = _build_corridor(zone_remaining, corridor_width_m, local_cage)
+        if corridor.area > 0:
+            circulation_geom = unary_union([circulation_geom, corridor])
+            zone_remaining = zone_remaining.difference(corridor)
+
+        if not zone_remaining.is_empty and zone_remaining.area > 1e-6:
+            remainder_parts.append(zone_remaining)
+
+    remainder = unary_union(remainder_parts) if remainder_parts else Polygon()
+
+    raw_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    for i, zone in enumerate(zones):
+        if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
+            continue
+        local_cage = local_cages.get(i)
+        seg = _corridor_centerline(zone.polygon, corridor_width_m, local_cage)
+        if seg is not None:
+            raw_segments.append(seg)
+
+    centerline_path = _join_centerlines(raw_segments)
+    cage_points = [(c.centroid.x, c.centroid.y) for c in cage_polygons]
+    arc_distances = _distances_along_centerline(centerline_path, cage_points)
+
+    centerline: list[CorridorCenterlineSegment] = []
+    for i in range(len(centerline_path) - 1):
+        p1, p2 = centerline_path[i], centerline_path[i + 1]
+        midpoint = Point((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+        containing_zone = next(
+            (z.polygon for z in zones if z.polygon.buffer(1e-6).contains(midpoint)),
+            footprint,
+        )
+        loading = _classify_segment_loading(containing_zone, (p1, p2), corridor_width_m)
+        d_start, d_end = arc_distances[i], arc_distances[i + 1]
+        centerline.append(_make_centerline_segment(p1, p2, loading, d_start, d_end))
+
+    # ── Kropki ewakuacyjne (spec 2026-07-04-evacuation-dots) ──
+    from services.evacuation import compute_evacuation_dots
+
+    all_segments = [seg.points for seg in centerline]
+    evacuation_dots = compute_evacuation_dots(
+        all_segments, cage_polygons,
+        green_max_m=max_dist_single_m, gray_max_m=max_dist_multi_m,
+    )
+
+    return CirculationResult(
+        zones=zones,
+        circulation_geometry=circulation_geom,
+        cage_polygons=cage_polygons,
+        remainder=remainder,
+        centerline=centerline,
+        evacuation_dots=evacuation_dots,
+    )
+
+
 def place_circulation(
     footprint: Polygon,
     corridor_width_m: float,
@@ -480,10 +561,9 @@ def place_circulation(
             cage_zone_order = matching + remaining
 
     local_cages: dict[int, Polygon] = {}
-    circulation_geom = Polygon()
-    cage_polygons: list[Polygon] = []
 
     if place_cage:
+        cage_polygons: list[Polygon] = []
         for i in cage_zone_order:
             if len(cage_polygons) >= num_cages:
                 break
@@ -497,53 +577,13 @@ def place_circulation(
             if cage_polygon is not None and cage_polygon.area > zone.polygon.area * 0.9:
                 cage_polygon = None
             if cage_polygon is not None and cage_polygon.area > 0:
-                circulation_geom = unary_union([circulation_geom, cage_polygon])
                 cage_polygons.append(cage_polygon)
                 local_cages[i] = cage_polygon
 
-    remainder_parts: list[Polygon] = []
-
-    for i, zone in enumerate(zones):
-        if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
-            continue
-
-        local_cage = local_cages.get(i)
-        zone_remaining = zone.polygon.difference(local_cage) if local_cage is not None else zone.polygon
-
-        corridor = _build_corridor(zone_remaining, corridor_width_m, local_cage)
-        if corridor.area > 0:
-            circulation_geom = unary_union([circulation_geom, corridor])
-            zone_remaining = zone_remaining.difference(corridor)
-
-        if not zone_remaining.is_empty and zone_remaining.area > 1e-6:
-            remainder_parts.append(zone_remaining)
-
-    remainder = unary_union(remainder_parts) if remainder_parts else Polygon()
-
-    raw_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
-    for i, zone in enumerate(zones):
-        if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
-            continue
-        local_cage = local_cages.get(i)
-        seg = _corridor_centerline(zone.polygon, corridor_width_m, local_cage)
-        if seg is not None:
-            raw_segments.append(seg)
-
-    centerline_path = _join_centerlines(raw_segments)
-    cage_points = [(c.centroid.x, c.centroid.y) for c in cage_polygons]
-    arc_distances = _distances_along_centerline(centerline_path, cage_points)
-
-    centerline: list[CorridorCenterlineSegment] = []
-    for i in range(len(centerline_path) - 1):
-        p1, p2 = centerline_path[i], centerline_path[i + 1]
-        midpoint = Point((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
-        containing_zone = next(
-            (z.polygon for z in zones if z.polygon.buffer(1e-6).contains(midpoint)),
-            footprint,
-        )
-        loading = _classify_segment_loading(containing_zone, (p1, p2), corridor_width_m)
-        d_start, d_end = arc_distances[i], arc_distances[i + 1]
-        centerline.append(_make_centerline_segment(p1, p2, loading, d_start, d_end))
+    result = _assemble_with_cages(
+        footprint, zones, local_cages, corridor_width_m,
+        max_dist_single_m, max_dist_multi_m,
+    )
 
     # ── Manualne elementy (spec 2026-07-04 manual-circulation-drawing §3) ──
     # Dokładane PO auto-pipeline: manual przeżywa każde ponowne auto-
@@ -557,20 +597,20 @@ def place_circulation(
             raise ValueError(f"Klatka {idx + 1}: nieprawidłowy wielokąt")
         if not footprint.buffer(1e-6).contains(cage_poly):
             raise ValueError(f"Klatka {idx + 1} wykracza poza obrys budynku")
-        circulation_geom = unary_union([circulation_geom, cage_poly])
-        cage_polygons.append(cage_poly)
-        remainder = remainder.difference(cage_poly)
+        result.circulation_geometry = unary_union([result.circulation_geometry, cage_poly])
+        result.cage_polygons.append(cage_poly)
+        result.remainder = result.remainder.difference(cage_poly)
 
     half = (corridor_width_m + 2 * NET_SHRINK_M) / 2.0
-    all_cage_points = [(c.centroid.x, c.centroid.y) for c in cage_polygons]
+    all_cage_points = [(c.centroid.x, c.centroid.y) for c in result.cage_polygons]
     for path in manual_corridors:
         if len(path) < 2:
             continue
         band = LineString(path).buffer(half, cap_style="flat").intersection(footprint)
         if band.is_empty:
             continue
-        circulation_geom = unary_union([circulation_geom, band])
-        remainder = remainder.difference(band)
+        result.circulation_geometry = unary_union([result.circulation_geometry, band])
+        result.remainder = result.remainder.difference(band)
         # Odległości liczone per manualna ścieżka (osobna od auto-ścieżki);
         # zasila CorridorCenterlineSegment.distance_start_m/distance_end_m/
         # exceeds_max (używane gdzie indziej). Etap 3 (evacuation-dots) NIE
@@ -581,28 +621,25 @@ def place_circulation(
         for i in range(len(path) - 1):
             p1, p2 = tuple(path[i]), tuple(path[i + 1])
             loading = _classify_segment_loading(footprint, (p1, p2), corridor_width_m)
-            centerline.append(_make_centerline_segment(p1, p2, loading, arc[i], arc[i + 1]))
+            result.centerline.append(_make_centerline_segment(p1, p2, loading, arc[i], arc[i + 1]))
 
-    # ── Kropki ewakuacyjne (spec 2026-07-04-evacuation-dots) ──
-    # Musi biec PO scaleniu manuali powyżej: `centerline` tutaj to już pełna
-    # lista auto+manual, `cage_polygons` też pełna auto+manual -- inaczej
-    # kropki ignorowałyby ręcznie dorysowane klatki/korytarze.
+    # ── Przeliczenie kropek ewakuacyjnych (spec 2026-07-04-evacuation-dots) ──
+    # Po scaleniu manuali: `centerline` to już pełna lista auto+manual,
+    # `cage_polygons` też pełna auto+manual -- inaczej kropki ignorowałyby
+    # ręcznie dorysowane klatki/korytarze.
     from services.evacuation import compute_evacuation_dots
 
-    all_segments = [seg.points for seg in centerline]
-    evacuation_dots = compute_evacuation_dots(
-        all_segments, cage_polygons,
+    all_segments = [seg.points for seg in result.centerline]
+    result.evacuation_dots = compute_evacuation_dots(
+        all_segments, result.cage_polygons,
         green_max_m=max_dist_single_m, gray_max_m=max_dist_multi_m,
     )
 
-    return CirculationResult(
-        zones=zones,
-        circulation_geometry=circulation_geom if not circulation_geom.is_empty else None,
-        cage_polygons=cage_polygons,
-        remainder=remainder,
-        centerline=centerline,
-        evacuation_dots=evacuation_dots,
-    )
+    # Konwersja circulation_geometry do None jeśli pusta (pattern z oryginalnego kodu)
+    if result.circulation_geometry.is_empty:
+        result.circulation_geometry = None
+
+    return result
 
 
 def reshape_circulation(
