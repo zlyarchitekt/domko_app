@@ -71,6 +71,7 @@ class CageIterationMetaResult(BaseModel):
     circulation_geometry: dict | None = None
     centerline: list["CenterlineSegmentResult"] = []
     evacuation_dots: list["EvacuationDotResult"] = []
+    remainder: dict | None = None
 
 
 class CirculationSpec(BaseModel):
@@ -417,6 +418,10 @@ def _serialize_cage_iteration(m) -> "CageIterationMetaResult":
         ),
         centerline=_serialize_centerline(m.result.centerline) if m.result is not None else [],
         evacuation_dots=_serialize_dots(m.result.evacuation_dots) if m.result is not None else [],
+        remainder=(
+            json.loads(json.dumps(m.result.remainder.__geo_interface__))
+            if m.result is not None else None
+        ),
     )
 
 

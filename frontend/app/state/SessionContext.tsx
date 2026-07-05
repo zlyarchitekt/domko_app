@@ -327,6 +327,7 @@ function reducer(state: SessionState, action: Action): SessionState {
           circulation_geometry: meta.circulation_geometry ?? state.circulationResult.circulation_geometry,
           centerline: meta.centerline ?? state.circulationResult.centerline,
           evacuation_dots: meta.evacuation_dots ?? state.circulationResult.evacuation_dots,
+          remainder: meta.remainder ?? state.circulationResult.remainder,
         },
         // wybór innej iteracji unieważnia ewentualny wcześniejszy podział na
         // mieszkania (ten sam wzorzec co ADD_MANUAL_CAGE/REMOVE_MANUAL_ELEMENT)

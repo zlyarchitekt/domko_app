@@ -313,3 +313,4 @@ def test_circulation_endpoint_iterations_carry_geometry():
         assert "cage_geometries" in it
         assert isinstance(it["cage_geometries"], list)
         assert len(it["cage_geometries"]) == it["cages_count"]
+        assert it["remainder"] is not None
