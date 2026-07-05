@@ -572,3 +572,38 @@ def reshape_circulation_endpoint(request: ReshapeCirculationRequest):
         centerline=_serialize_centerline(result.centerline),
         evacuation_dots=_serialize_dots(result.evacuation_dots),
     )
+
+
+class EvacuationRecomputeRequest(BaseModel):
+    centerline: list[dict]
+    """[{points: [[x,y],[x,y]]}] -- aktualna oś z frontendu (auto+manual+reshape)."""
+    cage_geometries: list[dict] = Field(default_factory=list)
+    max_dist_single_m: float = Field(default=20.0, gt=0)
+    max_dist_multi_m: float = Field(default=40.0, gt=0)
+
+
+class EvacuationRecomputeResponse(BaseModel):
+    evacuation_dots: list[EvacuationDotResult] = []
+
+
+@router.post("/evacuation", response_model=EvacuationRecomputeResponse)
+def recompute_evacuation_endpoint(request: EvacuationRecomputeRequest):
+    """PRZELICZ (spec 2026-07-04-evacuation-dots §3): przemalowuje kropki
+    po zmianie progów BEZ ruszania geometrii -- ręcznie przesunięta oś
+    zostaje dokładnie tam, gdzie user ją zostawił."""
+    from services.evacuation import compute_evacuation_dots
+
+    try:
+        segments = [
+            ((seg["points"][0][0], seg["points"][0][1]), (seg["points"][1][0], seg["points"][1][1]))
+            for seg in request.centerline
+        ]
+        cages = [_shape(g) for g in request.cage_geometries]
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid evacuation payload: {exc}")
+
+    dots = compute_evacuation_dots(
+        segments, cages,
+        green_max_m=request.max_dist_single_m, gray_max_m=request.max_dist_multi_m,
+    )
+    return EvacuationRecomputeResponse(evacuation_dots=_serialize_dots(dots))

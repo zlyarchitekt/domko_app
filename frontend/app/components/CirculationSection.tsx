@@ -29,6 +29,7 @@ export default function CirculationSection() {
     applyTypologyPreset,
     runPlaceCirculation,
     runSubdivideUnits,
+    runRecomputeEvacuation,
     setMode,
     removeManualElement,
     setHoveredManualId,
@@ -137,6 +138,25 @@ export default function CirculationSection() {
         />
       </label>
 
+      <label className="flex items-center justify-between text-xs text-zinc-400">
+        Dojście do 1 klatki ≤ (m)
+        <input
+          type="number" step={1} min={1}
+          value={state.circulation.max_dist_single_m}
+          onChange={(e) => setCirculation({ max_dist_single_m: Number(e.target.value) })}
+          className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 font-mono text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+        />
+      </label>
+      <label className="flex items-center justify-between text-xs text-zinc-400">
+        Dojście do ≥2 klatek ≤ (m)
+        <input
+          type="number" step={1} min={1}
+          value={state.circulation.max_dist_multi_m}
+          onChange={(e) => setCirculation({ max_dist_multi_m: Number(e.target.value) })}
+          className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 font-mono text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+        />
+      </label>
+
       <div className="flex flex-col gap-1.5 pt-1">
         <button
           onClick={() => void runPlaceCirculation()}
@@ -179,6 +199,14 @@ export default function CirculationSection() {
         >
           <Move size={13} />
           Edytuj linię korytarza
+        </button>
+        <button
+          onClick={() => void runRecomputeEvacuation()}
+          disabled={!state.circulationResult || state.isLoading}
+          className="flex items-center justify-center gap-1.5 rounded-lg bg-zinc-800/70 px-2 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700/70 disabled:opacity-30 light:bg-zinc-100 light:text-zinc-700 light:hover:bg-zinc-200"
+          title="Przelicz kropki dojść po zmianie progów — bez ruszania geometrii"
+        >
+          PRZELICZ dojścia
         </button>
         <button
           onClick={() => setMode(state.mode === "draw-cage" ? "idle" : "draw-cage")}
@@ -272,7 +300,9 @@ export default function CirculationSection() {
                 : "border border-emerald-500/20 bg-emerald-500/10 text-emerald-300 light:text-emerald-700"
             }`}
           >
-            {reds > 0 ? `Dojścia: ${reds} pkt poza limitem (20/40m)` : "Dojścia: OK (limity 20/40m)"}
+            {reds > 0
+              ? `Dojścia: ${reds} pkt poza limitem (${state.circulation.max_dist_single_m}/${state.circulation.max_dist_multi_m}m)`
+              : `Dojścia: OK (limity ${state.circulation.max_dist_single_m}/${state.circulation.max_dist_multi_m}m)`}
           </div>
         );
       })()}

@@ -130,6 +130,8 @@ export interface CirculationSpecInput {
   num_cages: number;
   manual_cages: Point[][];
   manual_corridors: Point[][];
+  max_dist_single_m: number;
+  max_dist_multi_m: number;
 }
 
 export interface LayoutGenerateRequest {
@@ -232,6 +234,15 @@ export interface ReshapeCirculationResponse {
 
 export function reshapeCirculation(req: ReshapeCirculationRequest): Promise<ReshapeCirculationResponse> {
   return postJson("/layout/circulation/reshape", req);
+}
+
+export function recomputeEvacuation(req: {
+  centerline: { points: [Point, Point] }[];
+  cage_geometries: GeoJsonPolygon[];
+  max_dist_single_m: number;
+  max_dist_multi_m: number;
+}): Promise<{ evacuation_dots: EvacuationDot[] }> {
+  return postJson("/layout/evacuation", req);
 }
 
 export interface UnitsResponse {

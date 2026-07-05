@@ -96,6 +96,8 @@ const initialCirculation: api.CirculationSpecInput = {
   num_cages: 1,
   manual_cages: [],
   manual_corridors: [],
+  max_dist_single_m: 20,
+  max_dist_multi_m: 40,
 };
 
 const INITIAL_TOTAL_UNITS = 10;
@@ -176,6 +178,7 @@ type Action =
   | { type: "SET_THEME"; theme: "dark" | "light" }
   | { type: "TRANSLATE_CIRCULATION"; dx: number; dy: number }
   | { type: "RESHAPE_CIRCULATION"; result: api.ReshapeCirculationResponse }
+  | { type: "SET_EVACUATION_DOTS"; dots: api.EvacuationDot[] }
   | { type: "RESTORE_STATE"; state: SessionState };
 
 function reducer(state: SessionState, action: Action): SessionState {
@@ -361,6 +364,12 @@ function reducer(state: SessionState, action: Action): SessionState {
         },
       };
     }
+    case "SET_EVACUATION_DOTS":
+      if (!state.circulationResult) return state;
+      return {
+        ...state,
+        circulationResult: { ...state.circulationResult, evacuation_dots: action.dots },
+      };
     case "RESTORE_STATE": return { ...action.state, isLoading: false, error: null };
     default:
       return state;
@@ -423,6 +432,7 @@ interface SessionContextValue {
   runPlaceCirculation: (overrides?: { manualCages?: ManualCage[]; manualCorridors?: ManualCorridor[] }) => Promise<boolean>;
   runSubdivideUnits: () => Promise<void>;
   runReshapeCirculation: (segments: [Point2D, Point2D][]) => Promise<void>;
+  runRecomputeEvacuation: () => Promise<void>;
   refreshTypologySuggestion: () => Promise<void>;
   applyTypologyPreset: (key: string) => Promise<void>;
   updateApartmentsAndValidate: (apartments: api.ApartmentResult[]) => Promise<void>;
@@ -644,6 +654,25 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     },
     [state.footprint, state.circulationResult, state.circulation.corridor_width_m]
   );
+
+  const runRecomputeEvacuation = useCallback(async () => {
+    if (!state.circulationResult?.centerline?.length) return;
+    dispatch({ type: "SET_LOADING", loading: true });
+    try {
+      const res = await api.recomputeEvacuation({
+        centerline: state.circulationResult.centerline.map((seg) => ({ points: seg.points })),
+        cage_geometries: state.circulationResult.cage_geometries,
+        max_dist_single_m: state.circulation.max_dist_single_m,
+        max_dist_multi_m: state.circulation.max_dist_multi_m,
+      });
+      dispatch({ type: "SET_EVACUATION_DOTS", dots: res.evacuation_dots });
+      dispatch({ type: "SET_ERROR", error: null });
+    } catch (err) {
+      dispatch({ type: "SET_ERROR", error: err instanceof api.ApiError ? err.message : String(err) });
+    } finally {
+      dispatch({ type: "SET_LOADING", loading: false });
+    }
+  }, [state.circulationResult, state.circulation.max_dist_single_m, state.circulation.max_dist_multi_m]);
 
   const runSubdivideUnits = useCallback(async () => {
     if (!state.circulationResult) return;
@@ -867,6 +896,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       runPlaceCirculation,
       runSubdivideUnits,
       runReshapeCirculation,
+      runRecomputeEvacuation,
       refreshTypologySuggestion,
       applyTypologyPreset,
       updateApartmentsAndValidate,
@@ -902,6 +932,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       runPlaceCirculation,
       runSubdivideUnits,
       runReshapeCirculation,
+      runRecomputeEvacuation,
       refreshTypologySuggestion,
       applyTypologyPreset,
       updateApartmentsAndValidate,
