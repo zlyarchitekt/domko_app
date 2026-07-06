@@ -189,6 +189,7 @@ type Action =
   | { type: "ADD_MANUAL_CORRIDOR"; path: Point2D[] }
   | { type: "REMOVE_MANUAL_ELEMENT"; id: string }
   | { type: "SET_HOVERED_MANUAL"; id: string | null }
+  | { type: "CLEAR_LAYOUT" }
   | { type: "SET_LAYOUT_RESULT"; result: api.LayoutGenerateResponse | null }
   | { type: "SET_VALIDATION"; validation: api.FullLayoutValidateResponse | null }
   | { type: "SET_TYPOLOGY_SUGGESTION"; suggestion: api.TypologySuggestResponse | null }
@@ -390,6 +391,30 @@ function reducer(state: SessionState, action: Action): SessionState {
       };
     case "SET_HOVERED_MANUAL":
       return { ...state, hoveredManualId: action.id };
+    case "CLEAR_LAYOUT":
+      // "Wyczyść" -- zostaje TYLKO obrys (footprint) + skonfigurowana struktura
+      // mieszkań/ustawienia panelu Komunikacja; wszystko policzone/narysowane
+      // (komunikacja, mieszkania, elementy ręczne, wybrana iteracja) wraca do
+      // stanu sprzed jakiegokolwiek "Umieść.../Rozmieść.../Generuj układ".
+      return {
+        ...state,
+        circulationResult: null,
+        manualCages: [],
+        manualCorridors: [],
+        hoveredManualId: null,
+        layoutResult: null,
+        validation: null,
+        solarResult: null,
+        activeCageSeed: null,
+        activeUnitSeed: null,
+        lastIterations: [],
+        derivedTotalUnits: null,
+        netRemainderM2: null,
+        optimizerVariants: [],
+        activeVariantId: null,
+        selectedApartmentId: null,
+        mode: "idle",
+      };
     case "SET_LAYOUT_RESULT":
       // Every dispatch site (regenerate, runPlaceCirculation, runSubdivideUnits,
       // apply-optimizer-variant) means the apartment geometry/IDs just changed --
@@ -521,6 +546,7 @@ interface SessionContextValue {
   addManualCage: (ring: Point2D[]) => void;
   addManualCorridor: (path: Point2D[]) => void;
   removeManualElement: (id: string) => void;
+  clearLayout: () => void;
   setHoveredManualId: (id: string | null) => void;
   selectCageIteration: (seed: number) => void;
   selectUnitIteration: (seed: number) => void;
@@ -665,6 +691,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const addManualCage = useCallback((ring: Point2D[]) => dispatch({ type: "ADD_MANUAL_CAGE", ring }), []);
   const addManualCorridor = useCallback((path: Point2D[]) => dispatch({ type: "ADD_MANUAL_CORRIDOR", path }), []);
   const removeManualElement = useCallback((id: string) => dispatch({ type: "REMOVE_MANUAL_ELEMENT", id }), []);
+  const clearLayout = useCallback(() => dispatch({ type: "CLEAR_LAYOUT" }), []);
   const setHoveredManualId = useCallback((id: string | null) => dispatch({ type: "SET_HOVERED_MANUAL", id }), []);
   const selectCageIteration = useCallback((seed: number) => {
     dispatch({ type: "SELECT_CAGE_ITERATION", seed });
@@ -1167,6 +1194,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       addManualCage,
       addManualCorridor,
       removeManualElement,
+      clearLayout,
       setHoveredManualId,
       selectCageIteration,
       selectUnitIteration,
@@ -1210,6 +1238,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       addManualCage,
       addManualCorridor,
       removeManualElement,
+      clearLayout,
       setHoveredManualId,
       selectCageIteration,
       selectUnitIteration,

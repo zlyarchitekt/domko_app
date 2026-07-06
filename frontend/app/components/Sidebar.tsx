@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { LayoutGrid, Sun, Sparkles, Download, Play, AlertTriangle, Boxes, Moon } from "lucide-react";
+import { LayoutGrid, Sun, Sparkles, Download, Play, AlertTriangle, Boxes, Moon, Trash2 } from "lucide-react";
 import { useSession } from "../state/SessionContext";
 import FootprintSection from "./FootprintSection";
 import ProgramSection from "./ProgramSection";
@@ -29,7 +29,7 @@ const TABS = ALL_TABS.filter(
 );
 
 export default function Sidebar() {
-  const { state, regenerate, toggleTheme } = useSession();
+  const { state, regenerate, clearLayout, toggleTheme } = useSession();
   const [activeTab, setActiveTab] = useState<(typeof ALL_TABS)[number]["key"]>("layout");
 
   return (
@@ -92,6 +92,16 @@ export default function Sidebar() {
               >
                 <Play size={14} strokeWidth={2.5} className="transition-transform group-active:scale-90" />
                 {state.isLoading ? "Generuję…" : "Generuj układ"}
+              </button>
+
+              <button
+                onClick={() => clearLayout()}
+                disabled={!state.footprint || state.isLoading}
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 transition-colors hover:bg-red-500/10 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30 light:hover:bg-red-50 light:hover:text-red-600"
+                title="Czyści komunikację, mieszkania i elementy ręczne — obrys zostaje"
+              >
+                <Trash2 size={13} strokeWidth={2} />
+                Wyczyść
               </button>
 
               {state.error && (
