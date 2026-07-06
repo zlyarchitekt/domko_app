@@ -1,7 +1,7 @@
 "use client";
 
 import { Plus, X } from "lucide-react";
-import { useSession } from "../state/SessionContext";
+import { useSession, DEFAULT_TYPE_COLORS } from "../state/SessionContext";
 import * as api from "../lib/api";
 
 const APARTMENT_TYPES = ["M1", "M2", "M3", "M4", "M5"];
@@ -23,6 +23,7 @@ export default function ProgramSection() {
     addProgramRow,
     removeProgramRow,
     setUnitWeight,
+    setTypeColor,
     selectUnitIteration,
     activeUnitSeed,
   } = useSession();
@@ -72,6 +73,19 @@ export default function ProgramSection() {
         {state.program.map((row) => (
           <div key={row.id} className="rounded-lg border border-zinc-800/60 p-2 light:border-zinc-200">
             <div className="flex items-center gap-1.5">
+              <label
+                className="relative h-6 w-6 shrink-0 cursor-pointer rounded-full border border-zinc-600/60 light:border-zinc-300"
+                style={{ backgroundColor: state.typeColors?.[row.type] ?? DEFAULT_TYPE_COLORS[row.type] ?? "#9ca3af" }}
+                title={`Kolor mieszkań typu ${row.type} na rysunku`}
+              >
+                <input
+                  type="color"
+                  value={state.typeColors?.[row.type] ?? DEFAULT_TYPE_COLORS[row.type] ?? "#9ca3af"}
+                  onChange={(e) => setTypeColor(row.type, e.target.value)}
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                  aria-label={`Kolor typu ${row.type}`}
+                />
+              </label>
               <select
                 value={row.type}
                 onChange={(e) => updateProgramRow(row.id, { type: e.target.value })}
