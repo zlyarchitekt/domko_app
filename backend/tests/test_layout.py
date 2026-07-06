@@ -127,3 +127,37 @@ def test_manual_cage_outside_footprint_raises():
             place_cage=False, cage_size_m=2.5, cage_position="auto", num_cages=1,
             manual_cages=[outside], manual_corridors=[],
         )
+
+
+def test_generate_apartments_carry_net_geometry():
+    """Verify that apartments in /layout/generate response include net_geometry field."""
+    response = client.post(
+        "/api/v1/layout/generate",
+        json={
+            "footprint": SQUARE_20,
+            "circulation": {"corridor_width_m": 2.0, "cage_size_m": 3.0, "place_cage": False},
+            "apartments": [
+                {"type": "1-room", "min_area_m2": 25, "target_count": 4, "width_m": 4, "depth_m": 7}
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert len(data["apartments"]) > 0
+    for apt in data["apartments"]:
+        assert "net_geometry" in apt
+        assert apt["net_geometry"] is not None, "normalnie wymiarowane mieszkanie powinno mieć netto"
+        # netto to GeoJSON Polygon
+        assert apt["net_geometry"]["type"] == "Polygon"
+        assert "coordinates" in apt["net_geometry"]
+
+
+def test_net_geometry_json_none_for_tiny_cell():
+    from api.v1.endpoints.layout import _net_geometry_json
+    from shapely.geometry import box
+
+    # 15x15cm -- za małe, żeby przetrwać skurczenie o 10cm z każdej strony
+    assert _net_geometry_json(box(0, 0, 0.15, 0.15)) is None
+    # normalny prostokąt -> dict GeoJSON
+    net = _net_geometry_json(box(0, 0, 5, 4))
+    assert net is not None and net["type"] == "Polygon"

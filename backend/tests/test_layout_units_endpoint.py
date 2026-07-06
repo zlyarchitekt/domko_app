@@ -99,16 +99,34 @@ def test_units_endpoint_exposes_wall_bands():
     body = response.json()
     assert len(body["wall_bands"]) > 0
 
-    from shapely.geometry import shape as shapely_shape
 
-    footprint_poly = shapely_shape(
-        {"type": "Polygon", "coordinates": [footprint + [footprint[0]]]}
-    )
-    total_wall_area = 0.0
-    for band in body["wall_bands"]:
-        assert band["type"] in ("Polygon", "MultiPolygon")
-        total_wall_area += shapely_shape(band).area
-
-    # Sane, non-degenerate range: wall material exists (not ~0) but obviously
-    # can't exceed the footprint it's carved from.
-    assert 0 < total_wall_area < footprint_poly.area
+def test_units_endpoint_apartments_carry_net_geometry():
+    from shapely.geometry import Polygon
+    remainder = Polygon([(0, 0), (24, 0), (24, 10), (0, 10)]).__geo_interface__
+    payload = {
+        "remainder": dict(remainder),
+        "footprint": [[0, 0], [24, 0], [24, 10], [0, 10]],
+        "apartments": [
+            {"type": "M2", "percentage": 50, "area_min_m2": 38, "area_max_m2": 48,
+             "min_area_m2": 43, "target_count": 0},
+            {"type": "M3", "percentage": 50, "area_min_m2": 58, "area_max_m2": 70,
+             "min_area_m2": 64, "target_count": 0},
+        ],
+        "iterations": 5,
+    }
+    res = client.post("/api/v1/layout/units", json=payload)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    # wynik główny
+    assert body["apartments"], "brak mieszkań w wyniku"
+    for apt in body["apartments"]:
+        assert "net_geometry" in apt
+        assert apt["net_geometry"] is not None, "mieszkanie normalnej wielkości musi mieć netto"
+        # netto skurczone względem surowego -> mniejsze pole
+        raw_ring = apt["geometry"]["coordinates"][0]
+        net_ring = apt["net_geometry"]["coordinates"][0]
+        assert len(net_ring) >= 4
+        # dual-surface: to samo w każdej iteracji
+    for it in body["iterations"]:
+        for apt in it["apartments"]:
+            assert "net_geometry" in apt

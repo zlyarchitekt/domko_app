@@ -120,6 +120,11 @@ class ApartmentResult(BaseModel):
     net_area_m2: float = 0.0
     """Powierzchnia w świetle ścian -- spec 2026-07-04 wall-thickness §5.2."""
     geometry: dict
+    net_geometry: dict | None = None
+    """Poligon netto (w świetle ścian) do wypełnienia strefy mieszkania na
+    froncie -- spec 2026-07-06 apartment-type-colors §3.2. None gdy netto
+    puste (komórka zbyt mała) lub nie jest prostym Polygonem; front spada
+    wtedy na `geometry` (surowy, na osiach)."""
 
 
 class WTRuleResult(BaseModel):
@@ -282,6 +287,7 @@ def layout_result_to_response(layout: LayoutResult, wt: WTValidationResult) -> L
             area_m2=a.polygon.area,
             net_area_m2=a.net_area_m2,
             geometry=json.loads(json.dumps(a.polygon.__geo_interface__)),
+            net_geometry=_net_geometry_json(a.polygon),
         )
         for a in layout.apartments
     ]
@@ -450,11 +456,23 @@ def _serialize_cage_iteration(m, manual_corridors: list | None = None) -> "CageI
     )
 
 
+def _net_geometry_json(polygon: Polygon) -> dict | None:
+    """GeoJSON poligonu netto (w świetle ścian) -- spec 2026-07-06
+    apartment-type-colors §3.2. None gdy netto puste albo nie jest prostym
+    Polygonem (ringToPoints na froncie czyta coordinates[0], więc
+    MultiPolygon odpada -> front spada na geometrię surową)."""
+    net = net_polygon(polygon)
+    if net.is_empty or net.geom_type != "Polygon":
+        return None
+    return json.loads(json.dumps(net.__geo_interface__))
+
+
 def _serialize_unit_iteration(m, footprint: Polygon | None, circulation_geometry) -> "IterationMetaResult":
     apartments_out = [
         ApartmentResult(
             id=c.id, type=c.type, area_m2=c.polygon.area, net_area_m2=c.net_area_m2,
             geometry=json.loads(json.dumps(c.polygon.__geo_interface__)),
+            net_geometry=_net_geometry_json(c.polygon),
         )
         for c in m.cells
     ]
@@ -695,6 +713,7 @@ def subdivide_units_endpoint(request: UnitsRequest):
             id=c.id, type=c.type, area_m2=c.polygon.area,
             net_area_m2=c.net_area_m2,
             geometry=json.loads(json.dumps(c.polygon.__geo_interface__)),
+            net_geometry=_net_geometry_json(c.polygon),
         )
         for c in cells
     ]
