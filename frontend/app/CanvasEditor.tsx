@@ -327,7 +327,7 @@ function moveSharedLine(
 }
 
 export default function CanvasEditor() {
-  const { state, addDrawPoint, removeLastDrawPoint, finishDrawing, updateVertex, setFootprintPoints, selectApartment, updateApartmentsAndValidate, runReshapeCirculation, addManualCage, addManualCorridor, runPlaceCirculation, runMoveCage, dispatch } = useSession();
+  const { state, addDrawPoint, removeLastDrawPoint, finishDrawing, updateVertex, setFootprintPoints, selectApartment, updateApartmentsAndValidate, runReshapeCirculation, addManualCage, addManualCorridor, runMoveCage, runAddManualElement, dispatch } = useSession();
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType>(null);
 
@@ -580,15 +580,15 @@ export default function CanvasEditor() {
     if (state.mode === "draw-cage") {
       if (state.drawingPoints.length < 3) return; // ring potrzebuje min. 3 wierzchołków
       const ring = [...state.drawingPoints];
-      // Lista-override do requestu (id: "pending" nieużywane przez backend) —
-      // patrz komentarz w runPlaceCirculation o unikaniu stale-closure zaraz
-      // po dispatchu ADD_MANUAL_CAGE; reducer sam nada właściwy crypto.randomUUID().
+      // runAddManualElement dokłada TYLKO ten nowy element do aktualnie
+      // wyświetlanego wyniku (auto/iteracyjny/wybrany z listy/przesunięty) bez
+      // przeliczania placementu od zera — patrz jego komentarz w
+      // SessionContext.tsx (fix "rysowanie klatki resetuje układ komunikacji").
       // Kolejność ma znaczenie: addManualCage() dopiero PO potwierdzeniu przez
       // backend (await) — inaczej klatka odrzucona jako 422 (np. poza obrysem)
       // zostawałaby w state.manualCages mimo że request się nie powiódł
       // (weryfikacja ręczna Etap 2 §5 pkt 5).
-      const nextCages = [...state.manualCages, { id: "pending", ring }];
-      void runPlaceCirculation({ manualCages: nextCages }).then((ok) => {
+      void runAddManualElement("cage", ring).then((ok) => {
         if (ok) addManualCage(ring);
       });
       return;
@@ -596,8 +596,7 @@ export default function CanvasEditor() {
     if (state.mode === "draw-corridor") {
       if (state.drawingPoints.length < 2) return; // ścieżka potrzebuje min. 2 punktów
       const path = [...state.drawingPoints];
-      const nextCorridors = [...state.manualCorridors, { id: "pending", path }];
-      void runPlaceCirculation({ manualCorridors: nextCorridors }).then((ok) => {
+      void runAddManualElement("corridor", path).then((ok) => {
         if (ok) addManualCorridor(path);
       });
       return;

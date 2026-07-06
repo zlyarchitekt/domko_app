@@ -304,6 +304,23 @@ export function moveCage(req: MoveCageRequest): Promise<CirculationResponse> {
   return postJson("/layout/circulation/move-cage", req);
 }
 
+export interface AddManualElementRequest {
+  footprint: Point[];
+  circulation_geometry: GeoJsonPolygon | null;
+  cage_geometries: GeoJsonPolygon[];
+  remainder: GeoJsonPolygon;
+  centerline: CorridorCenterlineSegment[];
+  corridor_width_m: number;
+  manual_cage?: Point[];
+  manual_corridor?: Point[];
+  max_dist_single_m: number;
+  max_dist_multi_m: number;
+}
+
+export function addManualElement(req: AddManualElementRequest): Promise<CirculationResponse> {
+  return postJson("/layout/circulation/add-manual", req);
+}
+
 export function recomputeEvacuation(req: {
   centerline: { points: [Point, Point] }[];
   cage_geometries: GeoJsonPolygon[];

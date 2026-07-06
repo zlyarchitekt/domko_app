@@ -533,6 +533,7 @@ interface SessionContextValue {
     circulationOverride?: Partial<api.CirculationSpecInput>;
   }) => Promise<boolean>;
   runMoveCage: (cageIndex: number, dx: number, dy: number) => Promise<boolean>;
+  runAddManualElement: (kind: "cage" | "corridor", points: Point2D[]) => Promise<boolean>;
   runSubdivideUnits: () => Promise<void>;
   runReshapeCirculation: (segments: [Point2D, Point2D][]) => Promise<void>;
   runRecomputeEvacuation: () => Promise<void>;
@@ -733,6 +734,59 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       }
     },
     [state.footprint, state.circulation, state.manualCages, state.manualCorridors]
+  );
+
+  const runAddManualElement = useCallback(
+    async (kind: "cage" | "corridor", points: Point2D[]): Promise<boolean> => {
+      if (!state.footprint || state.footprint.length < 3) return false;
+      // Jeśli komunikacja już istnieje (auto/iteracyjnie/wybrana z listy/
+      // przesunięta) -- dolep nowy element ręczny DOKŁADNIE do niej, nie
+      // przeliczaj auto/iteracyjnego umieszczenia od zera (runPlaceCirculation
+      // by to zrobiło i zgubiło wybraną nie-najlepszą iterację albo
+      // przeciągniętą klatkę -- zgłoszony bug "rysowanie klatki resetuje
+      // układ"). Bez istniejącej komunikacji -- pierwszy ręczny element na
+      // czystym obrysie -- musi zbudować auto-bazę od zera, więc zostaje przy
+      // dotychczasowym bootstrapie przez runPlaceCirculation.
+      if (!state.circulationResult) {
+        if (kind === "cage") {
+          return runPlaceCirculation({ manualCages: [...state.manualCages, { id: "pending", ring: points }] });
+        }
+        return runPlaceCirculation({ manualCorridors: [...state.manualCorridors, { id: "pending", path: points }] });
+      }
+      dispatch({ type: "SET_LOADING", loading: true });
+      try {
+        const result = await api.addManualElement({
+          footprint: footprintToPoints(state.footprint),
+          circulation_geometry: state.circulationResult.circulation_geometry,
+          cage_geometries: state.circulationResult.cage_geometries,
+          remainder: state.circulationResult.remainder,
+          centerline: state.circulationResult.centerline,
+          corridor_width_m: state.circulation.corridor_width_m,
+          manual_cage: kind === "cage" ? points.map((p) => [p.x, p.y] as api.Point) : undefined,
+          manual_corridor: kind === "corridor" ? points.map((p) => [p.x, p.y] as api.Point) : undefined,
+          max_dist_single_m: state.circulation.max_dist_single_m,
+          max_dist_multi_m: state.circulation.max_dist_multi_m,
+        });
+        dispatch({ type: "SET_CIRCULATION_RESULT", result });
+        dispatch({ type: "SET_ERROR", error: null });
+        return true;
+      } catch (err) {
+        dispatch({ type: "SET_ERROR", error: err instanceof api.ApiError ? err.message : String(err) });
+        return false;
+      } finally {
+        dispatch({ type: "SET_LOADING", loading: false });
+      }
+    },
+    [
+      state.footprint,
+      state.circulationResult,
+      state.manualCages,
+      state.manualCorridors,
+      state.circulation.corridor_width_m,
+      state.circulation.max_dist_single_m,
+      state.circulation.max_dist_multi_m,
+      runPlaceCirculation,
+    ]
   );
 
   const runMoveCage = useCallback(
@@ -1121,6 +1175,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       regenerate,
       runPlaceCirculation,
       runMoveCage,
+      runAddManualElement,
       runSubdivideUnits,
       runReshapeCirculation,
       runRecomputeEvacuation,
@@ -1161,6 +1216,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       regenerate,
       runPlaceCirculation,
       runMoveCage,
+      runAddManualElement,
       runSubdivideUnits,
       runReshapeCirculation,
       runRecomputeEvacuation,

@@ -907,6 +907,102 @@ def move_cage_endpoint(request: MoveCageRequest):
     )
 
 
+class CenterlineSegmentInput(BaseModel):
+    points: list[list[float]] = Field(..., min_length=2, max_length=2)
+    loading: str
+    distance_start_m: float | None = None
+    distance_end_m: float | None = None
+    max_distance_m: float
+    exceeds_max: bool
+
+
+class AddManualElementRequest(BaseModel):
+    footprint: list[list[float]] = Field(..., min_length=3)
+    circulation_geometry: dict | None = None
+    cage_geometries: list[dict] = []
+    remainder: dict
+    centerline: list[CenterlineSegmentInput] = []
+    corridor_width_m: float = Field(default=1.5, gt=0)
+    manual_cage: list[list[float]] | None = None
+    """Ring [[x,y],...] nowej ręcznej klatki, bez duplikatu 1. punktu."""
+    manual_corridor: list[list[float]] | None = None
+    """Łamana [[x,y],...] osi nowego ręcznego korytarza."""
+    max_dist_single_m: float = Field(default=CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M, gt=0)
+    max_dist_multi_m: float = Field(default=CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M, gt=0)
+
+
+@router.post("/circulation/add-manual", response_model=CirculationResponse)
+def add_manual_element_endpoint(request: AddManualElementRequest):
+    """Dokłada JEDNĄ nową ręczną klatkę lub korytarz do AKTUALNIE wyświetlanego
+    wyniku (jakikolwiek by nie był -- domyślny auto, wybrana z listy iteracja,
+    czy ręcznie przesunięta klatka), bez ponownego przeliczania auto/iteracyjnego
+    umieszczenia od zera (spec 2026-07-06-apartment-type-colors nie dotyczy --
+    to fix zgłoszony osobno: rysowanie ręcznej klatki wcześniej wołało
+    place_circulation/iterate_cage_placement od nowa przez /layout/circulation,
+    co bezpowrotnie gubiło wybraną nie-najlepszą iterację lub przeciągniętą
+    klatkę -- ten endpoint tylko dokleja nowy element, resztę zostawia
+    nietkniętą, jak /circulation/move-cage nie rusza nic poza jedną strefą."""
+    from services.circulation import CirculationResult, CorridorCenterlineSegment, _merge_manual_elements
+
+    try:
+        footprint = _points_to_polygon(request.footprint)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        circulation_geometry = (
+            _shape(request.circulation_geometry) if request.circulation_geometry is not None else Polygon()
+        )
+        cage_polygons = [_shape(g) for g in request.cage_geometries]
+        remainder = _shape(request.remainder)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid geometry: {exc}")
+
+    centerline = [
+        CorridorCenterlineSegment(
+            points=((seg.points[0][0], seg.points[0][1]), (seg.points[1][0], seg.points[1][1])),
+            loading=seg.loading,
+            distance_start_m=seg.distance_start_m if seg.distance_start_m is not None else float("inf"),
+            distance_end_m=seg.distance_end_m if seg.distance_end_m is not None else float("inf"),
+            max_distance_m=seg.max_distance_m,
+            exceeds_max=seg.exceeds_max,
+        )
+        for seg in request.centerline
+    ]
+
+    base_result = CirculationResult(
+        zones=[],
+        circulation_geometry=circulation_geometry,
+        cage_polygons=cage_polygons,
+        remainder=remainder,
+        centerline=centerline,
+        evacuation_dots=[],
+    )
+
+    manual_cages = [request.manual_cage] if request.manual_cage else []
+    manual_corridors = [request.manual_corridor] if request.manual_corridor else []
+
+    try:
+        result = _merge_manual_elements(
+            base_result, footprint, request.corridor_width_m,
+            manual_cages, manual_corridors,
+            request.max_dist_single_m, request.max_dist_multi_m,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    return CirculationResponse(
+        circulation_geometry=(
+            json.loads(json.dumps(result.circulation_geometry.__geo_interface__))
+            if result.circulation_geometry is not None else None
+        ),
+        cage_geometries=[json.loads(json.dumps(c.__geo_interface__)) for c in result.cage_polygons],
+        remainder=json.loads(json.dumps(result.remainder.__geo_interface__)),
+        centerline=_serialize_centerline(result.centerline),
+        evacuation_dots=_serialize_dots(result.evacuation_dots),
+    )
+
+
 class EvacuationRecomputeRequest(BaseModel):
     centerline: list[dict]
     """[{points: [[x,y],[x,y]]}] -- aktualna oś z frontendu (auto+manual+reshape)."""
