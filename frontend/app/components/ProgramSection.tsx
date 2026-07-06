@@ -36,6 +36,23 @@ export default function ProgramSection() {
   const percentageSum = state.program.reduce((sum, row) => sum + row.percentage, 0);
   const totalPlacedUnits = state.program.reduce((sum, row) => sum + row.target_count, 0);
 
+  // Orientacyjny szacunek PRZED umieszczeniem komunikacji/podziałem (który
+  // jedyny liczy prawdziwe derivedTotalUnits z net_remainder_m2) — user chce
+  // widzieć liczbę mieszkań od razu po narysowaniu/imporcie obrysu i po każdej
+  // korekcie węzłów, nie dopiero po "Umieść korytarz i klatkę"+"Podziel na
+  // mieszkania". Sprawność budynku ~70% (footprintArea*0.7) jako przybliżenie
+  // net_remainder_m2 zanim komunikacja jest w ogóle policzona.
+  const totalPctForEstimate = state.program.reduce((sum, row) => sum + row.percentage, 0);
+  const avgUnitSizeM2 =
+    totalPctForEstimate > 0
+      ? state.program.reduce(
+          (sum, row) => sum + (row.percentage / totalPctForEstimate) * ((row.area_min_m2 + row.area_max_m2) / 2),
+          0
+        )
+      : 0;
+  const estimatedTotalUnits =
+    footprintArea > 0 && avgUnitSizeM2 > 0 ? Math.max(1, Math.floor((footprintArea * 0.7) / avgUnitSizeM2)) : null;
+
   return (
     <section className="space-y-2.5 rounded-xl border border-zinc-800/70 bg-zinc-950/40 p-3 light:border-zinc-200 light:bg-white">
       <h2 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Struktura mieszkań</h2>
@@ -45,7 +62,9 @@ export default function ProgramSection() {
         <span className="font-mono text-zinc-200 light:text-zinc-800">
           {state.derivedTotalUnits !== null
             ? `≈ ${state.derivedTotalUnits}${state.netRemainderM2 !== null ? ` (${state.netRemainderM2.toFixed(0)} m² netto)` : ""}`
-            : "—"}
+            : estimatedTotalUnits !== null
+              ? `~${estimatedTotalUnits} (szacunek)`
+              : "—"}
         </span>
       </div>
 
