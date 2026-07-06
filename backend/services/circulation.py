@@ -247,6 +247,51 @@ def _corridor_centerline(
         return ((mid_x, miny), (mid_x, maxy))
 
 
+def _split_segment_at_cage_positions(
+    seg: tuple[tuple[float, float], tuple[float, float]],
+    cages: list[Polygon],
+) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """Dzieli odcinek centerline strefy tak, żeby węzeł grafu (spec
+    2026-07-04-evacuation-dots) wypadał DOKŁADNIE przy wejściu do każdej
+    klatki w tej strefie -- nie tylko na końcach strefy.
+
+    `_corridor_centerline()` zwraca ZAWSZE jeden odcinek rozciągnięty na całą
+    długość strefy (dwa węzły na jej krańcach); wyrównuje tylko oś poprzeczną
+    do klatki (mid_y/mid_x), nie jej pozycję wzdłuż strefy. Klatka umieszczona
+    NIE na krańcu (np. pozycja "2: środek traktu", albo kandydat iteracyjny
+    z kotwicy na środku boku strefy) nie ma wtedy żadnego węzła w promieniu
+    `evacuation.CAGE_ENTRY_TOLERANCE_M` -- `_build_graph`/Dijkstra widzi ją
+    jako całkowicie nieosiągalną (0 reachable -> WSZYSTKIE kropki na czerwono),
+    mimo że korytarz fizycznie ją mija. Rzutujemy centroid każdej klatki na
+    linię odcinka (bezpieczne: `_build_corridor`/`_corridor_centerline` już
+    wyrównały oś poprzeczną do tego samego centroidu, więc rzut leży
+    praktycznie na osi klatki) i dzielimy odcinek w tym punkcie -- dokładnie
+    tak samo jak `_split_at_crossings` robi to dla przecięć w `evacuation.py`."""
+    if not cages:
+        return [seg]
+    p1, p2 = seg
+    line = LineString([p1, p2])
+    length = line.length
+    if length < 1e-9:
+        return [seg]
+    cuts = sorted(
+        {
+            t
+            for t in (line.project(Point(c.centroid.x, c.centroid.y)) for c in cages)
+            if 1e-6 < t < length - 1e-6
+        }
+    )
+    if not cuts:
+        return [seg]
+    ts = [0.0] + cuts + [length]
+    result: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    for a, b in zip(ts, ts[1:]):
+        pa = line.interpolate(a)
+        pb = line.interpolate(b)
+        result.append(((pa.x, pa.y), (pb.x, pb.y)))
+    return result
+
+
 def _join_centerlines(
     segments: list[tuple[tuple[float, float], tuple[float, float]]]
 ) -> list[tuple[float, float]]:
@@ -476,7 +521,7 @@ def _assemble_with_cages(
         cages_union = unary_union(zone_cages) if zone_cages else None
         seg = _corridor_centerline(zone.polygon, corridor_width_m, cages_union)
         if seg is not None:
-            raw_segments.append(seg)
+            raw_segments.extend(_split_segment_at_cage_positions(seg, zone_cages))
 
     centerline_path = _join_centerlines(raw_segments)
     cage_points = [(c.centroid.x, c.centroid.y) for c in cage_polygons]

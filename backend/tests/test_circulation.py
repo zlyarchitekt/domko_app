@@ -81,6 +81,47 @@ def test_place_circulation_simple_rectangle():
     assert abs(total - footprint.area) < 1e-3
 
 
+def test_place_circulation_centered_cage_gets_centerline_node_at_its_position():
+    # Regression: cage_position="2" (środek traktu) places the cage in the
+    # MIDDLE of the zone, not at a zone bbox extreme. _corridor_centerline()
+    # always spans the full zone length with only 2 endpoint nodes -- without
+    # _split_segment_at_cage_positions(), the evacuation graph would have no
+    # node within CAGE_ENTRY_TOLERANCE_M of the cage, making it count as 0
+    # reachable cages everywhere (all dots red), even though the corridor
+    # physically passes right by it.
+    from services.circulation import place_circulation
+
+    footprint = Polygon([(0, 0), (40, 0), (40, 12), (0, 12)])
+    result = place_circulation(
+        footprint,
+        corridor_width_m=1.5,
+        stair_width_m=1.2,
+        place_cage=True,
+        cage_size_m=2.5,
+        cage_position="2",
+    )
+    assert len(result.cage_polygons) == 1
+    cage = result.cage_polygons[0]
+    cage_x = cage.centroid.x
+
+    # Centerline must be split so SOME segment endpoint lands at the cage's
+    # own x position (not just at x=0/x=40).
+    all_x = {p[0] for seg in result.centerline for p in seg.points}
+    assert any(abs(x - cage_x) < 1e-6 for x in all_x), (
+        f"no centerline node at cage x={cage_x}, only {sorted(all_x)}"
+    )
+
+    # And the evacuation dots must actually reach it -- not all-red.
+    assert any(d.status != "red" for d in result.evacuation_dots)
+    # Dots strictly inside the cage's own footprint are excluded (spec §5),
+    # so the nearest sampled dot sits just outside it -- roughly half the
+    # cage width from its centroid, not exactly 0. Anything close confirms
+    # the node landed at the cage, not still 20m away at a zone extreme.
+    dot_near_cage = min(result.evacuation_dots, key=lambda d: abs(d.x - cage_x))
+    assert dot_near_cage.distance_m is not None
+    assert dot_near_cage.distance_m < 5.0
+
+
 def test_place_circulation_concave_u_shape_no_area_lost():
     from services.circulation import place_circulation
 
