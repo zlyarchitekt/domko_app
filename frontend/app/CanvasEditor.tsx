@@ -5,7 +5,7 @@ import { Stage, Layer, Line, Rect, Text, Circle, Group, Path } from "react-konva
 import type { KonvaEventObject } from "konva/lib/Node";
 import { Stage as StageType } from "konva/lib/Stage";
 import { Maximize2, RotateCcw } from "lucide-react";
-import { useSession, Point2D } from "./state/SessionContext";
+import { useSession, Point2D, DEFAULT_TYPE_COLORS } from "./state/SessionContext";
 import { deriveApartmentStatuses } from "./lib/deriveStatus";
 import { GeoJsonPolygon } from "./lib/api";
 import * as api from "./lib/api";
@@ -26,6 +26,19 @@ function clamp(n: number, min: number, max: number) {
 function ringToPoints(geom: GeoJsonPolygon): Point2D[] {
   const ring = geom.coordinates[0] ?? [];
   return ring.slice(0, -1).map(([x, y]) => ({ x, y }));
+}
+
+/** #rrggbb (jak z <input type="color">) -> rgba() z zadaną alfą. Wypełnienie
+ * mieszkania per typ musi być pół-przezroczyste (etykieta + pasy ścian pod
+ * spodem czytelne) -- spec 2026-07-06 apartment-type-colors §2.3. */
+function hexToRgba(hex: string, alpha: number): string {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  if ([r, g, b].some(Number.isNaN)) return `rgba(148, 163, 184, ${alpha})`;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 /** Corridor centerline segments are stored as a list of [p1,p2] pairs where
@@ -1111,25 +1124,39 @@ export default function CanvasEditor() {
             </Group>
           ))}
 
-          {/* Mieszkania — kolor wg statusu walidacji (F3-06) lub Solara (F4) */}
+          {/* Mieszkania — wypełnienie wg TYPU (spec 2026-07-06 §2.3),
+              obramowanie wg statusu walidacji, geometria NETTO (§3.2). */}
           {apartments.map((apt) => {
-            let colors;
+            // W trybie Słońce (state.solarResult) fill/stroke zostają wg
+            // logiki słonecznej; kolor per typ tylko w widoku domyślnym
+            // (spec §2.3 "Decyzja: tryb Słońce"). Zmiana geometrii na netto
+            // (niżej) obowiązuje w OBU widokach -- usterka §B jest
+            // geometryczna, nie zależy od trybu koloru.
+            let fill: string;
+            let stroke: string;
             const hasSolarData = !!state.solarResult;
             if (hasSolarData) {
               const solFa = state.solarResult!.facades.filter(f => f.apartment_id === apt.id);
               if (solFa.length > 0) {
                 const isPassing = solFa.some(f => f.meets_wt);
-                colors = isPassing ? { fill: "rgba(249, 115, 22, 0.3)", stroke: "#f97316" } : { fill: "rgba(75, 85, 99, 0.3)", stroke: "#4b5563" };
+                fill = isPassing ? "rgba(249, 115, 22, 0.3)" : "rgba(75, 85, 99, 0.3)";
+                stroke = isPassing ? "#f97316" : "#4b5563";
               } else {
-                colors = { fill: "rgba(255,255,255,0.1)", stroke: "#666" };
+                fill = "rgba(255,255,255,0.1)";
+                stroke = "#666";
               }
             } else {
               const status = apartmentStatuses.get(apt.id) ?? "ok";
-              colors = STATUS_COLORS[status];
+              stroke = STATUS_COLORS[status].stroke;
+              const hex = state.typeColors?.[apt.type] ?? DEFAULT_TYPE_COLORS[apt.type] ?? "#9ca3af";
+              fill = hexToRgba(hex, 0.45);
             }
-            
+
             const isSelected = state.selectedApartmentId === apt.id;
-            const ring = ringToPoints(apt.geometry);
+            // Geometria NETTO (w świetle ścian) -- strefa kończy się na licu
+            // ściany, nie na osi (spec 2026-07-06 §3.2). Fallback do surowej,
+            // gdy backend nie przysłał netto (stara sesja / komórka zbyt mała).
+            const ring = ringToPoints(apt.net_geometry ?? apt.geometry);
             const pts = toCanvasPoints(ring);
             // Divide by ring.length (the true vertex count), NOT
             // apt.geometry.coordinates[0].length -- the latter includes
@@ -1148,8 +1175,8 @@ export default function CanvasEditor() {
                 <Line
                   points={pts}
                   closed
-                  fill={colors.fill}
-                  stroke={isSelected ? "#3b82f6" : colors.stroke}
+                  fill={fill}
+                  stroke={isSelected ? "#3b82f6" : stroke}
                   strokeWidth={(isSelected ? 3 : 1.5) / scale}
                   onClick={(e) => {
                     e.cancelBubble = true;
