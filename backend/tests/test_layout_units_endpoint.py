@@ -99,9 +99,23 @@ def test_units_endpoint_exposes_wall_bands():
     body = response.json()
     assert len(body["wall_bands"]) > 0
 
+    from shapely.geometry import shape as shapely_shape
+
+    footprint_poly = shapely_shape(
+        {"type": "Polygon", "coordinates": [footprint + [footprint[0]]]}
+    )
+    total_wall_area = 0.0
+    for band in body["wall_bands"]:
+        assert band["type"] in ("Polygon", "MultiPolygon")
+        total_wall_area += shapely_shape(band).area
+
+    # Sane, non-degenerate range: wall material exists (not ~0) but obviously
+    # can't exceed the footprint it's carved from.
+    assert 0 < total_wall_area < footprint_poly.area
+
 
 def test_units_endpoint_apartments_carry_net_geometry():
-    from shapely.geometry import Polygon
+    from shapely.geometry import Polygon, shape as shapely_shape
     remainder = Polygon([(0, 0), (24, 0), (24, 10), (0, 10)]).__geo_interface__
     payload = {
         "remainder": dict(remainder),
@@ -122,10 +136,11 @@ def test_units_endpoint_apartments_carry_net_geometry():
     for apt in body["apartments"]:
         assert "net_geometry" in apt
         assert apt["net_geometry"] is not None, "mieszkanie normalnej wielkości musi mieć netto"
-        # netto skurczone względem surowego -> mniejsze pole
-        raw_ring = apt["geometry"]["coordinates"][0]
-        net_ring = apt["net_geometry"]["coordinates"][0]
-        assert len(net_ring) >= 4
+        # netto skurczone względem surowego -> mniejsze pole (nietautologiczne
+        # porównanie powierzchni, nie tylko obecność klucza/liczba wierzchołków)
+        raw_poly = shapely_shape(apt["geometry"])
+        net_poly = shapely_shape(apt["net_geometry"])
+        assert net_poly.area < raw_poly.area
         # dual-surface: to samo w każdej iteracji
     for it in body["iterations"]:
         for apt in it["apartments"]:

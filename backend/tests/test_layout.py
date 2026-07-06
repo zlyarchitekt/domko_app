@@ -150,14 +150,27 @@ def test_generate_apartments_carry_net_geometry():
         # netto to GeoJSON Polygon
         assert apt["net_geometry"]["type"] == "Polygon"
         assert "coordinates" in apt["net_geometry"]
+        # netto rzeczywiście skurczone względem surowej geometrii (nie tylko
+        # obecność klucza/typu) -- porównanie pól przez shapely
+        from shapely.geometry import shape as shapely_shape
+        raw_poly = shapely_shape(apt["geometry"])
+        net_poly = shapely_shape(apt["net_geometry"])
+        assert net_poly.area < raw_poly.area
 
 
 def test_net_geometry_json_none_for_tiny_cell():
     from api.v1.endpoints.layout import _net_geometry_json
-    from shapely.geometry import box
+    from services.wall_geometry import NET_SHRINK_M
+    from shapely.geometry import box, shape as shapely_shape
 
     # 15x15cm -- za małe, żeby przetrwać skurczenie o 10cm z każdej strony
     assert _net_geometry_json(box(0, 0, 0.15, 0.15)) is None
-    # normalny prostokąt -> dict GeoJSON
-    net = _net_geometry_json(box(0, 0, 5, 4))
+    # normalny prostokąt -> dict GeoJSON, faktycznie skurczony o NET_SHRINK_M
+    # z każdej strony (nie tylko poprawny typ GeoJSON)
+    raw_box = box(0, 0, 5, 4)
+    net = _net_geometry_json(raw_box)
     assert net is not None and net["type"] == "Polygon"
+    net_shape = shapely_shape(net)
+    expected_area = (5 - 2 * NET_SHRINK_M) * (4 - 2 * NET_SHRINK_M)
+    assert net_shape.area == pytest.approx(expected_area, abs=1e-6)
+    assert net_shape.area < raw_box.area - 0.1
