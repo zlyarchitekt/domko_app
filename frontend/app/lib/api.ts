@@ -195,6 +195,7 @@ export interface ApartmentResult {
   area_m2: number;
   net_area_m2: number;
   geometry: GeoJsonPolygon;
+  net_geometry?: GeoJsonPolygon | null;
 }
 
 export interface WTRuleResult {

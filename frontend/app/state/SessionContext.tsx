@@ -94,6 +94,7 @@ interface SessionState {
   theme: "dark" | "light";
   activeCageSeed: number | null;
   activeUnitSeed: number | null;
+  typeColors: Record<string, string>;
 }
 
 const initialCirculation: api.CirculationSpecInput = {
@@ -121,6 +122,18 @@ export const DEFAULT_UNIT_WEIGHTS: api.UnitWeightsInput = {
   daylight: 0.7,
   squareness: 0.5,
   adjacency: 1.0,
+};
+
+/** Domyślna paleta kolorów wypełnienia per typ mieszkania -- spec
+ * 2026-07-06 apartment-type-colors §2.1. Hex #rrggbb (to samo co zwraca
+ * <input type="color">), rozróżnialne na obu motywach. User nadpisuje przez
+ * swatch w ProgramSection; nadpisania trzymane w state.typeColors. */
+export const DEFAULT_TYPE_COLORS: Record<string, string> = {
+  M1: "#38bdf8",
+  M2: "#34d399",
+  M3: "#a78bfa",
+  M4: "#fbbf24",
+  M5: "#f472b6",
 };
 
 // Domyślna struktura mieszkań: M1 10% (25-32m²) / M2 40% (38-48m²) /
@@ -166,6 +179,7 @@ const initialState: SessionState = {
   theme: "dark",
   activeCageSeed: null,
   activeUnitSeed: null,
+  typeColors: DEFAULT_TYPE_COLORS,
 };
 
 type Action =
@@ -182,6 +196,7 @@ type Action =
   | { type: "REMOVE_PROGRAM_ROW"; id: string }
   | { type: "SET_TOTAL_UNITS"; totalUnits: number }
   | { type: "SET_UNIT_WEIGHT"; key: keyof api.UnitWeightsInput; value: number }
+  | { type: "SET_TYPE_COLOR"; aptType: string; color: string }
   | { type: "SET_ITERATION_RESULTS"; iterations: api.IterationMeta[]; derivedTotalUnits: number; netRemainderM2: number }
   | { type: "SET_CIRCULATION"; patch: Partial<api.CirculationSpecInput> }
   | { type: "SET_CIRCULATION_RESULT"; result: api.CirculationResponse | null }
@@ -301,6 +316,8 @@ function reducer(state: SessionState, action: Action): SessionState {
       return { ...state, totalUnits: action.totalUnits, program: recomputeDerivedProgram(state.program, action.totalUnits) };
     case "SET_UNIT_WEIGHT":
       return { ...state, unitWeights: { ...state.unitWeights, [action.key]: action.value } };
+    case "SET_TYPE_COLOR":
+      return { ...state, typeColors: { ...state.typeColors, [action.aptType]: action.color } };
     case "SET_ITERATION_RESULTS":
       return {
         ...state,
@@ -541,6 +558,7 @@ interface SessionContextValue {
   removeProgramRow: (id: string) => void;
   setTotalUnits: (totalUnits: number) => void;
   setUnitWeight: (key: keyof api.UnitWeightsInput, value: number) => void;
+  setTypeColor: (aptType: string, color: string) => void;
   setCirculation: (patch: Partial<api.CirculationSpecInput>) => void;
   selectApartment: (id: string | null) => void;
   addManualCage: (ring: Point2D[]) => void;
@@ -596,7 +614,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         if (parsed) {
           dispatch({
             type: "RESTORE_STATE",
-            state: { ...parsed, circulation: { ...initialCirculation, ...parsed.circulation } },
+            state: {
+              ...parsed,
+              circulation: { ...initialCirculation, ...parsed.circulation },
+              typeColors: { ...DEFAULT_TYPE_COLORS, ...parsed.typeColors },
+            },
           });
         }
       } catch (err) {
@@ -681,6 +703,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const setTotalUnits = useCallback((totalUnits: number) => dispatch({ type: "SET_TOTAL_UNITS", totalUnits }), []);
   const setUnitWeight = useCallback(
     (key: keyof api.UnitWeightsInput, value: number) => dispatch({ type: "SET_UNIT_WEIGHT", key, value }),
+    []
+  );
+  const setTypeColor = useCallback(
+    (aptType: string, color: string) => dispatch({ type: "SET_TYPE_COLOR", aptType, color }),
     []
   );
   const setCirculation = useCallback(
@@ -1189,6 +1215,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       removeProgramRow,
       setTotalUnits,
       setUnitWeight,
+      setTypeColor,
       setCirculation,
       selectApartment,
       addManualCage,
@@ -1233,6 +1260,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       removeProgramRow,
       setTotalUnits,
       setUnitWeight,
+      setTypeColor,
       setCirculation,
       selectApartment,
       addManualCage,
