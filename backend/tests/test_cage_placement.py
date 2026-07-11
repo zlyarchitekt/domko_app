@@ -157,6 +157,15 @@ def test_circulation_endpoint_iterative_mode():
     assert body["cage_geometries"]
     assert any(m["circulation_geometry_net"] is not None for m in body["cage_iterations"])
 
+    # Verify real shrink (net area < raw area) for at least one iteration
+    from shapely.geometry import shape
+    matching_iterations = [m for m in body["cage_iterations"]
+                           if m["circulation_geometry"] is not None and m["circulation_geometry_net"] is not None]
+    assert len(matching_iterations) > 0
+    raw_area = shape(matching_iterations[0]["circulation_geometry"]).area
+    net_area = shape(matching_iterations[0]["circulation_geometry_net"]).area
+    assert net_area < raw_area
+
 
 def test_iterate_cage_placement_metas_carry_full_result():
     footprint = _rect(0, 0, 40, 12)
