@@ -1,12 +1,17 @@
 "use client";
 
+import { CheckCircle2, XCircle, AlertCircle } from "lucide-react";
 import { useSession } from "../state/SessionContext";
+import { apartmentValidationByIndex } from "../lib/deriveStatus";
 
 export default function IterationsSidebar() {
-  const { state, selectCageIteration, activeCageSeed, selectUnitIteration, activeUnitSeed } = useSession();
+  const { state, selectCageIteration, activeCageSeed, selectUnitIteration, activeUnitSeed, selectApartment } =
+    useSession();
+  const { validation, layoutResult } = state;
 
   const hasCageIterations = (state.circulationResult?.cage_iterations?.length ?? 0) > 0;
   const hasUnitIterations = state.lastIterations.length > 0;
+  const apartmentsById = apartmentValidationByIndex(layoutResult, validation);
 
   return (
     <div className="h-full shrink-0 p-3">
@@ -95,6 +100,59 @@ export default function IterationsSidebar() {
                 </>
               );
             })()}
+          </div>
+        )}
+        {/* Uwagi per mieszkanie — przeniesione z lewego panelu Walidacja
+            (user 2026-07-11: "uwagi dotyczące mieszkań przerzuć do prawego
+            paska"). Klik zaznacza mieszkanie na canvasie, jak wcześniej. */}
+        {layoutResult && layoutResult.apartments.length > 0 && (
+          <div className="space-y-1">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+              Uwagi mieszkań ({layoutResult.apartments.length})
+            </div>
+            <ul className="space-y-1 text-xs">
+              {layoutResult.apartments.map((apt) => {
+                const v = apartmentsById.get(apt.id);
+                const isSelected = state.selectedApartmentId === apt.id;
+                const hasError = v && v.errors.length > 0;
+                const hasWarning = v && !hasError && v.warnings.length > 0;
+                return (
+                  <li key={apt.id}>
+                    <button
+                      onClick={() => selectApartment(isSelected ? null : apt.id)}
+                      className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-zinc-800/70 light:hover:bg-zinc-100 ${
+                        isSelected ? "bg-zinc-800/70 ring-1 ring-inset ring-accent-500/50 light:bg-zinc-100" : ""
+                      }`}
+                    >
+                      {hasError ? (
+                        <XCircle size={14} className="shrink-0 text-red-400" />
+                      ) : hasWarning ? (
+                        <AlertCircle size={14} className="shrink-0 text-amber-400" />
+                      ) : (
+                        <CheckCircle2 size={14} className="shrink-0 text-emerald-500" />
+                      )}
+                      <span className="flex-1 text-zinc-300 light:text-zinc-700">
+                        {apt.type} · <span className="font-mono">{apt.area_m2.toFixed(1)} m²</span>
+                      </span>
+                    </button>
+                    {v && (v.errors.length > 0 || v.warnings.length > 0) && (
+                      <div className="ml-6 space-y-0.5 py-1 text-[11px]">
+                        {v.errors.map((e, i) => (
+                          <div key={`e-${i}`} className="text-red-400">
+                            {e}
+                          </div>
+                        ))}
+                        {v.warnings.map((w, i) => (
+                          <div key={`w-${i}`} className="text-amber-400">
+                            {w}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
           </div>
         )}
       </aside>
