@@ -377,7 +377,48 @@ def test_place_circulation_num_cages_defaults_to_one():
     assert len(result.cage_polygons) == 1
 
 
-def test_place_circulation_num_cages_exceeds_available_zones_caps_silently():
+def test_place_circulation_num_cages_single_zone_places_requested_count():
+    """User report 2026-07-11: slider 'Liczba klatek: 3' + klasyczne 'Umieść
+    korytarz i klatkę' na prostym prostokącie (= 1 strefa) stawiało zawsze
+    1 klatkę. Klasyczny tryb ma honorować num_cages także w obrębie jednej
+    strefy (deterministyczne dopełnienie z puli kandydatów), nie tylko
+    1 na strefę."""
+    from services.circulation import place_circulation
+
+    footprint = Polygon([(0, 0), (40, 0), (40, 12), (0, 12)])
+    result = place_circulation(
+        footprint,
+        corridor_width_m=1.5,
+        stair_width_m=1.2,
+        place_cage=True,
+        cage_size_m=2.5,
+        cage_position="auto",
+        num_cages=3,
+    )
+    assert len(result.cage_polygons) == 3
+    # Pairwise disjoint.
+    for i in range(len(result.cage_polygons)):
+        for j in range(i + 1, len(result.cage_polygons)):
+            assert result.cage_polygons[i].intersection(result.cage_polygons[j]).area < 1e-9
+    # Corridor touches every cage (single shared corridor per zone).
+    assert result.circulation_geometry is not None
+    for cage in result.cage_polygons:
+        assert result.circulation_geometry.distance(cage) < 1e-6
+
+    # Determinism: classic mode has no rng — identical call, identical result.
+    again = place_circulation(
+        footprint,
+        corridor_width_m=1.5,
+        stair_width_m=1.2,
+        place_cage=True,
+        cage_size_m=2.5,
+        cage_position="auto",
+        num_cages=3,
+    )
+    assert [c.bounds for c in again.cage_polygons] == [c.bounds for c in result.cage_polygons]
+
+
+def test_place_circulation_num_cages_exceeds_candidates_caps_silently():
     from services.circulation import place_circulation
 
     l_shape = Polygon([(0, 0), (20, 0), (20, 10), (10, 10), (10, 20), (0, 20)])
@@ -390,8 +431,13 @@ def test_place_circulation_num_cages_exceeds_available_zones_caps_silently():
         cage_position="auto",
         num_cages=5,
     )
-    # Only 2 zones exist in this footprint — no error, just 2 cages.
-    assert len(result.cage_polygons) == 2
+    # Silent cap still holds when candidates run out — but the floor is now
+    # "co najmniej 1 na strefę zdolną pomieścić klatkę", nie sztywne 1/strefę
+    # (user override 2026-07-11: num_cages honorowany w klasycznym trybie).
+    assert 2 <= len(result.cage_polygons) <= 5
+    for i in range(len(result.cage_polygons)):
+        for j in range(i + 1, len(result.cage_polygons)):
+            assert result.cage_polygons[i].intersection(result.cage_polygons[j]).area < 1e-9
 
 
 def test_build_corridor_width_is_clear_not_axis():

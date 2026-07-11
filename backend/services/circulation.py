@@ -577,10 +577,13 @@ def place_circulation(
     `cage_size_m` jest przyjmowany dla zgodności API, ale geometria klatki
     używa stałych CAGE_WIDTH_M x CAGE_DEPTH_M (spec 2026-07-03 §6).
 
-    `num_cages`: maksymalna liczba klatek do umieszczenia, jedna na strefę
-    (spec 2026-07-04-cage-corridor-placement-quality §3). Jeśli stref
-    zdolnych pomieścić klatkę jest mniej niż `num_cages`, umieszczonych
-    zostaje tyle, ile się zmieści -- bez błędu (cichy cap, spec §3.1)."""
+    `num_cages`: maksymalna liczba klatek do umieszczenia. Najpierw jedna na
+    strefę (spec 2026-07-04-cage-corridor-placement-quality §3), potem —
+    jeśli stref jest mniej niż `num_cages` — deterministyczne dopełnienie
+    z puli kandydatów `_candidate_cages`, wiele klatek na strefę dozwolone
+    o ile jeden korytarz strefy obsłuży wszystkie (user override 2026-07-11).
+    Gdy kandydatów braknie, umieszczonych zostaje tyle, ile się zmieści --
+    bez błędu (cichy cap, spec §3.1)."""
     zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
 
     # rectangle_decompose() rozwiązuje każdy wklęsły wierzchołek OBRYSU na
@@ -628,6 +631,33 @@ def place_circulation(
             if cage_polygon is not None and cage_polygon.area > 0:
                 cage_polygons.append(cage_polygon)
                 local_cages[i] = [cage_polygon]
+
+        # Dopełnienie do num_cages, gdy stref jest mniej niż żądanych klatek
+        # (user override 2026-07-11: suwak "Liczba klatek" ma działać też w
+        # klasycznym trybie na prostym prostokącie = 1 strefie, nie tylko w
+        # iteracyjnym). Ta sama zachłanna reguła co iterate_cage_placement,
+        # tylko deterministycznie (pula kandydatów w stałej kolejności, bez
+        # rng): kandydat odpada gdy koliduje z już postawioną klatką albo gdy
+        # jeden korytarz strefy nie umie obsłużyć wszystkich jej klatek.
+        if len(cage_polygons) < num_cages:
+            # import lokalny: cage_placement importuje z tego modułu
+            # (_assemble_with_cages itd.), import na poziomie modułu byłby cyklem
+            from services.cage_placement import _cages_share_valid_corridor, _candidate_cages
+
+            for zi, cage in _candidate_cages(footprint, zones):
+                if len(cage_polygons) >= num_cages:
+                    break
+                if any(cage.intersects(existing) for existing in cage_polygons):
+                    continue
+                zone_existing = local_cages.get(zi)
+                if zone_existing:
+                    candidate_list = zone_existing + [cage]
+                    if not _cages_share_valid_corridor(zones[zi].polygon, corridor_width_m, candidate_list):
+                        continue
+                    local_cages[zi] = candidate_list
+                else:
+                    local_cages[zi] = [cage]
+                cage_polygons.append(cage)
 
     result = _assemble_with_cages(
         footprint, zones, local_cages, corridor_width_m,
