@@ -349,7 +349,7 @@ function reducer(state: SessionState, action: Action): SessionState {
           ...state.circulationResult,
           cage_geometries: meta.cage_geometries ?? state.circulationResult.cage_geometries,
           circulation_geometry: meta.circulation_geometry ?? state.circulationResult.circulation_geometry,
-          circulation_geometry_net: meta.circulation_geometry_net ?? state.circulationResult.circulation_geometry_net,
+          circulation_geometry_net: meta.circulation_geometry_net ?? null,
           centerline: meta.centerline ?? state.circulationResult.centerline,
           evacuation_dots: meta.evacuation_dots ?? state.circulationResult.evacuation_dots,
           remainder: meta.remainder ?? state.circulationResult.remainder,
