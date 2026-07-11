@@ -383,9 +383,23 @@ export default function CanvasEditor() {
 
   const footprint = state.footprint;
   const apartments = useMemo(() => state.layoutResult?.apartments ?? [], [state.layoutResult]);
+  // Korytarz renderuje się w świetle ścian (net), z fallbackiem na surową
+  // geometrię gdy backend nie przysłał netto (stara sesja / zbyt cienki
+  // pas) -- spec 2026-07-06 corridor-net-shrink §1, ten sam wzorzec co
+  // apt.net_geometry ?? apt.geometry dla mieszkań.
   const circulationParts = useMemo(() => {
-    if (state.layoutResult) return state.layoutResult.circulation_parts ?? [];
-    if (state.circulationResult?.circulation_geometry) return [state.circulationResult.circulation_geometry];
+    if (state.layoutResult) {
+      const net = state.layoutResult.circulation_parts_net ?? [];
+      return net.length > 0 ? net : state.layoutResult.circulation_parts ?? [];
+    }
+    if (state.circulationResult) {
+      if (state.circulationResult.circulation_geometry_net) {
+        return [state.circulationResult.circulation_geometry_net];
+      }
+      if (state.circulationResult.circulation_geometry) {
+        return [state.circulationResult.circulation_geometry];
+      }
+    }
     return [];
   }, [state.layoutResult, state.circulationResult]);
   const cageGeometries = useMemo(() => {
