@@ -52,6 +52,11 @@ class IterationMetaResult(BaseModel):
     components: dict[str, float] = {}
     apartments: list["ApartmentResult"] = []
     wall_bands: list[dict] = []
+    hard_valid: bool = True
+    """False = iteracja łamie zakaz "każde mieszkanie dotyka komunikacji
+    ORAZ elewacji" (user 2026-07-11). Zwycięzcą zostaje najlepsza WAŻNA
+    iteracja; gdy żadna nie jest ważna, najlepsza w ogóle -- frontend
+    pokazuje wtedy ostrzeżenie."""
 
 
 class CageWeightsInput(BaseModel):
@@ -501,7 +506,7 @@ def _serialize_unit_iteration(m, footprint: Polygon | None, circulation_geometry
         wall_bands_out = _compute_wall_bands(footprint, wall_cells, None)
     return IterationMetaResult(
         seed=m.seed, score=m.score, units_count=m.units_count, components=m.components,
-        apartments=apartments_out, wall_bands=wall_bands_out,
+        apartments=apartments_out, wall_bands=wall_bands_out, hard_valid=m.hard_valid,
     )
 
 

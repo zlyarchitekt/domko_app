@@ -55,23 +55,42 @@ export default function IterationsSidebar() {
               Iteracje mieszkań ({state.lastIterations.length})
             </div>
             <div className="text-[9px] text-zinc-600">niżej = lepiej, 0 = idealne dopasowanie do wag</div>
-            {state.lastIterations.map((m) => {
-              const isBest = state.lastIterations.every((o) => m.score <= o.score);
-              const isActive = activeUnitSeed === m.seed || (activeUnitSeed === null && isBest);
+            {(() => {
+              // Ta sama reguła co backend (pick_best_iteration): najlepsza
+              // WAŻNA iteracja (hard_valid), fallback najlepsza w ogóle.
+              const anyValid = state.lastIterations.some((o) => o.hard_valid !== false);
+              const pool = state.lastIterations.filter((o) => !anyValid || o.hard_valid !== false);
+              const bestSeed = pool.reduce((a, b) => (b.score < a.score ? b : a)).seed;
               return (
-                <button
-                  key={m.seed}
-                  onClick={() => selectUnitIteration(m.seed)}
-                  className={`flex w-full items-center justify-between rounded px-2 py-0.5 font-mono text-[11px] transition-colors ${
-                    isBest ? "text-accent-400" : "text-zinc-500"
-                  } ${isActive ? "bg-accent-500/15 ring-1 ring-inset ring-accent-500/40" : "hover:bg-zinc-800/50"}`}
-                >
-                  <span>#{m.seed}{isBest ? " ★" : ""}</span>
-                  <span>{m.units_count} szt.</span>
-                  <span>odchylenie {m.score.toFixed(3)}</span>
-                </button>
+                <>
+                  {!anyValid && (
+                    <div className="rounded bg-amber-500/10 px-2 py-1 text-[10px] leading-snug text-amber-400">
+                      Żadna iteracja nie spełnia zakazu: każde mieszkanie musi dotykać komunikacji i elewacji.
+                      Pokazano najlepszą mimo naruszeń.
+                    </div>
+                  )}
+                  {state.lastIterations.map((m) => {
+                    const isBest = m.seed === bestSeed;
+                    const isActive = activeUnitSeed === m.seed || (activeUnitSeed === null && isBest);
+                    const invalid = m.hard_valid === false;
+                    return (
+                      <button
+                        key={m.seed}
+                        onClick={() => selectUnitIteration(m.seed)}
+                        title={invalid ? "Narusza zakaz: mieszkanie bez styku z komunikacją lub elewacją" : undefined}
+                        className={`flex w-full items-center justify-between rounded px-2 py-0.5 font-mono text-[11px] transition-colors ${
+                          isBest ? "text-accent-400" : "text-zinc-500"
+                        } ${isActive ? "bg-accent-500/15 ring-1 ring-inset ring-accent-500/40" : "hover:bg-zinc-800/50"}`}
+                      >
+                        <span>#{m.seed}{isBest ? " ★" : ""}{invalid ? <span className="text-amber-400"> ⚠</span> : ""}</span>
+                        <span>{m.units_count} szt.</span>
+                        <span>odchylenie {m.score.toFixed(3)}</span>
+                      </button>
+                    );
+                  })}
+                </>
               );
-            })}
+            })()}
           </div>
         )}
       </aside>

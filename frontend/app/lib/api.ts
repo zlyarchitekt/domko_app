@@ -142,6 +142,9 @@ export interface IterationMeta {
   components?: Record<string, number>;
   apartments?: ApartmentResult[];
   wall_bands?: GeoJsonPolygon[];
+  /** False = iteracja łamie zakaz "każde mieszkanie dotyka komunikacji ORAZ
+   * elewacji" (2026-07-11). Brak pola (stare sesje) = traktuj jak true. */
+  hard_valid?: boolean;
 }
 
 export interface CageWeightsInput {

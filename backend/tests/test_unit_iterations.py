@@ -334,3 +334,61 @@ def test_generate_endpoint_classic_fallback_for_legacy_payload():
     assert body["iterations"] == []
     assert body["best_seed"] == 0
     assert len(body["apartments"]) > 0
+
+
+# --- ZAKAZ: mieszkanie musi dotykać komunikacji ORAZ elewacji (2026-07-11) ---
+
+
+def test_meets_hard_constraints_detects_interior_cell():
+    from services.unit_mix import meets_hard_constraints
+
+    footprint = _rect(0, 0, 10, 10)
+    circulation = _rect(4, 0, 6, 10)
+    touching = ApartmentCell(id="a", type="M2", polygon=_rect(0, 0, 4, 10))  # dotyka obu
+    interior = ApartmentCell(id="b", type="M2", polygon=_rect(1, 1, 3, 3))  # nie dotyka niczego
+
+    assert meets_hard_constraints([touching], footprint, circulation) is True
+    assert meets_hard_constraints([touching, interior], footprint, circulation) is False
+
+
+def test_meets_hard_constraints_each_condition_independent():
+    from services.unit_mix import meets_hard_constraints
+
+    footprint = _rect(0, 0, 10, 10)
+    circulation = _rect(4, 4, 6, 6)  # wyspa w środku
+    facade_only = ApartmentCell(id="a", type="M2", polygon=_rect(0, 0, 2, 2))  # elewacja tak, komunikacja nie
+    circ_only = ApartmentCell(id="b", type="M2", polygon=_rect(4, 2, 6, 4))  # komunikacja tak, elewacja nie
+
+    assert meets_hard_constraints([facade_only], footprint, circulation) is False
+    assert meets_hard_constraints([circ_only], footprint, circulation) is False
+    # bez podanej geometrii dany warunek jest pomijany (jak w _score_iteration)
+    assert meets_hard_constraints([facade_only], footprint, None) is True
+    assert meets_hard_constraints([circ_only], None, circulation) is True
+
+
+def test_pick_best_iteration_prefers_hard_valid_over_lower_score():
+    from services.unit_mix import IterationMeta, pick_best_iteration
+
+    invalid_better = IterationMeta(seed=0, score=0.1, units_count=5, hard_valid=False)
+    valid_worse = IterationMeta(seed=1, score=0.4, units_count=5, hard_valid=True)
+    assert pick_best_iteration([invalid_better, valid_worse]).seed == 1
+
+    # żadna ważna -> najniższy score w ogóle (fallback zamiast pustego wyniku)
+    all_invalid = [
+        IterationMeta(seed=0, score=0.3, units_count=5, hard_valid=False),
+        IterationMeta(seed=1, score=0.2, units_count=5, hard_valid=False),
+    ]
+    assert pick_best_iteration(all_invalid).seed == 1
+
+
+def test_iterate_units_metas_carry_hard_valid_and_winner_is_valid():
+    remainder = _rect(0, 0, 30, 10)
+    footprint = _rect(0, 0, 30, 12)
+    circulation = _rect(0, 10, 30, 12)  # korytarz wzdłuż górnej krawędzi remainder
+    cells, metas, best_seed, _total = iterate_units(
+        remainder, SHARES, iterations=5, footprint=footprint, circulation_geometry=circulation
+    )
+    assert all(isinstance(m.hard_valid, bool) for m in metas)
+    winner = next(m for m in metas if m.seed == best_seed)
+    if any(m.hard_valid for m in metas):
+        assert winner.hard_valid is True

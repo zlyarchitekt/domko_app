@@ -203,6 +203,10 @@ class IterationMeta:
     §1. Typ `list` bez parametru celowo -- ApartmentCell żyje w
     services.layout, import tu utworzyłby cykl (layout.py importuje z
     unit_mix.py)."""
+    hard_valid: bool = True
+    """False gdy iteracja łamie ZAKAZ (user 2026-07-11): każde mieszkanie
+    musi dotykać komunikacji ORAZ elewacji. min_facade_m/wagi adjacency i
+    daylight pozostają miękkim scoringiem -- zakaz sprawdza sam styk (>0)."""
 
 
 def derive_total_units(net_remainder_m2: float, shares: list[ProgramShare]) -> int:
@@ -352,6 +356,33 @@ def _score_iteration(
     return score, components
 
 
+def meets_hard_constraints(
+    cells: list, footprint: Polygon | None, circulation_geometry
+) -> bool:
+    """ZAKAZ (user 2026-07-11): każde mieszkanie musi mieć styk (>0) z
+    komunikacją ORAZ z elewacją (ścianą zewnętrzną obrysu). Warunek liczony
+    tylko względem geometrii, którą podano -- bez footprint nie da się
+    sprawdzić elewacji, bez circulation_geometry komunikacji (wtedy dany
+    warunek jest pomijany, jak w _score_iteration)."""
+    edge = footprint.exterior.buffer(0.01) if footprint is not None else None
+    check_circ = circulation_geometry is not None and not circulation_geometry.is_empty
+    for c in cells:
+        if check_circ and c.polygon.distance(circulation_geometry) >= 0.01:
+            return False
+        if edge is not None and c.polygon.boundary.intersection(edge).length <= 0:
+            return False
+    return True
+
+
+def pick_best_iteration(metas: list[IterationMeta]) -> IterationMeta:
+    """Zwycięzca = najniższy score wśród iteracji spełniających zakaz
+    (hard_valid); gdy żadna nie spełnia -- najniższy score w ogóle (frontend
+    pokazuje wtedy ostrzeżenie zamiast pustego wyniku)."""
+    valid = [m for m in metas if m.hard_valid]
+    pool = valid or metas
+    return min(pool, key=lambda m: m.score)
+
+
 def iterate_units(
     remainder: Polygon | MultiPolygon,
     shares: list[ProgramShare],
@@ -380,7 +411,6 @@ def iterate_units(
     ]
 
     rectangles = rectangle_decompose(remainder)
-    best: tuple[float, list[ApartmentCell]] | None = None
     metas: list[IterationMeta] = []
     for seed in range(iterations):
         rng = random.Random(seed)
@@ -395,11 +425,10 @@ def iterate_units(
             cells[0].net_area_m2 = net_area
         score, components = _score_iteration(cells, shares, weights, footprint, circulation_geometry)
         metas.append(IterationMeta(seed=seed, score=score, units_count=len(cells),
-                                   components=components, cells=list(cells)))
-        if best is None or score < best[0]:
-            best = (score, cells)
-    best_seed = min(metas, key=lambda m: m.score).seed
-    return best[1], metas, best_seed, total_units
+                                   components=components, cells=list(cells),
+                                   hard_valid=meets_hard_constraints(cells, footprint, circulation_geometry)))
+    winner = pick_best_iteration(metas)
+    return winner.cells, metas, winner.seed, total_units
 
 
 def subdivide_units(
