@@ -369,7 +369,8 @@ export default function CanvasEditor() {
           axisText: "#71717a",
           outline: "#18181b",
           outlineFill: "rgba(24,24,27,0.04)",
-          wallFill: "rgba(82,82,91,0.35)",
+          // Ściany w pełni kryjące (user 2026-07-11: "ściany wgle nieprzezroczyste")
+          wallFill: "rgb(82,82,91)",
         }
       : {
           bg: "#0c0c10",
@@ -378,7 +379,8 @@ export default function CanvasEditor() {
           axisText: "#71717a",
           outline: "#ffffff",
           outlineFill: "rgba(255,255,255,0.05)",
-          wallFill: "rgba(161,161,170,0.45)",
+          // Ściany w pełni kryjące (user 2026-07-11: "ściany wgle nieprzezroczyste")
+          wallFill: "rgb(161,161,170)",
         };
 
   const footprint = state.footprint;
@@ -1163,7 +1165,8 @@ export default function CanvasEditor() {
               const status = apartmentStatuses.get(apt.id) ?? "ok";
               stroke = STATUS_COLORS[status].stroke;
               const hex = state.typeColors?.[apt.type] ?? DEFAULT_TYPE_COLORS[apt.type] ?? "#9ca3af";
-              fill = hexToRgba(hex, 0.45);
+              // ~20% przezroczystości (user 2026-07-11), reszta pełne wypełnienie
+              fill = hexToRgba(hex, 0.8);
             }
 
             const isSelected = state.selectedApartmentId === apt.id;
