@@ -19,6 +19,19 @@ import {
 } from "./lib/polygonEdit";
 const METER_PX = 50; // base scale: 1m = 50px
 
+/** Krok snapowania przy przesuwaniu komunikacji/klatek [m] (user 2026-07-11). */
+const CIRCULATION_SNAP_M = 0.1;
+const CIRCULATION_SNAP_PX = CIRCULATION_SNAP_M * METER_PX;
+/** Przyciąga pozycję node'a (w px warstwy = px świata) do siatki 0.1m.
+ * Wywoływane w onDragMove — node.x()/y() są w układzie rodzica (warstwy),
+ * więc transformacja stage'a (zoom/pan) nie wpływa na krok. */
+const snapNodeToGrid = (node: { x: () => number; y: () => number; position: (p: { x: number; y: number }) => void }) => {
+  node.position({
+    x: Math.round(node.x() / CIRCULATION_SNAP_PX) * CIRCULATION_SNAP_PX,
+    y: Math.round(node.y() / CIRCULATION_SNAP_PX) * CIRCULATION_SNAP_PX,
+  });
+};
+
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
@@ -1087,6 +1100,9 @@ export default function CanvasEditor() {
               onDragStart={(e) => {
                 e.cancelBubble = true;
               }}
+              onDragMove={(e) => {
+                snapNodeToGrid(e.target);
+              }}
               onDragEnd={(e) => {
                 // See the edit-lines Group's onDragEnd above — same Konva
                 // event-bubbling issue: without cancelBubble, the Stage's own
@@ -1094,8 +1110,9 @@ export default function CanvasEditor() {
                 // position and snaps the whole pannable view to the origin.
                 e.cancelBubble = true;
                 const node = e.target;
-                const dxM = node.x() / METER_PX;
-                const dyM = -node.y() / METER_PX;
+                // Zaokrąglenie do kroku snapu ucina szum float po onDragMove.
+                const dxM = Math.round(node.x() / METER_PX / CIRCULATION_SNAP_M) * CIRCULATION_SNAP_M;
+                const dyM = -Math.round(node.y() / METER_PX / CIRCULATION_SNAP_M) * CIRCULATION_SNAP_M;
                 node.position({ x: 0, y: 0 });
                 dispatch({ type: "TRANSLATE_CIRCULATION", dx: dxM, dy: dyM });
               }}
@@ -1120,11 +1137,14 @@ export default function CanvasEditor() {
               onDragStart={(e) => {
                 e.cancelBubble = true;
               }}
+              onDragMove={(e) => {
+                snapNodeToGrid(e.target);
+              }}
               onDragEnd={(e) => {
                 e.cancelBubble = true;
                 const node = e.target;
-                const dxM = node.x() / METER_PX;
-                const dyM = -node.y() / METER_PX;
+                const dxM = Math.round(node.x() / METER_PX / CIRCULATION_SNAP_M) * CIRCULATION_SNAP_M;
+                const dyM = -Math.round(node.y() / METER_PX / CIRCULATION_SNAP_M) * CIRCULATION_SNAP_M;
                 node.position({ x: 0, y: 0 });
                 void runMoveCage(i, dxM, dyM);
               }}
