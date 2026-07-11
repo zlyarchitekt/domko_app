@@ -478,6 +478,9 @@ function reducer(state: SessionState, action: Action): SessionState {
           circulation_geometry: state.circulationResult.circulation_geometry
             ? translateGeoJson(state.circulationResult.circulation_geometry, dx, dy)
             : null,
+          circulation_geometry_net: state.circulationResult.circulation_geometry_net
+            ? translateGeoJson(state.circulationResult.circulation_geometry_net, dx, dy)
+            : state.circulationResult.circulation_geometry_net,
           cage_geometries: state.circulationResult.cage_geometries.map((g) => translateGeoJson(g, dx, dy)),
           // remainder is NOT recomputed client-side here (real polygon.difference
           // needs a real geometry library) — runSubdivideUnits always uses the
