@@ -159,6 +159,7 @@ export interface CageIterationMeta {
   components?: Record<string, number>;
   cage_geometries?: GeoJsonPolygon[];
   circulation_geometry?: GeoJsonPolygon | null;
+  circulation_geometry_net?: GeoJsonPolygon | null;
   centerline?: CorridorCenterlineSegment[];
   evacuation_dots?: EvacuationDot[];
   remainder?: GeoJsonPolygon;
@@ -221,6 +222,7 @@ export interface LayoutGenerateResponse {
   wt_validation: WTResult;
   zones: { name: string; geometry: GeoJsonPolygon }[];
   circulation_parts: GeoJsonPolygon[];
+  circulation_parts_net?: GeoJsonPolygon[];
   cage_geometries: GeoJsonPolygon[];
   wall_bands: GeoJsonPolygon[];
   evacuation_dots?: EvacuationDot[];
@@ -257,6 +259,7 @@ export interface EvacuationDot {
 
 export interface CirculationResponse {
   circulation_geometry: GeoJsonPolygon | null;
+  circulation_geometry_net?: GeoJsonPolygon | null;
   cage_geometries: GeoJsonPolygon[];
   remainder: GeoJsonPolygon; // może być Polygon lub MultiPolygon (patrz backend CirculationResult.remainder)
   centerline: CorridorCenterlineSegment[];
@@ -284,6 +287,7 @@ export interface ReshapeCirculationRequest {
 
 export interface ReshapeCirculationResponse {
   circulation_geometry: GeoJsonPolygon | null;
+  circulation_geometry_net?: GeoJsonPolygon | null;
   remainder: GeoJsonPolygon;
   centerline: CorridorCenterlineSegment[];
   evacuation_dots?: EvacuationDot[];
