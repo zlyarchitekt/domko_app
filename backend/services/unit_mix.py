@@ -204,9 +204,13 @@ class IterationMeta:
     services.layout, import tu utworzyłby cykl (layout.py importuje z
     unit_mix.py)."""
     hard_valid: bool = True
-    """False gdy iteracja łamie ZAKAZ (user 2026-07-11): każde mieszkanie
-    musi dotykać komunikacji ORAZ elewacji. min_facade_m/wagi adjacency i
-    daylight pozostają miękkim scoringiem -- zakaz sprawdza sam styk (>0)."""
+    """False gdy iteracja łamie którykolwiek ZAKAZ (user 2026-07-11): każde
+    mieszkanie musi dotykać komunikacji ORAZ elewacji, a proporcje (po
+    prostokącie opisanym) nie mogą przekroczyć 1:HARD_MAX_ASPECT_RATIO.
+    min_facade_m/wagi adjacency, daylight i squareness pozostają miękkim
+    scoringiem -- zakaz sprawdza sam styk (>0) i sam limit proporcji."""
+    hard_violations: list = field(default_factory=list)
+    """list[str] -- powody naruszenia zakazu po polsku (puste = hard_valid)."""
 
 
 def derive_total_units(net_remainder_m2: float, shares: list[ProgramShare]) -> int:
@@ -235,6 +239,22 @@ def allocate_counts(shares: list[ProgramShare], total_units: int) -> dict[str, i
 _GRID_M = 0.5
 _DAYLIGHT_MIN_CONTACT_M = 3.0
 _SQUARENESS_CAP_RATIO = 2.5
+HARD_MAX_ASPECT_RATIO = 3.0
+"""ZAKAZ (user 2026-07-11): proporcje mieszkania nie mogą przekroczyć 1:3.
+Dla kształtów nieprostokątnych liczone po prostokącie opisanym
+(minimum_rotated_rectangle) -- "wpisywanie kształtu w prostokąt"."""
+
+
+def _mrr_aspect_ratio(polygon) -> float:
+    """Stosunek dłuższego do krótszego boku prostokąta opisanego (>= 1.0).
+    Degeneracja (bok ~0) -> inf, żeby zawsze łapała się w zakaz."""
+    mrr = polygon.minimum_rotated_rectangle
+    xs = [pt[0] for pt in mrr.exterior.coords[:-1]]
+    ys = [pt[1] for pt in mrr.exterior.coords[:-1]]
+    side_a = math.hypot(xs[1] - xs[0], ys[1] - ys[0])
+    side_b = math.hypot(xs[2] - xs[1], ys[2] - ys[1])
+    longer, shorter = max(side_a, side_b), min(side_a, side_b)
+    return longer / shorter if shorter > 1e-9 else float("inf")
 
 
 def _cell_geometry_devs(cell: ApartmentCell) -> tuple[float, float, float]:
@@ -251,12 +271,9 @@ def _cell_geometry_devs(cell: ApartmentCell) -> tuple[float, float, float]:
     mrr = cell.polygon.minimum_rotated_rectangle
     shape = max(0.0, 1.0 - cell.polygon.area / mrr.area) if mrr.area > 1e-9 else 0.0
 
-    xs = [pt[0] for pt in mrr.exterior.coords[:-1]]
-    ys = [pt[1] for pt in mrr.exterior.coords[:-1]]
-    side_a = math.hypot(xs[1] - xs[0], ys[1] - ys[0])
-    side_b = math.hypot(xs[2] - xs[1], ys[2] - ys[1])
-    longer, shorter = max(side_a, side_b), min(side_a, side_b)
-    ratio = longer / shorter if shorter > 1e-9 else _SQUARENESS_CAP_RATIO
+    ratio = _mrr_aspect_ratio(cell.polygon)
+    if math.isinf(ratio):
+        ratio = _SQUARENESS_CAP_RATIO
     squareness = min(1.0, max(0.0, (ratio - 1.0) / (_SQUARENESS_CAP_RATIO - 1.0)))
     return grid, shape, squareness
 
@@ -356,22 +373,41 @@ def _score_iteration(
     return score, components
 
 
+def hard_constraint_violations(
+    cells: list, footprint: Polygon | None, circulation_geometry
+) -> list[str]:
+    """ZAKAZY (user 2026-07-11): każde mieszkanie musi mieć styk (>0) z
+    komunikacją ORAZ z elewacją (ścianą zewnętrzną obrysu), a jego proporcje
+    po prostokącie opisanym nie mogą przekroczyć 1:HARD_MAX_ASPECT_RATIO.
+    Warunki styku liczone tylko względem geometrii, którą podano -- bez
+    footprint nie da się sprawdzić elewacji, bez circulation_geometry
+    komunikacji (wtedy dany warunek jest pomijany, jak w _score_iteration).
+    Zwraca listę powodów po polsku (pusta = iteracja ważna)."""
+    edge = footprint.exterior.buffer(0.01) if footprint is not None else None
+    check_circ = circulation_geometry is not None and not circulation_geometry.is_empty
+    no_circ = no_facade = bad_ratio = 0
+    for c in cells:
+        if check_circ and c.polygon.distance(circulation_geometry) >= 0.01:
+            no_circ += 1
+        if edge is not None and c.polygon.boundary.intersection(edge).length <= 0:
+            no_facade += 1
+        if _mrr_aspect_ratio(c.polygon) > HARD_MAX_ASPECT_RATIO + 1e-6:
+            bad_ratio += 1
+    violations: list[str] = []
+    if no_circ:
+        violations.append(f"{no_circ}× mieszkanie bez styku z komunikacją")
+    if no_facade:
+        violations.append(f"{no_facade}× mieszkanie bez styku z elewacją")
+    if bad_ratio:
+        violations.append(f"{bad_ratio}× proporcje mieszkania przekraczają 1:{HARD_MAX_ASPECT_RATIO:g}")
+    return violations
+
+
 def meets_hard_constraints(
     cells: list, footprint: Polygon | None, circulation_geometry
 ) -> bool:
-    """ZAKAZ (user 2026-07-11): każde mieszkanie musi mieć styk (>0) z
-    komunikacją ORAZ z elewacją (ścianą zewnętrzną obrysu). Warunek liczony
-    tylko względem geometrii, którą podano -- bez footprint nie da się
-    sprawdzić elewacji, bez circulation_geometry komunikacji (wtedy dany
-    warunek jest pomijany, jak w _score_iteration)."""
-    edge = footprint.exterior.buffer(0.01) if footprint is not None else None
-    check_circ = circulation_geometry is not None and not circulation_geometry.is_empty
-    for c in cells:
-        if check_circ and c.polygon.distance(circulation_geometry) >= 0.01:
-            return False
-        if edge is not None and c.polygon.boundary.intersection(edge).length <= 0:
-            return False
-    return True
+    """Wygodny skrót: True gdy hard_constraint_violations puste."""
+    return not hard_constraint_violations(cells, footprint, circulation_geometry)
 
 
 def pick_best_iteration(metas: list[IterationMeta]) -> IterationMeta:
@@ -424,9 +460,10 @@ def iterate_units(
             cells = [_Cell(id=str(_uuid.uuid4()), type=shares[0].type, polygon=whole)]
             cells[0].net_area_m2 = net_area
         score, components = _score_iteration(cells, shares, weights, footprint, circulation_geometry)
+        violations = hard_constraint_violations(cells, footprint, circulation_geometry)
         metas.append(IterationMeta(seed=seed, score=score, units_count=len(cells),
                                    components=components, cells=list(cells),
-                                   hard_valid=meets_hard_constraints(cells, footprint, circulation_geometry)))
+                                   hard_valid=not violations, hard_violations=violations))
     winner = pick_best_iteration(metas)
     return winner.cells, metas, winner.seed, total_units
 

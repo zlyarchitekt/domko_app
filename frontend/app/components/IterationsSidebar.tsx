@@ -65,7 +65,7 @@ export default function IterationsSidebar() {
                 <>
                   {!anyValid && (
                     <div className="rounded bg-amber-500/10 px-2 py-1 text-[10px] leading-snug text-amber-400">
-                      Żadna iteracja nie spełnia zakazu: każde mieszkanie musi dotykać komunikacji i elewacji.
+                      Żadna iteracja nie spełnia zakazów (styk z komunikacją i elewacją, proporcje ≤ 1:3).
                       Pokazano najlepszą mimo naruszeń.
                     </div>
                   )}
@@ -77,7 +77,11 @@ export default function IterationsSidebar() {
                       <button
                         key={m.seed}
                         onClick={() => selectUnitIteration(m.seed)}
-                        title={invalid ? "Narusza zakaz: mieszkanie bez styku z komunikacją lub elewacją" : undefined}
+                        title={
+                          invalid
+                            ? `Narusza zakaz: ${(m.hard_violations ?? []).join("; ") || "mieszkanie bez styku z komunikacją/elewacją lub proporcje > 1:3"}`
+                            : undefined
+                        }
                         className={`flex w-full items-center justify-between rounded px-2 py-0.5 font-mono text-[11px] transition-colors ${
                           isBest ? "text-accent-400" : "text-zinc-500"
                         } ${isActive ? "bg-accent-500/15 ring-1 ring-inset ring-accent-500/40" : "hover:bg-zinc-800/50"}`}

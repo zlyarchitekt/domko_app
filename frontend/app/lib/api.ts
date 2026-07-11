@@ -142,9 +142,12 @@ export interface IterationMeta {
   components?: Record<string, number>;
   apartments?: ApartmentResult[];
   wall_bands?: GeoJsonPolygon[];
-  /** False = iteracja łamie zakaz "każde mieszkanie dotyka komunikacji ORAZ
-   * elewacji" (2026-07-11). Brak pola (stare sesje) = traktuj jak true. */
+  /** False = iteracja łamie zakaz: styk każdego mieszkania z komunikacją ORAZ
+   * elewacją, proporcje <= 1:3 (2026-07-11). Brak pola (stare sesje) =
+   * traktuj jak true. */
   hard_valid?: boolean;
+  /** Powody naruszenia zakazu (puste/brak gdy hard_valid). */
+  hard_violations?: string[];
 }
 
 export interface CageWeightsInput {

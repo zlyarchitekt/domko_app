@@ -53,10 +53,12 @@ class IterationMetaResult(BaseModel):
     apartments: list["ApartmentResult"] = []
     wall_bands: list[dict] = []
     hard_valid: bool = True
-    """False = iteracja łamie zakaz "każde mieszkanie dotyka komunikacji
-    ORAZ elewacji" (user 2026-07-11). Zwycięzcą zostaje najlepsza WAŻNA
-    iteracja; gdy żadna nie jest ważna, najlepsza w ogóle -- frontend
-    pokazuje wtedy ostrzeżenie."""
+    """False = iteracja łamie zakaz: styk każdego mieszkania z komunikacją
+    ORAZ elewacją, proporcje <= 1:3 po prostokącie opisanym (user
+    2026-07-11). Zwycięzcą zostaje najlepsza WAŻNA iteracja; gdy żadna nie
+    jest ważna, najlepsza w ogóle -- frontend pokazuje wtedy ostrzeżenie."""
+    hard_violations: list[str] = []
+    """Powody naruszenia zakazu (puste gdy hard_valid)."""
 
 
 class CageWeightsInput(BaseModel):
@@ -507,6 +509,7 @@ def _serialize_unit_iteration(m, footprint: Polygon | None, circulation_geometry
     return IterationMetaResult(
         seed=m.seed, score=m.score, units_count=m.units_count, components=m.components,
         apartments=apartments_out, wall_bands=wall_bands_out, hard_valid=m.hard_valid,
+        hard_violations=list(m.hard_violations),
     )
 
 

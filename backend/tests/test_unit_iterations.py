@@ -61,11 +61,16 @@ def test_determinism_same_seed_same_result():
     assert [c.polygon.wkt for c in cells_a] == [c.polygon.wkt for c in cells_b]
 
 
-def test_best_seed_has_lowest_score():
+def test_best_seed_has_lowest_score_among_hard_valid():
+    """Od 2026-07-11 zwycięzca = najniższy score wśród iteracji spełniających
+    zakazy (hard_valid); dopiero gdy żadna nie spełnia -- najniższy w ogóle.
+    Na tym fixturze iteracja o absolutnie najniższym score łamie limit
+    proporcji 1:3, więc asercja po samym min(score) byłaby błędna."""
     remainder = _rect(0, 0, 30, 11)
     _, metas, best_seed, _ = iterate_units(remainder, SHARES, iterations=10)
-    best = min(metas, key=lambda m: m.score)
-    assert best.seed == best_seed
+    valid = [m for m in metas if m.hard_valid]
+    pool = valid or metas
+    assert min(pool, key=lambda m: m.score).seed == best_seed
 
 
 def test_single_weight_score_equals_component():
@@ -392,3 +397,39 @@ def test_iterate_units_metas_carry_hard_valid_and_winner_is_valid():
     winner = next(m for m in metas if m.seed == best_seed)
     if any(m.hard_valid for m in metas):
         assert winner.hard_valid is True
+
+
+def test_hard_constraint_violations_aspect_ratio():
+    from services.unit_mix import HARD_MAX_ASPECT_RATIO, hard_constraint_violations
+
+    footprint = _rect(0, 0, 30, 10)
+    circulation = _rect(0, 0, 30, 2)
+    ok = ApartmentCell(id="a", type="M2", polygon=_rect(0, 0, 9, 3))  # 3:1 dokładnie na limicie
+    too_long = ApartmentCell(id="b", type="M2", polygon=_rect(9, 0, 22, 3))  # 13x3 > 1:3
+
+    assert hard_constraint_violations([ok], footprint, circulation) == []
+    v = hard_constraint_violations([ok, too_long], footprint, circulation)
+    assert len(v) == 1 and "proporcje" in v[0] and f"1:{HARD_MAX_ASPECT_RATIO:g}" in v[0]
+
+
+def test_hard_constraint_violations_lshape_uses_bounding_rectangle():
+    """Kształt L o rozpiętościach 12x3 (bbox) -> ratio 4 > 3, mimo że każde
+    ramię z osobna jest przysadziste — user: 'patrz na maksymalne rozpiętości
+    tak jakbyś wpisywał kształt w prostokąt'."""
+    from services.unit_mix import hard_constraint_violations
+
+    lshape = Polygon([(0, 0), (12, 0), (12, 1.5), (1.5, 1.5), (1.5, 3), (0, 3)])
+    cell = ApartmentCell(id="a", type="M2", polygon=lshape)
+    v = hard_constraint_violations([cell], None, None)
+    assert len(v) == 1 and "proporcje" in v[0]
+
+
+def test_iterate_units_metas_carry_violation_reasons():
+    remainder = _rect(0, 0, 30, 10)
+    footprint = _rect(0, 0, 30, 12)
+    circulation = _rect(0, 10, 30, 12)
+    _cells, metas, _seed, _total = iterate_units(
+        remainder, SHARES, iterations=3, footprint=footprint, circulation_geometry=circulation
+    )
+    for m in metas:
+        assert m.hard_valid == (m.hard_violations == [])
