@@ -155,6 +155,7 @@ def test_circulation_endpoint_iterative_mode():
     assert len(body["cage_iterations"]) >= 1
     assert body["cage_best_seed"] in [m["seed"] for m in body["cage_iterations"]]
     assert body["cage_geometries"]
+    assert any(m["circulation_geometry_net"] is not None for m in body["cage_iterations"])
 
 
 def test_iterate_cage_placement_metas_carry_full_result():

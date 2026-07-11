@@ -158,6 +158,29 @@ def test_generate_apartments_carry_net_geometry():
         assert net_poly.area < raw_poly.area
 
 
+def test_generate_endpoint_circulation_parts_net_is_smaller():
+    """Dual-surface: /generate must expose circulation_parts_net too, not just
+    /circulation -- same net_geometry dual-surface gotcha that has bitten this
+    repo repeatedly (evacuation_dots, wall_bands, net_area_m2 previously)."""
+    from shapely.geometry import shape
+
+    request_body = {
+        "footprint": [[0, 0], [12, 0], [12, 10], [0, 10]],
+        "circulation": {"corridor_width_m": 1.5, "place_cage": True, "cage_size_m": 2.5},
+        "apartments": [],
+    }
+    response = client.post("/api/v1/layout/generate", json=request_body)
+    assert response.status_code == 200
+    body = response.json()
+
+    assert len(body["circulation_parts"]) > 0
+    assert len(body["circulation_parts_net"]) > 0
+
+    raw_total = sum(shape(p).area for p in body["circulation_parts"])
+    net_total = sum(shape(p).area for p in body["circulation_parts_net"])
+    assert net_total < raw_total
+
+
 def test_net_geometry_json_none_for_tiny_cell():
     from api.v1.endpoints.layout import _net_geometry_json
     from services.wall_geometry import NET_SHRINK_M

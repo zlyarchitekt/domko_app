@@ -95,3 +95,34 @@ def test_circulation_endpoint_respects_num_cages():
     )
     assert response.status_code == 200
     assert len(response.json()["cage_geometries"]) == 2
+
+
+def test_circulation_endpoint_net_geometry_is_actually_smaller():
+    """circulation_geometry_net must be a REAL shrink, not just present --
+    Task 1 review of the apartment-colors plan caught a sibling bug where new
+    tests only checked field type/presence, never that the polygon actually
+    shrank (see .superpowers/sdd/progress.md, Task 1 fix f484e8e)."""
+    from shapely.geometry import shape
+
+    response = client.post(
+        "/api/v1/layout/circulation",
+        json={
+            "footprint": [[0, 0], [30, 0], [30, 6], [0, 6]],
+            "circulation": {
+                "corridor_width_m": 1.5,
+                "stair_width_m": 1.2,
+                "place_cage": True,
+                "cage_size_m": 2.5,
+                "cage_position": "auto",
+            },
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["circulation_geometry"] is not None
+    assert body["circulation_geometry_net"] is not None
+
+    raw_area = shape(body["circulation_geometry"]).area
+    net_area = shape(body["circulation_geometry_net"]).area
+    assert net_area < raw_area

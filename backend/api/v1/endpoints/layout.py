@@ -69,6 +69,9 @@ class CageIterationMetaResult(BaseModel):
     components: dict[str, float] = {}
     cage_geometries: list[dict] = []
     circulation_geometry: dict | None = None
+    circulation_geometry_net: dict | None = None
+    """Jak CirculationResponse.circulation_geometry_net, per iteracja --
+    spec 2026-07-06 corridor-net-shrink §1."""
     centerline: list["CenterlineSegmentResult"] = []
     evacuation_dots: list["EvacuationDotResult"] = []
     remainder: dict | None = None
@@ -169,6 +172,10 @@ class LayoutGenerateResponse(BaseModel):
     """Corridor+cage geometry, decomposed into individual Polygon parts (may be
     a MultiPolygon internally — e.g. both sides of a double-loaded corridor),
     for frontend rendering (F2-07)."""
+    circulation_parts_net: list[dict] = []
+    """circulation_parts w świetle ścian (net_polygon na całej geometrii przed
+    dekompozycją) -- spec 2026-07-06 corridor-net-shrink §1. Front: gdy
+    niepusta, renderuje TĘ listę zamiast circulation_parts."""
     cage_geometries: list[dict] = []
     """Individual staircase cage polygons (may be empty), for frontend rendering (F2-07)."""
     wall_bands: list[dict] = []
@@ -317,6 +324,10 @@ def layout_result_to_response(layout: LayoutResult, wt: WTValidationResult) -> L
             for z in layout.zones
         ],
         circulation_parts=_decompose_to_polygons(layout.circulation_geometry),
+        circulation_parts_net=(
+            _decompose_to_polygons(net_polygon(layout.circulation_geometry))
+            if layout.circulation_geometry is not None else []
+        ),
         cage_geometries=[json.loads(json.dumps(c.__geo_interface__)) for c in layout.cage_polygons],
         wall_bands=wall_bands_out,
         evacuation_dots=_serialize_dots(layout.evacuation_dots),
@@ -443,6 +454,10 @@ def _serialize_cage_iteration(m, manual_corridors: list | None = None) -> "CageI
             json.loads(json.dumps(m.result.circulation_geometry.__geo_interface__))
             if m.result is not None and m.result.circulation_geometry is not None else None
         ),
+        circulation_geometry_net=(
+            _net_geometry_json(m.result.circulation_geometry)
+            if m.result is not None and m.result.circulation_geometry is not None else None
+        ),
         centerline=_serialize_centerline(m.result.centerline) if m.result is not None else [],
         evacuation_dots=_serialize_dots(m.result.evacuation_dots) if m.result is not None else [],
         remainder=(
@@ -492,6 +507,10 @@ def _serialize_unit_iteration(m, footprint: Polygon | None, circulation_geometry
 
 class CirculationResponse(BaseModel):
     circulation_geometry: dict | None = None
+    circulation_geometry_net: dict | None = None
+    """Poligon korytarza+klatki w świetle ścian (wall_geometry.net_polygon) --
+    spec 2026-07-06 corridor-net-shrink §1. None gdy netto puste albo nie jest
+    prostym Polygonem; front spada wtedy na `circulation_geometry` (surowy)."""
     cage_geometries: list[dict] = []
     remainder: dict
     centerline: list[CenterlineSegmentResult] = []
@@ -587,6 +606,11 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
     return CirculationResponse(
         circulation_geometry=(
             json.loads(json.dumps(result.circulation_geometry.__geo_interface__))
+            if result.circulation_geometry is not None
+            else None
+        ),
+        circulation_geometry_net=(
+            _net_geometry_json(result.circulation_geometry)
             if result.circulation_geometry is not None
             else None
         ),
@@ -812,6 +836,9 @@ class ReshapeCirculationRequest(BaseModel):
 
 class ReshapeCirculationResponse(BaseModel):
     circulation_geometry: dict | None = None
+    circulation_geometry_net: dict | None = None
+    """Jak CirculationResponse.circulation_geometry_net -- spec 2026-07-06
+    corridor-net-shrink §1."""
     remainder: dict
     centerline: list[CenterlineSegmentResult] = []
     evacuation_dots: list[EvacuationDotResult] = []
@@ -849,6 +876,11 @@ def reshape_circulation_endpoint(request: ReshapeCirculationRequest):
     return ReshapeCirculationResponse(
         circulation_geometry=(
             json.loads(json.dumps(result.circulation_geometry.__geo_interface__))
+            if result.circulation_geometry is not None
+            else None
+        ),
+        circulation_geometry_net=(
+            _net_geometry_json(result.circulation_geometry)
             if result.circulation_geometry is not None
             else None
         ),
@@ -917,6 +949,10 @@ def move_cage_endpoint(request: MoveCageRequest):
     return CirculationResponse(
         circulation_geometry=(
             json.loads(json.dumps(result.circulation_geometry.__geo_interface__))
+            if result.circulation_geometry is not None else None
+        ),
+        circulation_geometry_net=(
+            _net_geometry_json(result.circulation_geometry)
             if result.circulation_geometry is not None else None
         ),
         cage_geometries=[json.loads(json.dumps(c.__geo_interface__)) for c in result.cage_polygons],
@@ -1013,6 +1049,10 @@ def add_manual_element_endpoint(request: AddManualElementRequest):
     return CirculationResponse(
         circulation_geometry=(
             json.loads(json.dumps(result.circulation_geometry.__geo_interface__))
+            if result.circulation_geometry is not None else None
+        ),
+        circulation_geometry_net=(
+            _net_geometry_json(result.circulation_geometry)
             if result.circulation_geometry is not None else None
         ),
         cage_geometries=[json.loads(json.dumps(c.__geo_interface__)) for c in result.cage_polygons],
