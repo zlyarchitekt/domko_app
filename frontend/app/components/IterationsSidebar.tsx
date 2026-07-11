@@ -8,14 +8,20 @@ export default function IterationsSidebar() {
   const hasCageIterations = (state.circulationResult?.cage_iterations?.length ?? 0) > 0;
   const hasUnitIterations = state.lastIterations.length > 0;
 
-  if (!hasCageIterations && !hasUnitIterations) return null;
-
   return (
     <div className="h-full shrink-0 p-3">
       <aside className="flex h-full w-[260px] flex-col gap-3 overflow-y-auto rounded-2xl border border-zinc-800/80 bg-zinc-900/70 p-3 shadow-panel backdrop-blur-xl light:border-zinc-200 light:bg-white/80 light:shadow-[0_1px_0_0_rgba(0,0,0,0.02)_inset,0_12px_32px_-12px_rgba(0,0,0,0.12)]">
         <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 light:text-zinc-500">
           Iteracje
         </div>
+
+        {!hasCageIterations && !hasUnitIterations && (
+          <div className="text-[11px] leading-relaxed text-zinc-600">
+            Brak iteracji. Użyj <span className="text-zinc-400">Rozmieść iteracyjnie</span> (klatki) lub{" "}
+            <span className="text-zinc-400">Podziel na mieszkania</span> (mieszkania), żeby zobaczyć tu warianty
+            do porównania.
+          </div>
+        )}
 
         {hasCageIterations && (
           <div className="space-y-0.5">

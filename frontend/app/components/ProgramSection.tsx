@@ -27,13 +27,7 @@ export default function ProgramSection() {
   } = useSession();
 
   const footprintArea = state.footprint ? polygonArea(state.footprint) : 0;
-  // min_area_m2/target_count są pochodne (środek zakresu × zaokrąglony udział %
-  // z totalUnits — patrz recomputeDerivedProgram w SessionContext.tsx), więc ta
-  // suma automatycznie odzwierciedla aktualną strukturę %.
-  const programArea = state.program.reduce((sum, row) => sum + row.min_area_m2 * row.target_count, 0);
-  const balance = footprintArea > 0 ? (programArea / footprintArea) * 100 : 0;
   const percentageSum = state.program.reduce((sum, row) => sum + row.percentage, 0);
-  const totalPlacedUnits = state.program.reduce((sum, row) => sum + row.target_count, 0);
 
   // Orientacyjny szacunek PRZED umieszczeniem komunikacji/podziałem (który
   // jedyny liczy prawdziwe derivedTotalUnits z net_remainder_m2) — user chce
@@ -41,7 +35,7 @@ export default function ProgramSection() {
   // korekcie węzłów, nie dopiero po "Umieść korytarz i klatkę"+"Podziel na
   // mieszkania". Sprawność budynku ~70% (footprintArea*0.7) jako przybliżenie
   // net_remainder_m2 zanim komunikacja jest w ogóle policzona.
-  const totalPctForEstimate = state.program.reduce((sum, row) => sum + row.percentage, 0);
+  const totalPctForEstimate = percentageSum;
   const avgUnitSizeM2 =
     totalPctForEstimate > 0
       ? state.program.reduce(
@@ -51,6 +45,20 @@ export default function ProgramSection() {
       : 0;
   const estimatedTotalUnits =
     footprintArea > 0 && avgUnitSizeM2 > 0 ? Math.max(1, Math.floor((footprintArea * 0.7) / avgUnitSizeM2)) : null;
+
+  // Wiersze, Program i Bilans liczą się z TEJ SAMEJ żywej liczby mieszkań co
+  // nagłówek "Liczba mieszkań (z powierzchni)": prawdziwe derivedTotalUnits po
+  // podziale, wcześniej szacunek z obrysu. state.totalUnits (sztywne 10) tylko
+  // gdy nie ma jeszcze obrysu — inaczej Bilans stał w miejscu przy edycji
+  // obrysu (user report 2026-07-11).
+  const liveTotal = state.derivedTotalUnits ?? estimatedTotalUnits ?? state.totalUnits;
+  const liveCount = (pct: number) => Math.max(0, Math.round((liveTotal * pct) / 100));
+  const programArea = state.program.reduce(
+    (sum, row) => sum + ((row.area_min_m2 + row.area_max_m2) / 2) * liveCount(row.percentage),
+    0
+  );
+  const balance = footprintArea > 0 ? (programArea / footprintArea) * 100 : 0;
+  const totalPlacedUnits = state.program.reduce((sum, row) => sum + liveCount(row.percentage), 0);
 
   return (
     <section className="space-y-2.5 rounded-xl border border-zinc-800/70 bg-zinc-950/40 p-3 light:border-zinc-200 light:bg-white">
@@ -109,7 +117,7 @@ export default function ProgramSection() {
                 className="ml-auto shrink-0 rounded-md bg-accent-500/15 px-1.5 py-0.5 font-mono text-[11px] text-accent-400"
                 title="Wyliczona liczba mieszkań tego typu (udział% × łączna liczba, zaokrąglone)"
               >
-                ≈{row.target_count} szt.
+                ≈{liveCount(row.percentage)} szt.
               </span>
               <button
                 onClick={() => removeProgramRow(row.id)}
@@ -175,7 +183,7 @@ export default function ProgramSection() {
         <div className="flex justify-between text-zinc-400">
           <span>Mieszkania (wyliczone)</span>
           <span className="font-mono text-zinc-200 light:text-zinc-800">
-            {totalPlacedUnits} / {state.totalUnits}
+            {totalPlacedUnits} / {liveTotal}
           </span>
         </div>
         <div className="flex justify-between text-zinc-400">
