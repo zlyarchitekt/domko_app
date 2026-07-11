@@ -24,8 +24,6 @@ export default function ProgramSection() {
     removeProgramRow,
     setUnitWeight,
     setTypeColor,
-    selectUnitIteration,
-    activeUnitSeed,
   } = useSession();
 
   const footprintArea = state.footprint ? polygonArea(state.footprint) : 0;
@@ -226,31 +224,6 @@ export default function ProgramSection() {
         ))}
       </div>
 
-      {state.lastIterations.length > 0 && (
-        <div className="space-y-0.5 pt-1">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-            Iteracje ({state.lastIterations.length})
-          </div>
-          <div className="text-[9px] text-zinc-600">niżej = lepiej, 0 = idealne dopasowanie do wag</div>
-          {state.lastIterations.map((m) => {
-            const isBest = state.lastIterations.every((o) => m.score <= o.score);
-            const isActive = activeUnitSeed === m.seed || (activeUnitSeed === null && isBest);
-            return (
-              <button
-                key={m.seed}
-                onClick={() => selectUnitIteration(m.seed)}
-                className={`flex w-full items-center justify-between rounded px-2 py-0.5 font-mono text-[11px] transition-colors ${
-                  isBest ? "text-accent-400" : "text-zinc-500"
-                } ${isActive ? "bg-accent-500/15 ring-1 ring-inset ring-accent-500/40" : "hover:bg-zinc-800/50"}`}
-              >
-                <span>#{m.seed}{isBest ? " ★" : ""}</span>
-                <span>{m.units_count} szt.</span>
-                <span>odchylenie {m.score.toFixed(3)}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
     </section>
   );
 }

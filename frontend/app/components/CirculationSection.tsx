@@ -34,8 +34,6 @@ export default function CirculationSection() {
     setMode,
     removeManualElement,
     setHoveredManualId,
-    selectCageIteration,
-    activeCageSeed,
   } = useSession();
 
   useEffect(() => {
@@ -275,32 +273,6 @@ export default function CirculationSection() {
           Rysuj korytarz
         </button>
       </div>
-
-      {(state.circulationResult?.cage_iterations?.length ?? 0) > 0 && (
-        <div className="space-y-0.5 pt-1">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-            Iteracje klatek ({state.circulationResult!.cage_iterations!.length})
-          </div>
-          <div className="text-[9px] text-zinc-600">niżej = lepiej, 0 = idealne dopasowanie do wag</div>
-          {state.circulationResult!.cage_iterations!.map((m) => {
-            const isBest = m.seed === (state.circulationResult!.cage_best_seed ?? -1);
-            const isActive = activeCageSeed === m.seed || (activeCageSeed === null && isBest);
-            return (
-              <button
-                key={m.seed}
-                onClick={() => selectCageIteration(m.seed)}
-                className={`flex w-full items-center justify-between rounded px-2 py-0.5 font-mono text-[11px] transition-colors ${
-                  isBest ? "text-accent-400" : "text-zinc-500"
-                } ${isActive ? "bg-accent-500/15 ring-1 ring-inset ring-accent-500/40" : "hover:bg-zinc-800/50"}`}
-              >
-                <span>#{m.seed}{isBest ? " ★" : ""}</span>
-                <span>{m.cages_count} klatek</span>
-                <span>odchylenie {m.score.toFixed(3)}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
 
       {(state.manualCages.length > 0 || state.manualCorridors.length > 0) && (
         <div className="space-y-1 pt-1">
