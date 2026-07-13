@@ -1103,3 +1103,71 @@ def recompute_evacuation_endpoint(request: EvacuationRecomputeRequest):
         green_max_m=request.max_dist_single_m, gray_max_m=request.max_dist_multi_m,
     )
     return EvacuationRecomputeResponse(evacuation_dots=_serialize_dots(dots))
+
+
+# --- Doradca struktury mieszkań (user 2026-07-11) ---
+
+
+class ProgramSuggestRequest(BaseModel):
+    net_area_m2: float = Field(..., gt=0)
+    """Powierzchnia netto do zagospodarowania [m2]: prawdziwy net_remainder po
+    umieszczeniu komunikacji, a przed nim frontendowy szacunek 0.7 × obrys."""
+    apartments: list[ApartmentProgram] = Field(..., min_length=1)
+
+
+class ProgramEvaluationResult(BaseModel):
+    percentages: dict[str, float]
+    total_units: int
+    counts: dict[str, int]
+    used_area_m2: float
+    utilization: float
+    """used_area / net_area -- 1.0 = idealne wykorzystanie."""
+    rounding_dev: float
+    """Suma |zrealizowany%% - zadany%%| po typach [p.p.]."""
+
+
+class ProgramProposalResult(ProgramEvaluationResult):
+    reason: str
+
+
+class ProgramSuggestResponse(BaseModel):
+    baseline: ProgramEvaluationResult
+    proposals: list[ProgramProposalResult] = []
+    """Do 3 propozycji ściśle lepszych od baseline'u (może być pusto, gdy
+    obecna struktura jest już lokalnie optymalna)."""
+
+
+@router.post("/program/suggest", response_model=ProgramSuggestResponse)
+def suggest_program_endpoint(request: ProgramSuggestRequest):
+    """Proponuje korekty udziałów %% typów mieszkań pod dany obrys
+    (services.program_advisor) -- czysta arytmetyka, bez geometrii."""
+    from services.program_advisor import suggest_program
+
+    shares = [
+        ProgramShare(
+            type=a.type,
+            percentage=a.percentage,
+            area_min_m2=a.area_min_m2 or a.min_area_m2,
+            area_max_m2=a.area_max_m2 or a.min_area_m2,
+            min_facade_m=a.min_facade_m,
+        )
+        for a in request.apartments
+        if a.percentage > 0
+    ]
+    if not shares:
+        raise HTTPException(status_code=422, detail="Struktura mieszkań: wszystkie udziały procentowe są zerowe")
+
+    baseline, proposals = suggest_program(shares, request.net_area_m2)
+    if baseline is None:
+        raise HTTPException(status_code=422, detail="Struktura mieszkań: nieprawidłowe przedziały wielkości")
+
+    def _to_result(ev) -> dict:
+        return dict(
+            percentages=ev.percentages, total_units=ev.total_units, counts=ev.counts,
+            used_area_m2=ev.used_area_m2, utilization=ev.utilization, rounding_dev=ev.rounding_dev,
+        )
+
+    return ProgramSuggestResponse(
+        baseline=ProgramEvaluationResult(**_to_result(baseline)),
+        proposals=[ProgramProposalResult(**_to_result(p), reason=p.reason) for p in proposals],
+    )

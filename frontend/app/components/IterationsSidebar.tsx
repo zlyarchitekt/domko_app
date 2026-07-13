@@ -1,17 +1,72 @@
 "use client";
 
-import { CheckCircle2, XCircle, AlertCircle } from "lucide-react";
+import { useState } from "react";
+import { CheckCircle2, XCircle, AlertCircle, Lightbulb } from "lucide-react";
 import { useSession } from "../state/SessionContext";
 import { apartmentValidationByIndex } from "../lib/deriveStatus";
+import { polygonArea } from "../lib/geometry";
+import * as api from "../lib/api";
 
 export default function IterationsSidebar() {
-  const { state, selectCageIteration, activeCageSeed, selectUnitIteration, activeUnitSeed, selectApartment } =
-    useSession();
+  const {
+    state,
+    selectCageIteration,
+    activeCageSeed,
+    selectUnitIteration,
+    activeUnitSeed,
+    selectApartment,
+    updateProgramRow,
+  } = useSession();
   const { validation, layoutResult } = state;
 
   const hasCageIterations = (state.circulationResult?.cage_iterations?.length ?? 0) > 0;
   const hasUnitIterations = state.lastIterations.length > 0;
   const apartmentsById = apartmentValidationByIndex(layoutResult, validation);
+
+  // ── Doradca struktury mieszkań (user 2026-07-11) ──
+  const [suggest, setSuggest] = useState<api.ProgramSuggestResponse | null>(null);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+
+  // Ta sama definicja powierzchni netto co reszta aplikacji: prawdziwy
+  // net_remainder po umieszczeniu komunikacji, wcześniej szacunek 0.7 × obrys
+  // (jak estimatedTotalUnits w ProgramSection).
+  const netArea = state.netRemainderM2 ?? (state.footprint ? polygonArea(state.footprint) * 0.7 : null);
+
+  const runSuggest = async () => {
+    if (!netArea || netArea <= 0) return;
+    setSuggestLoading(true);
+    setSuggestError(null);
+    try {
+      const rows = state.program.map((r) => ({
+        type: r.type,
+        min_area_m2: r.min_area_m2,
+        target_count: r.target_count,
+        percentage: r.percentage,
+        area_min_m2: r.area_min_m2,
+        area_max_m2: r.area_max_m2,
+        min_facade_m: r.min_facade_m,
+      }));
+      setSuggest(await api.suggestProgram(netArea, rows));
+    } catch (e) {
+      setSuggestError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSuggestLoading(false);
+    }
+  };
+
+  const applyProposal = (p: api.ProgramProposalResult) => {
+    // Udziały propozycji są kluczowane TYPEM; przy zduplikowanych wierszach
+    // tego samego typu aplikujemy do pierwszego (doradca i tak agreguje po typie).
+    const seen = new Set<string>();
+    for (const row of state.program) {
+      if (seen.has(row.type)) continue;
+      seen.add(row.type);
+      const pct = p.percentages[row.type];
+      if (pct !== undefined && pct !== row.percentage) updateProgramRow(row.id, { percentage: pct });
+    }
+    setSuggest(null);
+  };
 
   return (
     <div className="h-full shrink-0 p-3">
@@ -102,6 +157,48 @@ export default function IterationsSidebar() {
             })()}
           </div>
         )}
+        {/* Doradca struktury mieszkań: propozycje udziałów % lepiej
+            wpisujących program w powierzchnię netto obrysu (user 2026-07-11). */}
+        {state.footprint && (
+          <div className="space-y-1">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+              Sugestie struktury
+            </div>
+            <button
+              onClick={() => void runSuggest()}
+              disabled={!netArea || suggestLoading}
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-zinc-800/70 px-2 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700/70 disabled:opacity-50 light:bg-zinc-100 light:text-zinc-700 light:hover:bg-zinc-200"
+            >
+              <Lightbulb size={13} />
+              {suggestLoading ? "Liczę…" : "Zaproponuj strukturę mieszkań"}
+            </button>
+            {suggestError && <div className="text-[10px] text-red-400">{suggestError}</div>}
+            {suggest && suggest.proposals.length === 0 && (
+              <div className="text-[10px] leading-snug text-zinc-600">
+                Obecna struktura jest już dobrze dopasowana do obrysu — wykorzystanie{" "}
+                {(suggest.baseline.utilization * 100).toFixed(1)}%.
+              </div>
+            )}
+            {suggest?.proposals.map((p, i) => (
+              <div key={i} className="space-y-1 rounded-lg border border-zinc-800/60 p-2 light:border-zinc-200">
+                <div className="font-mono text-[10px] text-zinc-300 light:text-zinc-700">
+                  {Object.entries(p.percentages)
+                    .map(([t, v]) => `${t} ${v}%`)
+                    .join(" · ")}{" "}
+                  → {p.total_units} szt.
+                </div>
+                <div className="text-[9px] leading-snug text-zinc-500">{p.reason}</div>
+                <button
+                  onClick={() => applyProposal(p)}
+                  className="w-full rounded bg-accent-500/15 px-2 py-1 text-[10px] font-medium text-accent-400 transition-colors hover:bg-accent-500/25"
+                >
+                  Zastosuj
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Uwagi per mieszkanie — przeniesione z lewego panelu Walidacja
             (user 2026-07-11: "uwagi dotyczące mieszkań przerzuć do prawego
             paska"). Klik zaznacza mieszkanie na canvasie, jak wcześniej. */}

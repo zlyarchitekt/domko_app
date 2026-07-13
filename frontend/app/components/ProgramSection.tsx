@@ -3,18 +3,9 @@
 import { Plus, X } from "lucide-react";
 import { useSession, DEFAULT_TYPE_COLORS } from "../state/SessionContext";
 import * as api from "../lib/api";
+import { polygonArea } from "../lib/geometry";
 
 const APARTMENT_TYPES = ["M1", "M2", "M3", "M4", "M5"];
-
-function polygonArea(points: { x: number; y: number }[]): number {
-  let sum = 0;
-  for (let i = 0; i < points.length; i++) {
-    const a = points[i];
-    const b = points[(i + 1) % points.length];
-    sum += a.x * b.y - b.x * a.y;
-  }
-  return Math.abs(sum) / 2;
-}
 
 export default function ProgramSection() {
   const {

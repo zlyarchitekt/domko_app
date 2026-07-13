@@ -150,6 +150,26 @@ export interface IterationMeta {
   hard_violations?: string[];
 }
 
+export interface ProgramEvaluationResult {
+  percentages: Record<string, number>;
+  total_units: number;
+  counts: Record<string, number>;
+  used_area_m2: number;
+  /** used_area / net_area — 1.0 = idealne wykorzystanie. */
+  utilization: number;
+  /** Suma |zrealizowany% − zadany%| po typach [p.p.]. */
+  rounding_dev: number;
+}
+
+export interface ProgramProposalResult extends ProgramEvaluationResult {
+  reason: string;
+}
+
+export interface ProgramSuggestResponse {
+  baseline: ProgramEvaluationResult;
+  proposals: ProgramProposalResult[];
+}
+
 export interface CageWeightsInput {
   egress: number;
   count: number;
@@ -371,6 +391,13 @@ export function subdivideUnits(
     iterations,
     weights,
   });
+}
+
+export function suggestProgram(
+  netAreaM2: number,
+  apartments: ApartmentProgramInput[]
+): Promise<ProgramSuggestResponse> {
+  return postJson("/layout/program/suggest", { net_area_m2: netAreaM2, apartments });
 }
 
 export interface SplitResponse {
