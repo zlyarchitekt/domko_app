@@ -23,6 +23,7 @@ from shapely.geometry import Polygon, box
 from shapely.ops import unary_union
 
 from services.layout import MIN_CELL_DIMENSION_M, ApartmentSpec
+from services.unit_mix import HARD_MAX_ASPECT_RATIO
 
 _TOUCH_TOL_M = 0.05
 """Maks. odległość komponent-korytarz uznawana za styk (ściany działowe
@@ -99,14 +100,63 @@ def slice_trakts(remainder, circulation_geometry, specs: list[ApartmentSpec], rn
         # dużo płytszy (np. 1.7 m) niż trakt (np. 6 m); użycie głębokości
         # korytarza tu zawyżałoby poszerzenie o wcięcie o rząd wielkości.
         component_depth = (maxy - miny) if horizontal else (maxx - minx)
-        remaining_area = component.area
 
-        while queue and remaining_area > _AREA_TOL_M2:
-            spec = queue[0]
-            target = spec.min_area_m2
-            if remaining_area < target * 0.6:
+        # FAZA 1 (fix 2026-07-13, repro 68x12): selekcja specyfikacji
+        # WYKONALNYCH przy tej głębokości traktu. Komórka o polu A w trakcie
+        # głębokości D ma szerokość A/D i proporcje (A/D)/D -- pole powyżej
+        # HARD_MAX_ASPECT_RATIO*D^2 ŁAMIE zakaz 1:3 z definicji (M4 81 m2 w
+        # trakcie 4 m -> ratio 5). Cele są potem SKALOWANE do pełnego pola
+        # komponentu, więc komponent nie zostawia ogona (stary kod mergował
+        # ogon w ostatnią komórkę -> 102.7 m2, ratio 6.4).
+        max_cell_area = HARD_MAX_ASPECT_RATIO * component_depth * component_depth
+        min_cell_area = MIN_CELL_DIMENSION_M * component_depth
+
+        selected: list[int] = []
+        total = 0.0
+        for i, spec in enumerate(queue):
+            if spec.min_area_m2 > max_cell_area:
+                continue
+            selected.append(i)
+            total += spec.min_area_m2
+            if total >= component.area:
                 break
-            if remaining_area <= target:
+        # korekta dolna: skala < 1 nie może zwęzić żadnej komórki poniżej
+        # MIN_CELL_DIMENSION_M -- odrzucaj ostatnią wybraną, aż się mieści
+        while len(selected) > 1:
+            scale = component.area / total
+            if all(queue[i].min_area_m2 * scale >= min_cell_area - 1e-9 for i in selected):
+                break
+            total -= queue[selected.pop()].min_area_m2
+        # korekta górna: skala > 1 nie może rozciągnąć komórki ponad limit
+        # proporcji -- dobieraj kolejne wykonalne specyfikacje (rośnie suma,
+        # maleje skala), póki są
+        next_i = (selected[-1] + 1) if selected else 0
+        while selected:
+            scale = component.area / total
+            if max(queue[i].min_area_m2 for i in selected) * scale <= max_cell_area + 1e-9:
+                break
+            addable = next(
+                (i for i in range(next_i, len(queue))
+                 if i not in selected and queue[i].min_area_m2 <= max_cell_area),
+                None,
+            )
+            if addable is None:
+                break
+            selected.append(addable)
+            total += queue[addable].min_area_m2
+            next_i = addable + 1
+
+        if not selected:
+            leftover_parts.append(component)
+            continue
+
+        # FAZA 2: cięcie prostopadłe z celami przeskalowanymi do pełnego
+        # pola komponentu; ostatnia komórka domyka do końca (zero ogona).
+        scale = component.area / total
+        for order, i in enumerate(selected):
+            spec = queue[i]
+            target = spec.min_area_m2 * scale
+            if order == len(selected) - 1:
                 hi = end
             else:
                 lo_b, hi_b = cursor, end
@@ -135,11 +185,11 @@ def slice_trakts(remainder, circulation_geometry, specs: list[ApartmentSpec], rn
                 if polys2:
                     main = max(polys2, key=lambda p: p.area)
                     hi = hi2
-            queue.pop(0)
             cells.append(ApartmentCell(id=str(uuid.uuid4()), type=spec.type, polygon=main))
             cursor = hi
-            tail = _clip(component, horizontal, cursor, end)
-            remaining_area = tail.area
+
+        for i in sorted(selected, reverse=True):
+            queue.pop(i)
 
         tail = _clip(component, horizontal, cursor, end)
         for t in _polygons(tail):

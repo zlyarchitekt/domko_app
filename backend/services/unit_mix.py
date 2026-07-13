@@ -446,11 +446,21 @@ def iterate_units(
         if counts[s.type] > 0
     ]
 
-    rectangles = rectangle_decompose(remainder)
+    # Podział traktowy (spec 2026-07-13 §B): gdy znamy geometrię komunikacji,
+    # tniemy wyłącznie prostopadle do korytarza -- komórka z definicji styka
+    # się i z korytarzem, i z elewacją. Legacy BSP zostaje dla wywołań bez
+    # circulation_geometry (stare testy, klasyczny fallback).
+    use_trakts = circulation_geometry is not None and not circulation_geometry.is_empty
+    rectangles = [] if use_trakts else rectangle_decompose(remainder)
     metas: list[IterationMeta] = []
     for seed in range(iterations):
         rng = random.Random(seed)
-        cells, leftover = fit_program_to_rectangles(list(rectangles), specs, rng=rng)
+        if use_trakts:
+            from services.trakt_division import slice_trakts
+
+            cells, leftover = slice_trakts(remainder, circulation_geometry, specs, rng=rng)
+        else:
+            cells, leftover = fit_program_to_rectangles(list(rectangles), specs, rng=rng)
         _merge_leftover_into_cells(cells, leftover)
         if not cells:
             import uuid as _uuid

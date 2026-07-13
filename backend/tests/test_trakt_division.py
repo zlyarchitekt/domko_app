@@ -28,14 +28,21 @@ def test_rect_trakt_full_depth_cells():
 
 
 def test_notched_trakt_stepped_cells():
-    """Trakt z wcięciem (klatka) -> komórki schodkowe, pole trzyma cel."""
+    """Trakt z wcięciem (klatka) -> komórki schodkowe. Od fixu skalowania
+    (2026-07-13, repro 68x12) cele są skalowane do PEŁNEGO pola komponentu
+    (zero ogona -- stary kontrakt "pole == cel +-1m2" mergował ogon w jedną
+    komórkę i łamał proporcje 1:3), więc asercja: proporcje celów zachowane,
+    komponent pokryty w całości, każda komórka przy korytarzu."""
     trakt = Polygon([(0, 0), (20, 0), (20, 6), (12, 6), (12, 4), (8, 4), (8, 6), (0, 6)])
     corridor = box(0, -1.7, 20, 0)
     cells, leftover = slice_trakts(trakt, corridor, _specs(50, 54), rng=None)
     assert len(cells) == 2
+    scale = trakt.area / (50.0 + 54.0)
     for c, target in zip(cells, (50.0, 54.0)):
-        assert abs(c.polygon.area - target) < 1.0
+        assert abs(c.polygon.area - target * scale) < 1.0
         assert c.polygon.distance(corridor) < 1e-6
+    assert abs(sum(c.polygon.area for c in cells) - trakt.area) < 1e-6
+    assert leftover is None or leftover.area < 0.5
 
 
 def test_component_not_touching_corridor_becomes_leftover():

@@ -197,3 +197,26 @@ def test_net_geometry_json_none_for_tiny_cell():
     expected_area = (5 - 2 * NET_SHRINK_M) * (4 - 2 * NET_SHRINK_M)
     assert net_shape.area == pytest.approx(expected_area, abs=1e-6)
     assert net_shape.area < raw_box.area - 0.1
+
+
+def test_generate_endpoint_user_footprint_20260713_winner_hard_valid():
+    """Dual-surface: /generate na obrysie z exportu 2026-07-13 zwraca
+    zwycięzcę bez naruszeń zakazów (trakt-aware korytarz + cięcia
+    prostopadłe, spec 2026-07-13)."""
+    body = {
+        "footprint": [[-32, -2], [36, -2], [36, 10], [-32, 10]],
+        "circulation": {"corridor_width_m": 1.5, "place_cage": True, "cage_size_m": 2.5},
+        "apartments": [
+            {"type": "M1", "min_area_m2": 28.5, "target_count": 1, "percentage": 10, "area_min_m2": 25, "area_max_m2": 32},
+            {"type": "M2", "min_area_m2": 43.0, "target_count": 4, "percentage": 40, "area_min_m2": 38, "area_max_m2": 48},
+            {"type": "M3", "min_area_m2": 64.0, "target_count": 4, "percentage": 40, "area_min_m2": 58, "area_max_m2": 70},
+            {"type": "M4", "min_area_m2": 81.0, "target_count": 1, "percentage": 10, "area_min_m2": 72, "area_max_m2": 90},
+        ],
+    }
+    response = client.post("/api/v1/layout/generate", json=body)
+    assert response.status_code == 200
+    data = response.json()
+    iters = data["iterations"]
+    assert iters and any(m["hard_valid"] for m in iters)
+    best = min((m for m in iters if m["hard_valid"]), key=lambda m: m["score"])
+    assert best["hard_violations"] == []

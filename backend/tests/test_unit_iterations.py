@@ -433,3 +433,28 @@ def test_iterate_units_metas_carry_violation_reasons():
     )
     for m in metas:
         assert m.hard_valid == (m.hard_violations == [])
+
+
+def test_user_footprint_20260713_yields_hard_valid_layout():
+    """Repro exportu domko_export_2026-07-13 (68x12): po fixie A (korytarz
+    trakt-aware) + B (cięcia prostopadłe) przynajmniej jedna iteracja musi
+    spełniać wszystkie zakazy, a zwycięzca ma zero naruszeń."""
+    from services.circulation import place_circulation
+
+    footprint = Polygon([(-32, -2), (36, -2), (36, 10), (-32, 10)])
+    circ = place_circulation(
+        footprint, corridor_width_m=1.5, stair_width_m=1.2,
+        place_cage=True, cage_size_m=2.5, cage_position="auto",
+    )
+    cells, metas, best_seed, _ = iterate_units(
+        circ.remainder, SHARES, iterations=10,
+        footprint=footprint, circulation_geometry=circ.circulation_geometry,
+    )
+    assert any(m.hard_valid for m in metas), [m.hard_violations for m in metas]
+    winner = next(m for m in metas if m.seed == best_seed)
+    assert winner.hard_valid, winner.hard_violations
+    # każda komórka zwycięzcy: styk z korytarzem i elewacją
+    edge = footprint.exterior.buffer(0.01)
+    for c in cells:
+        assert c.polygon.distance(circ.circulation_geometry) < 0.01
+        assert c.polygon.boundary.intersection(edge).length > 0
