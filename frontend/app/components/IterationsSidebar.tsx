@@ -88,8 +88,8 @@ export default function IterationsSidebar() {
             <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
               Iteracje klatek ({state.circulationResult!.cage_iterations!.length})
             </div>
-            <div className="text-[9px] text-zinc-600">niżej = lepiej, 0 = idealne dopasowanie do wag</div>
-            {state.circulationResult!.cage_iterations!.map((m) => {
+            <div className="text-[9px] text-zinc-600">posortowane od najlepszej, 0 = idealne dopasowanie do wag</div>
+            {[...state.circulationResult!.cage_iterations!].sort((a, b) => a.score - b.score).map((m) => {
               const isBest = m.seed === (state.circulationResult!.cage_best_seed ?? -1);
               const isActive = activeCageSeed === m.seed || (activeCageSeed === null && isBest);
               return (
@@ -114,13 +114,20 @@ export default function IterationsSidebar() {
             <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
               Iteracje mieszkań ({state.lastIterations.length})
             </div>
-            <div className="text-[9px] text-zinc-600">niżej = lepiej, 0 = idealne dopasowanie do wag</div>
+            <div className="text-[9px] text-zinc-600">posortowane od najlepszej, 0 = idealne dopasowanie do wag</div>
             {(() => {
               // Ta sama reguła co backend (pick_best_iteration): najlepsza
               // WAŻNA iteracja (hard_valid), fallback najlepsza w ogóle.
               const anyValid = state.lastIterations.some((o) => o.hard_valid !== false);
               const pool = state.lastIterations.filter((o) => !anyValid || o.hard_valid !== false);
               const bestSeed = pool.reduce((a, b) => (b.score < a.score ? b : a)).seed;
+              // Sortowanie (user 2026-07-13): najlepsze u góry — ważne przed
+              // łamiącymi zakaz, w obrębie grupy rosnąco po score.
+              const sorted = [...state.lastIterations].sort((a, b) => {
+                const av = a.hard_valid === false ? 1 : 0;
+                const bv = b.hard_valid === false ? 1 : 0;
+                return av - bv || a.score - b.score;
+              });
               return (
                 <>
                   {!anyValid && (
@@ -129,7 +136,7 @@ export default function IterationsSidebar() {
                       Pokazano najlepszą mimo naruszeń.
                     </div>
                   )}
-                  {state.lastIterations.map((m) => {
+                  {sorted.map((m) => {
                     const isBest = m.seed === bestSeed;
                     const isActive = activeUnitSeed === m.seed || (activeUnitSeed === null && isBest);
                     const invalid = m.hard_valid === false;
