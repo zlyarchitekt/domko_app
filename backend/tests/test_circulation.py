@@ -457,17 +457,27 @@ def test_build_corridor_width_is_clear_not_axis():
     assert abs((net_maxy - net_miny) - 1.5) < 1e-6
 
 
-def test_corridor_centerline_axis_unaffected_by_clear_width_change():
-    from services.circulation import _corridor_centerline
+def test_corridor_centerline_axis_follows_trakt_rule_not_always_centered():
+    """Was test_corridor_centerline_axis_unaffected_by_clear_width_change,
+    asserting mid_y == 3.0 (geometric center) -- that encoded the OLD
+    cage-agnostic "always center when no cage" rule. This 6m-deep zone with
+    a 1.5m corridor (half=0.85) can NOT fit two >= MIN_TRAKT_DEPTH_M traktss
+    (needs >= 9.7m), so centering would leave two ~2.15m dead bands exactly
+    like the reported bug. Spec 2026-07-13 trakt-aware-corridor §A: the axis
+    now moves to an edge so one side is ~0 and the other is a real
+    >= MIN_TRAKT_DEPTH_M trakt."""
+    from services.circulation import MIN_TRAKT_DEPTH_M, _corridor_centerline
+    from services.wall_geometry import NET_SHRINK_M
 
     zone = Polygon([(0, 0), (20, 0), (20, 6), (0, 6)])
     seg = _corridor_centerline(zone, width=1.5)
     assert seg is not None
     (x1, y1), (x2, y2) = seg
-    # Centerline axis position is unaffected by the width -- only which
-    # widths are still "too wide to fit" changes (checked below).
-    assert abs(y1 - 3.0) < 1e-6
-    assert abs(y2 - 3.0) < 1e-6
+    assert y1 == y2
+    half = (1.5 + 2 * NET_SHRINK_M) / 2.0
+    south, north = y1 - half, 6.0 - (y1 + half)
+    for band in (south, north):
+        assert band <= 1e-6 or band >= MIN_TRAKT_DEPTH_M - 1e-6, f"martwy trakt {band:.2f} m"
 
 
 def test_corridor_centerline_none_when_clear_width_plus_walls_too_wide():
@@ -494,3 +504,71 @@ def test_reshape_circulation_width_matches_build_corridor():
     )
     minx, miny, maxx, maxy = result.circulation_geometry.bounds
     assert abs((maxy - miny) - (1.5 + 2 * 0.10)) < 1e-6
+
+
+def _band_depths_horizontal(footprint, corridor):
+    """(south_band, north_band) między korytarzem a krawędziami obrysu."""
+    fminx, fminy, fmaxx, fmaxy = footprint.bounds
+    cminx, cminy, cmaxx, cmaxy = corridor.bounds
+    return cminy - fminy, fmaxy - cmaxy
+
+
+def test_corridor_leaves_no_dead_band_user_footprint_20260713():
+    """Repro exportu domko_export_2026-07-13: 68x12, klatka przy południowej
+    elewacji -> stary kod zostawiał trakt 2.0 m, który krajacz wypełniał
+    paskami 14.25x2 (proporcje 7:1). Nowa zasada: każdy trakt ~0 albo
+    >= MIN_TRAKT_DEPTH_M."""
+    from services.circulation import MIN_TRAKT_DEPTH_M, place_circulation
+
+    footprint = Polygon([(-32, -2), (36, -2), (36, 10), (-32, 10)])
+    result = place_circulation(
+        footprint, corridor_width_m=1.5, stair_width_m=1.2,
+        place_cage=True, cage_size_m=2.5, cage_position="auto",
+    )
+    assert result.circulation_geometry is not None
+    south, north = _band_depths_horizontal(footprint, result.circulation_geometry)
+    for band in (south, north):
+        assert band <= 1e-6 or band >= MIN_TRAKT_DEPTH_M - 1e-6, f"martwy trakt {band:.2f} m"
+    # korytarz nadal dotyka każdej klatki
+    for cage in result.cage_polygons:
+        assert result.circulation_geometry.distance(cage) < 1e-6
+
+
+def test_corridor_axis_offset_prefers_balanced_then_flush():
+    from services.circulation import MIN_TRAKT_DEPTH_M, _corridor_axis_offset
+
+    # strefa [0, 12], korytarz half=0.85, klatka przy dole (bounds 0..5.7)
+    mid = _corridor_axis_offset(0.0, 12.0, 0.85, (0.0, 5.7))
+    south, north = (mid - 0.85) - 0.0, 12.0 - (mid + 0.85)
+    assert south >= MIN_TRAKT_DEPTH_M - 1e-9 and north >= MIN_TRAKT_DEPTH_M - 1e-9
+    # przedział touch: [0-0.85, 5.7+0.85] -> mid <= 6.55
+    assert mid <= 5.7 + 0.85 + 1e-9
+
+    # strefa za płytka na dwa trakty (0..7): jednotrakt przy krawędzi
+    mid2 = _corridor_axis_offset(0.0, 7.0, 0.85, (0.0, 5.7))
+    band_lo, band_hi = (mid2 - 0.85) - 0.0, 7.0 - (mid2 + 0.85)
+    assert min(band_lo, band_hi) <= 1e-6
+    assert max(band_lo, band_hi) >= MIN_TRAKT_DEPTH_M - 1e-9
+
+    # strefa zbyt płytka na regułę (0..3): legacy clamp, bez wyjątku
+    mid3 = _corridor_axis_offset(0.0, 3.0, 0.85, (0.0, 5.7))
+    assert 0.85 <= mid3 <= 3.0 - 0.85 + 1e-9
+
+    # bez klatki, głęboka strefa: środek spełnia regułę
+    mid4 = _corridor_axis_offset(0.0, 12.0, 0.85, None)
+    assert abs(mid4 - 6.0) < 1e-9
+
+
+def test_corridor_and_centerline_share_axis():
+    from services.circulation import _build_corridor, _corridor_centerline
+    from shapely.geometry import box
+
+    zone = Polygon([(0, 0), (40, 0), (40, 12), (0, 12)])
+    cage = box(0, 0, 4.2, 5.7)
+    corridor = _build_corridor(zone, 1.5, cage)
+    line = _corridor_centerline(zone, 1.5, cage)
+    assert line is not None
+    (x1, y1), (x2, y2) = line
+    assert y1 == y2  # korytarz poziomy
+    cminy, cmaxy = corridor.bounds[1], corridor.bounds[3]
+    assert abs((cminy + cmaxy) / 2.0 - y1) < 1e-9

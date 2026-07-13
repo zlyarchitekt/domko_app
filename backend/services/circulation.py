@@ -174,6 +174,43 @@ def _edge_cage(polygon: Polygon, width: float, depth: float, longest: bool) -> P
     return clipped if not clipped.is_empty and clipped.area > 1e-6 else None
 
 
+MIN_TRAKT_DEPTH_M = 4.0
+"""Minimalna głębokość traktu mieszkalnego między korytarzem a elewacją
+(spec 2026-07-13 trakt-aware-corridor §A). Trakt płytszy niż to jest
+architektonicznie martwy (pokoje < 2.4 m, proporcje > 1:3) -- korytarz ma
+zostawić pas ~0 (jednotrakt) albo >= tej wartości."""
+
+
+def _corridor_axis_offset(
+    lo: float, hi: float, half: float, cage_bounds: tuple[float, float] | None
+) -> float:
+    """Pozycja osi korytarza na osi poprzecznej strefy [lo, hi].
+
+    Kandydaci (spec §A): (a) oba trakty >= MIN_TRAKT_DEPTH_M, oś możliwie
+    blisko klatki; (b)/(c) korytarz przy krawędzi lo/hi (jednotrakt), gdy
+    pozostały trakt >= MIN_TRAKT_DEPTH_M. Kandydat odpada, jeśli korytarz
+    przestałby dotykać klatki (przedział touch = bounds klatki +- half).
+    Brak kandydatów (strefa zbyt płytka) -> dotychczasowy clamp do wnętrza
+    strefy, żeby degeneraty zachowywały się jak przed zmianą."""
+    center = (lo + hi) / 2.0
+    anchor = (cage_bounds[0] + cage_bounds[1]) / 2.0 if cage_bounds is not None else center
+    legacy = max(lo + half, min(hi - half, anchor))
+
+    candidates: list[float] = []
+    bal_lo, bal_hi = lo + half + MIN_TRAKT_DEPTH_M, hi - half - MIN_TRAKT_DEPTH_M
+    if bal_lo <= bal_hi:
+        candidates.append(max(bal_lo, min(bal_hi, anchor)))
+    if (hi - lo) - 2.0 * half >= MIN_TRAKT_DEPTH_M:
+        candidates.append(lo + half)
+        candidates.append(hi - half)
+    if cage_bounds is not None:
+        touch_lo, touch_hi = cage_bounds[0] - half, cage_bounds[1] + half
+        candidates = [c for c in candidates if touch_lo <= c <= touch_hi]
+    if not candidates:
+        return legacy
+    return min(candidates, key=lambda c: abs(c - anchor))
+
+
 def _build_corridor(polygon: Polygon, width: float, cage_polygon: Polygon | None = None) -> Polygon:
     """Buduje korytarz wzdłuż osi dłuższego boku prostokątnej (po
     rectangle_decompose) strefy, uwzględniając wyrównanie do pozycji klatki
@@ -189,21 +226,15 @@ def _build_corridor(polygon: Polygon, width: float, cage_polygon: Polygon | None
 
     if w >= h:
         half = (width + 2 * NET_SHRINK_M) / 2.0
-        if cage_polygon:
-            cage_y = cage_polygon.centroid.y
-            mid_y = max(miny + half, min(maxy - half, cage_y))
-        else:
-            mid_y = (miny + maxy) / 2.0
+        cage_bounds = (cage_polygon.bounds[1], cage_polygon.bounds[3]) if cage_polygon else None
+        mid_y = _corridor_axis_offset(miny, maxy, half, cage_bounds)
         corridor = Polygon(
             [(minx, mid_y - half), (maxx, mid_y - half), (maxx, mid_y + half), (minx, mid_y + half)]
         )
     else:
         half = (width + 2 * NET_SHRINK_M) / 2.0
-        if cage_polygon:
-            cage_x = cage_polygon.centroid.x
-            mid_x = max(minx + half, min(maxx - half, cage_x))
-        else:
-            mid_x = (minx + maxx) / 2.0
+        cage_bounds = (cage_polygon.bounds[0], cage_polygon.bounds[2]) if cage_polygon else None
+        mid_x = _corridor_axis_offset(minx, maxx, half, cage_bounds)
         corridor = Polygon(
             [(mid_x - half, miny), (mid_x + half, miny), (mid_x + half, maxy), (mid_x - half, maxy)]
         )
@@ -230,20 +261,14 @@ def _corridor_centerline(
     if w >= h:
         if grown_width >= h:
             return None
-        if cage_polygon:
-            cage_y = cage_polygon.centroid.y
-            mid_y = max(miny + half, min(maxy - half, cage_y))
-        else:
-            mid_y = (miny + maxy) / 2.0
+        cage_bounds = (cage_polygon.bounds[1], cage_polygon.bounds[3]) if cage_polygon else None
+        mid_y = _corridor_axis_offset(miny, maxy, half, cage_bounds)
         return ((minx, mid_y), (maxx, mid_y))
     else:
         if grown_width >= w:
             return None
-        if cage_polygon:
-            cage_x = cage_polygon.centroid.x
-            mid_x = max(minx + half, min(maxx - half, cage_x))
-        else:
-            mid_x = (minx + maxx) / 2.0
+        cage_bounds = (cage_polygon.bounds[0], cage_polygon.bounds[2]) if cage_polygon else None
+        mid_x = _corridor_axis_offset(minx, maxx, half, cage_bounds)
         return ((mid_x, miny), (mid_x, maxy))
 
 
