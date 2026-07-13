@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { Move } from "lucide-react";
-import { useSession } from "../state/SessionContext";
+import { ITERATIONS_COUNT, useSession } from "../state/SessionContext";
 import * as api from "../lib/api";
 import { CagePosition } from "../lib/api";
 
@@ -199,10 +199,10 @@ export default function CirculationSection() {
           {state.isLoading ? "Umieszczam..." : "Umieść korytarz i klatkę"}
         </button>
         <button
-          onClick={() => void runPlaceCirculation({ circulationOverride: { cage_iterations: 10 } })}
+          onClick={() => void runPlaceCirculation({ circulationOverride: { cage_iterations: ITERATIONS_COUNT } })}
           disabled={!state.footprint || state.isLoading}
           className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent-500 px-3 py-2 text-xs font-medium text-white transition-all hover:bg-accent-400 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 light:disabled:bg-zinc-200 light:disabled:text-zinc-400"
-          title="10 iteracji lokalizacji klatek, wygrywa najlepszy score wg wag"
+          title={`${ITERATIONS_COUNT} iteracji lokalizacji klatek, wygrywa najlepszy score wg wag`}
         >
           {state.isLoading ? "Iteruję..." : "Rozmieść iteracyjnie"}
         </button>

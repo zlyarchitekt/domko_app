@@ -5,6 +5,10 @@ import * as api from "../lib/api";
 
 export type Point2D = { x: number; y: number };
 
+/** Liczba iteracji silnika (klatki i mieszkania) -- user 2026-07-13
+ * podniósł z 10 do 30. Backend cap: le=50. */
+export const ITERATIONS_COUNT = 30;
+
 export type EditorMode =
   | "idle"
   | "draw"
@@ -951,7 +955,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         unitsReq,
         state.footprint ? footprintToPoints(state.footprint) : undefined,
         state.circulationResult.circulation_geometry,
-        10,
+        ITERATIONS_COUNT,
         state.unitWeights
       );
       const layoutResult: api.LayoutGenerateResponse = {
@@ -1024,7 +1028,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           manual_cages: state.manualCages.map((c) => c.ring.map((p) => [p.x, p.y] as api.Point)),
           manual_corridors: state.manualCorridors.map((c) => c.path.map((p) => [p.x, p.y] as api.Point)),
         },
-        iterations: 10,
+        iterations: ITERATIONS_COUNT,
         weights: state.unitWeights,
       };
       const [layout, validation] = await Promise.all([
