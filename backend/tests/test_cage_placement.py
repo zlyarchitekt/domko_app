@@ -207,6 +207,42 @@ def test_generate_endpoint_iterative_mode():
     assert body["cage_geometries"]
 
 
+def test_iterative_placement_delivers_requested_cage_count():
+    """Fix 2026-07-14 (opcja c): suwak num_cages to żądanie -- każda iteracja
+    próbuje umieścić DOKŁADNIE num_cages klatek; mniej tylko gdy pula
+    kandydatów fizycznie nie pozwala (i wtedy komponent count > 0)."""
+    footprint = _rect(0, 0, 40, 12)
+    result, metas, best_seed = iterate_cage_placement(
+        footprint, corridor_width_m=1.5, num_cages=3, weights=CageWeights(), iterations=10,
+    )
+    assert all(m.cages_count == 3 for m in metas), [m.cages_count for m in metas]
+    assert len(result.cage_polygons) == 3
+
+
+def test_count_component_penalizes_shortfall_not_more_cages():
+    footprint = _rect(0, 0, 40, 12)
+    _result, metas, _ = iterate_cage_placement(
+        footprint, corridor_width_m=1.5, num_cages=3, weights=CageWeights(), iterations=5,
+    )
+    for m in metas:
+        expected = abs(m.cages_count - 3) / 3
+        assert abs(m.components["count"] - expected) < 1e-9
+
+
+def test_candidate_pool_contains_even_spread_anchors():
+    from services.circulation import Zone
+    from services.bsp import rectangle_decompose
+    from services.cage_placement import _candidate_cages
+
+    footprint = _rect(0, 0, 60, 12)
+    zones = [Zone(name="Z0", polygon=p) for p, in [(q,) for q in rectangle_decompose(footprint)]]
+    candidates = _candidate_cages(footprint, zones, num_cages=3)
+    xs = sorted({round((c.bounds[0] + c.bounds[2]) / 2, 1) for _, c in candidates})
+    # pozycje rozstawu 1/6, 3/6, 5/6 długości: x ~= 10, 30, 50
+    for target in (10.0, 30.0, 50.0):
+        assert any(abs(x - target) <= 3.0 for x in xs), (target, xs)
+
+
 def test_assign_cages_to_zones_matches_containing_bbox():
     # Prostokąt 40x12: rectangle_decompose zwraca 1 strefę = cały footprint.
     footprint = _rect(0, 0, 40, 12)

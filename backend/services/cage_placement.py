@@ -12,6 +12,7 @@ from shapely.geometry import Polygon, box
 from shapely.ops import unary_union
 
 from services.bsp import rectangle_decompose
+from services.optimize import evaluate_genome, pick_best
 from services.circulation import (
     CAGE_DEPTH_M,
     CAGE_WIDTH_M,
@@ -48,7 +49,9 @@ class CageIterationMeta:
     (nie zdarza się w iterate_cage_placement)."""
 
 
-def _candidate_cages(footprint: Polygon, zones: list[Zone]) -> list[tuple[int, Polygon]]:
+def _candidate_cages(
+    footprint: Polygon, zones: list[Zone], num_cages: int = 1
+) -> list[tuple[int, Polygon]]:
     """Pula kandydatów: (indeks_strefy, prostokąt klatki). Kotwice: narożniki
     bbox strefy, środki krawędzi bbox; obie orientacje klatki; tylko
     kandydaci w całości wewnątrz obrysu (spec §3.1)."""
@@ -69,6 +72,20 @@ def _candidate_cages(footprint: Polygon, zones: list[Zone]) -> list[tuple[int, P
             anchors.append((x, miny))
             anchors.append((x, maxy))
             x += CANDIDATE_EDGE_STEP_M
+        # Kotwice rozstawu (plan 2026-07-14 Etap 1): (i+0.5)/k długości strefy
+        # wzdłuż dłuższej osi, przy obu krawędziach poprzecznych -- pozycje,
+        # które wybrałby projektant przy k klatkach; RandomSearch/SA losują
+        # wokół sensownych punktów zamiast czystego chaosu.
+        if num_cages > 1:
+            horizontal = (maxx - minx) >= (maxy - miny)
+            for i_k in range(num_cages):
+                t = (i_k + 0.5) / num_cages
+                if horizontal:
+                    anchors.append((minx + t * (maxx - minx), miny))
+                    anchors.append((minx + t * (maxx - minx), maxy))
+                else:
+                    anchors.append((minx, miny + t * (maxy - miny)))
+                    anchors.append((maxx, miny + t * (maxy - miny)))
         for ax, ay in anchors:
             for w, d in ((CAGE_WIDTH_M, CAGE_DEPTH_M), (CAGE_DEPTH_M, CAGE_WIDTH_M)):
                 # prostokąt dosunięty do kotwicy w stronę wnętrza bbox strefy
@@ -115,7 +132,9 @@ def _score_placement(
     k = len(cages)
     dots = result.evacuation_dots
     egress = (sum(1 for d in dots if d.status == "red") / len(dots)) if dots else 1.0
-    count = k / num_cages if num_cages > 0 else 0.0
+    # Fix 2026-07-14: kara za NIEDOWIEZIENIE żądanej liczby klatek
+    # (0 = umieszczono dokładnie num_cages), nie za "posiadanie klatek".
+    count = abs(k - num_cages) / num_cages if num_cages > 0 else 0.0
 
     minx, miny, maxx, maxy = footprint.bounds
     diag_half = math.hypot(maxx - minx, maxy - miny) / 2.0 or 1.0
@@ -167,26 +186,42 @@ def _cages_share_valid_corridor(
     return all(corridor.distance(c) < 1e-6 for c in cages)
 
 
-def iterate_cage_placement(
-    footprint: Polygon,
-    corridor_width_m: float,
-    num_cages: int,
-    weights: CageWeights,
-    iterations: int = 10,
-    max_dist_single_m: float = 20.0,
-    max_dist_multi_m: float = 40.0,
-) -> tuple[CirculationResult, list[CageIterationMeta], int]:
-    zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
-    candidates = _candidate_cages(footprint, zones)
-    if not candidates:
-        raise ValueError("Obrys zbyt mały na klatkę schodową")
+class _CageGenerator:
+    """Kernel generator (plan 2026-07-14 Etap 1): genome = seed int. `build`
+    odtwarza starą zachłanną pętlę (minus semantyka naprawiona w Task 3) i
+    zwraca `None` gdy żaden kandydat nie dał się umieścić -- ewaluator
+    zamienia to na score=inf + naruszenie zamiast pomijać seed w ciszy, żeby
+    budżet iteracji się zgadzał."""
 
-    best: tuple[float, CirculationResult] | None = None
-    metas: list[CageIterationMeta] = []
-    for seed in range(iterations):
+    def __init__(
+        self,
+        footprint: Polygon,
+        zones: list[Zone],
+        candidates: list[tuple[int, Polygon]],
+        num_cages: int,
+        corridor_width_m: float,
+        max_dist_single_m: float,
+        max_dist_multi_m: float,
+    ) -> None:
+        self.footprint = footprint
+        self.zones = zones
+        self.candidates = candidates
+        self.num_cages = num_cages
+        self.corridor_width_m = corridor_width_m
+        self.max_dist_single_m = max_dist_single_m
+        self.max_dist_multi_m = max_dist_multi_m
+
+    def random_genome(self, rng: random.Random) -> int:
+        return rng.randrange(1 << 30)
+
+    def mutate(self, genome: int, rng: random.Random) -> int:
+        return rng.randrange(1 << 30)
+
+    def build(self, genome: int) -> "CirculationResult | None":
+        seed = genome
         rng = random.Random(seed)
-        k = rng.randint(1, max(1, num_cages))
-        pool = list(candidates)
+        k = self.num_cages  # Fix 2026-07-14: było rng.randint(1, num_cages)
+        pool = list(self.candidates)
         rng.shuffle(pool)
         # zachłannie bierz niekolidujące; wiele klatek na strefę dozwolone,
         # o ile jeden korytarz strefy może obsłużyć wszystkie jej klatki
@@ -203,25 +238,58 @@ def iterate_cage_placement(
             zone_existing = local_cages.get(zi)
             if zone_existing:
                 candidate_list = zone_existing + [cage]
-                if not _cages_share_valid_corridor(zones[zi].polygon, corridor_width_m, candidate_list):
+                if not _cages_share_valid_corridor(
+                    self.zones[zi].polygon, self.corridor_width_m, candidate_list
+                ):
                     continue
                 local_cages[zi] = candidate_list
             else:
                 local_cages[zi] = [cage]
             placed_count += 1
         if not local_cages:
-            continue
-        result = _assemble_with_cages(
-            footprint, zones, local_cages, corridor_width_m,
-            max_dist_single_m, max_dist_multi_m,
+            return None
+        return _assemble_with_cages(
+            self.footprint, self.zones, local_cages, self.corridor_width_m,
+            self.max_dist_single_m, self.max_dist_multi_m,
         )
-        score, components = _score_placement(result, footprint, num_cages, weights)
-        metas.append(CageIterationMeta(seed=seed, score=score,
-                                       cages_count=len(result.cage_polygons),
-                                       components=components, result=result))
-        if best is None or score < best[0]:
-            best = (score, result)
-    if best is None:
+
+
+def iterate_cage_placement(
+    footprint: Polygon,
+    corridor_width_m: float,
+    num_cages: int,
+    weights: CageWeights,
+    iterations: int = 10,
+    max_dist_single_m: float = 20.0,
+    max_dist_multi_m: float = 40.0,
+) -> tuple[CirculationResult, list[CageIterationMeta], int]:
+    zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
+    candidates = _candidate_cages(footprint, zones, num_cages)
+    if not candidates:
         raise ValueError("Obrys zbyt mały na klatkę schodową")
-    best_seed = min(metas, key=lambda m: m.score).seed
-    return best[1], metas, best_seed
+
+    generator = _CageGenerator(
+        footprint, zones, candidates, num_cages,
+        corridor_width_m, max_dist_single_m, max_dist_multi_m,
+    )
+
+    def evaluator(genome: int, payload: "CirculationResult | None") -> tuple[float, dict, list]:
+        if payload is None:
+            return float("inf"), {}, ["nie udało się umieścić klatek"]
+        score, components = _score_placement(payload, footprint, num_cages, weights)
+        return score, components, []
+
+    evaluated = [evaluate_genome(generator, evaluator, seed) for seed in range(iterations)]
+    metas: list[CageIterationMeta] = [
+        CageIterationMeta(
+            seed=c.genome, score=c.score, cages_count=len(c.payload.cage_polygons),
+            components=c.components, result=c.payload,
+        )
+        for c in evaluated
+        if c.payload is not None
+    ]
+    if not metas:
+        raise ValueError("Obrys zbyt mały na klatkę schodową")
+    best = pick_best(evaluated)
+    best_seed = best.genome
+    return best.payload, metas, best_seed
