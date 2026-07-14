@@ -119,6 +119,21 @@ export default function CirculationSection() {
         />
       </label>
 
+      <label
+        className="flex items-center justify-between text-xs text-zinc-400"
+        title="Wyżarzanie: 1/3 budżetu losowo, reszta doskonali najlepsze warianty mutacjami (zalecane). Losowa: wszystkie próby niezależne (debug/porównania)."
+      >
+        Strategia szukania
+        <select
+          value={state.circulation.strategy ?? "anneal"}
+          onChange={(e) => setCirculation({ strategy: e.target.value as "anneal" | "random" })}
+          className="rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+        >
+          <option value="anneal">Wyżarzanie (zalecane)</option>
+          <option value="random">Losowa</option>
+        </select>
+      </label>
+
       <label className="flex items-center gap-2 text-xs text-zinc-400">
         <input
           type="checkbox"

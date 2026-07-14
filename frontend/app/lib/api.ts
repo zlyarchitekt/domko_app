@@ -205,6 +205,8 @@ export interface CirculationSpecInput {
   max_dist_multi_m: number;
   cage_iterations: number;
   cage_weights: CageWeightsInput;
+  /** Strategia szukania (plan 2026-07-14 Etap 2): anneal (default) | random. */
+  strategy?: "anneal" | "random";
 }
 
 export interface LayoutGenerateRequest {
@@ -214,6 +216,7 @@ export interface LayoutGenerateRequest {
   local_law?: string | null;
   iterations?: number;
   weights?: UnitWeightsInput;
+  strategy?: "anneal" | "random";
 }
 
 export interface ApartmentResult {
@@ -377,7 +380,8 @@ export function subdivideUnits(
   footprint?: Point[],
   circulationGeometry?: GeoJsonPolygon | null,
   iterations?: number,
-  weights?: UnitWeightsInput
+  weights?: UnitWeightsInput,
+  strategy?: "anneal" | "random"
 ): Promise<UnitsResponse> {
   // footprint/circulation_geometry are optional on the backend (older calls
   // still work without them) but required for it to compute wall_bands --
@@ -390,6 +394,7 @@ export function subdivideUnits(
     circulation_geometry: circulationGeometry,
     iterations,
     weights,
+    strategy,
   });
 }
 

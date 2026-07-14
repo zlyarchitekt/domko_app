@@ -112,6 +112,10 @@ class CirculationSpec(BaseModel):
     """0 = klasyczny auto-placement; >0 = tryb iteracyjny (spec 2026-07-04-
     cage-placement-iterations §4)."""
     cage_weights: CageWeightsInput = Field(default_factory=CageWeightsInput)
+    strategy: str = Field(default="anneal", pattern="^(anneal|random)$")
+    """Strategia szukania silnika iteracyjnego (plan 2026-07-14 Etap 2):
+    anneal = hybryda random+wyżarzanie (default), random = czysty random
+    search (debug/porównania)."""
 
 
 class LayoutGenerateRequest(BaseModel):
@@ -121,6 +125,7 @@ class LayoutGenerateRequest(BaseModel):
     local_law: str | None = Field(default=None)
     iterations: int = Field(default=10, ge=1, le=50)
     weights: UnitWeightsInput = Field(default_factory=UnitWeightsInput)
+    strategy: str = Field(default="anneal", pattern="^(anneal|random)$")
 
 
 class ApartmentResult(BaseModel):
@@ -261,6 +266,7 @@ def generate_layout_endpoint(request: LayoutGenerateRequest):
             else None
         ),
         iterations=request.iterations,
+        strategy=request.strategy,
         unit_weights=UnitWeights(**request.weights.model_dump()),
         program_shares=[
             ProgramShare(
@@ -564,6 +570,7 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
                 num_cages=circulation.num_cages,
                 weights=CageWeights(**circulation.cage_weights.model_dump()),
                 iterations=circulation.cage_iterations,
+                strategy=circulation.strategy,
                 max_dist_single_m=circulation.max_dist_single_m,
                 max_dist_multi_m=circulation.max_dist_multi_m,
             )
@@ -649,6 +656,7 @@ class UnitsRequest(BaseModel):
     korytarzem/klatką też się narysowała."""
     iterations: int = Field(default=10, ge=1, le=50)
     weights: UnitWeightsInput = Field(default_factory=UnitWeightsInput)
+    strategy: str = Field(default="anneal", pattern="^(anneal|random)$")
 
 
 class UnitsResponse(BaseModel):
@@ -725,6 +733,7 @@ def subdivide_units_endpoint(request: UnitsRequest):
                 remainder, shares,
                 iterations=request.iterations, weights=weights,
                 footprint=footprint, circulation_geometry=circulation_geometry,
+                strategy=request.strategy,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))

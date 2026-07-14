@@ -518,6 +518,7 @@ def iterate_units(
     weights: UnitWeights | None = None,
     footprint: Polygon | None = None,
     circulation_geometry=None,
+    strategy: str = "anneal",
 ) -> tuple[list[ApartmentCell], list[IterationMeta], int, int]:
     """Iteracyjny podział (spec §2): seeded przebiegi, zero-leftover merge,
     scoring 7-wagowy, wygrywa najniższy score."""
@@ -567,6 +568,13 @@ def iterate_units(
         evaluate_genome(gen, _evaluator, gen.random_genome(random.Random(seed)))
         for seed in range(n_seed)
     ]
+    if strategy == "random":
+        # czysty random search: cały budżet na losowanie (debug/porównania)
+        n_seed = iterations
+        random_phase += [
+            evaluate_genome(gen, _evaluator, gen.random_genome(random.Random(seed)))
+            for seed in range(len(random_phase), iterations)
+        ]
     sa_budget = iterations - n_seed
     history = list(random_phase)
     if sa_budget > 0:

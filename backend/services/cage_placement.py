@@ -268,6 +268,7 @@ def iterate_cage_placement(
     iterations: int = 10,
     max_dist_single_m: float = 20.0,
     max_dist_multi_m: float = 40.0,
+    strategy: str = "anneal",
 ) -> tuple[CirculationResult, list[CageIterationMeta], int]:
     zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
     candidates = _candidate_cages(footprint, zones, num_cages)
@@ -298,6 +299,12 @@ def iterate_cage_placement(
         evaluate_genome(generator, evaluator, generator.random_genome(random.Random(seed)))
         for seed in range(n_seed)
     ]
+    if strategy == "random":
+        n_seed = iterations
+        random_phase += [
+            evaluate_genome(generator, evaluator, generator.random_genome(random.Random(seed)))
+            for seed in range(len(random_phase), iterations)
+        ]
     sa_budget = iterations - n_seed
     history = list(random_phase)
     if sa_budget > 0:

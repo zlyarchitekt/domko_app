@@ -108,6 +108,8 @@ class LayoutInput:
     """`services.cage_placement.CageWeights` gdy `cage_iterations > 0`; None
     (=domyślne wagi) w trybie klasycznym."""
     iterations: int = 10
+    strategy: str = "anneal"
+    """Strategia szukania (plan 2026-07-14 Etap 2): anneal | random."""
     unit_weights: object = None
     """services.unit_mix.UnitWeights | None."""
     program_shares: list = field(default_factory=list)
@@ -206,6 +208,7 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
             iterations=input.cage_iterations,
             max_dist_single_m=input.max_dist_single_m,
             max_dist_multi_m=input.max_dist_multi_m,
+            strategy=input.strategy,
         )
         circulation = _merge_manual_elements(
             circulation, footprint, input.corridor_width_m,
@@ -255,6 +258,7 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
             weights=input.unit_weights or UnitWeights(),
             footprint=footprint,
             circulation_geometry=circulation.circulation_geometry,
+            strategy=input.strategy,
         )
         leftover = None
         rem = circulation.remainder

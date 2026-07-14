@@ -116,6 +116,7 @@ const initialCirculation: api.CirculationSpecInput = {
   max_dist_multi_m: 40,
   cage_iterations: 0,
   cage_weights: { egress: 1.0, count: 0.5, corners: 0.3, ends: 0.3, spread: 0.5 },
+  strategy: "anneal",
 };
 
 const INITIAL_TOTAL_UNITS = 10;
@@ -1012,7 +1013,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         state.footprint ? footprintToPoints(state.footprint) : undefined,
         state.circulationResult.circulation_geometry,
         state.iterationsCount,
-        state.unitWeights
+        state.unitWeights,
+        state.circulation.strategy
       );
       const layoutResult: api.LayoutGenerateResponse = {
         footprint_area_m2: state.footprint ? polygonAreaFromPoints(state.footprint) : 0,
@@ -1086,6 +1088,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         },
         iterations: state.iterationsCount,
         weights: state.unitWeights,
+        strategy: state.circulation.strategy,
       };
       const [layout, validation] = await Promise.all([
         api.generateLayout(req),
