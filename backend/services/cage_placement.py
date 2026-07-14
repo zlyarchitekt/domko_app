@@ -12,7 +12,7 @@ from shapely.geometry import Polygon, box
 from shapely.ops import unary_union
 
 from services.bsp import rectangle_decompose
-from services.optimize import evaluate_genome, pick_best
+from services.optimize import evaluate_genome
 from services.circulation import (
     CAGE_DEPTH_M,
     CAGE_WIDTH_M,
@@ -187,11 +187,15 @@ def _cages_share_valid_corridor(
 
 
 class _CageGenerator:
-    """Kernel generator (plan 2026-07-14 Etap 1): genome = seed int. `build`
-    odtwarza starą zachłanną pętlę (minus semantyka naprawiona w Task 3) i
-    zwraca `None` gdy żaden kandydat nie dał się umieścić -- ewaluator
-    zamienia to na score=inf + naruszenie zamiast pomijać seed w ciszy, żeby
-    budżet iteracji się zgadzał."""
+    """Kernel generator (plan 2026-07-14 Etap 2, Task 5): genome = posortowana
+    krotka indeksów DOKŁADNIE `num_cages` kandydatów wybranych z puli (albo
+    mniej, gdy pula jest mniejsza niż num_cages). `build` umieszcza greedy w
+    KOLEJNOŚCI GENOMU (rosnąco po indeksie) -- kandydaci kolidujący z już
+    umieszczonymi albo łamiący `_cages_share_valid_corridor` są pomijani, więc
+    genom "niewykonalny" (para kolidujących indeksów) po prostu umieszcza
+    mniej klatek niż num_cages i score's `count` component to penalizuje
+    (patrz Task 3). `build` zwraca `None` gdy żaden kandydat z genomu dał się
+    umieścić -- ewaluator zamienia to na score=inf + naruszenie."""
 
     def __init__(
         self,
@@ -211,27 +215,30 @@ class _CageGenerator:
         self.max_dist_single_m = max_dist_single_m
         self.max_dist_multi_m = max_dist_multi_m
 
-    def random_genome(self, rng: random.Random) -> int:
-        return rng.randrange(1 << 30)
+    def random_genome(self, rng: random.Random) -> tuple[int, ...]:
+        n = len(self.candidates)
+        k = min(self.num_cages, n)
+        return tuple(sorted(rng.sample(range(n), k))) if k > 0 else ()
 
-    def mutate(self, genome: int, rng: random.Random) -> int:
-        return rng.randrange(1 << 30)
+    def mutate(self, genome: tuple[int, ...], rng: random.Random) -> tuple[int, ...]:
+        n = len(self.candidates)
+        chosen = set(genome)
+        available = [i for i in range(n) if i not in chosen]
+        if not genome or not available:
+            return genome
+        replaced = list(genome)
+        pos = rng.randrange(len(replaced))
+        replaced[pos] = rng.choice(available)
+        return tuple(sorted(replaced))
 
-    def build(self, genome: int) -> "CirculationResult | None":
-        seed = genome
-        rng = random.Random(seed)
-        k = self.num_cages  # Fix 2026-07-14: było rng.randint(1, num_cages)
-        pool = list(self.candidates)
-        rng.shuffle(pool)
-        # zachłannie bierz niekolidujące; wiele klatek na strefę dozwolone,
-        # o ile jeden korytarz strefy może obsłużyć wszystkie jej klatki
-        # (_cages_share_valid_corridor) -- (_assemble_with_cages dostaje dict
-        # {indeks_strefy: [klatki]})
+    def build(self, genome: tuple[int, ...]) -> "CirculationResult | None":
+        # zachłannie bierz niekolidujące W KOLEJNOŚCI GENOMU; wiele klatek na
+        # strefę dozwolone, o ile jeden korytarz strefy może obsłużyć
+        # wszystkie jej klatki (_cages_share_valid_corridor) -- (_assemble_
+        # with_cages dostaje dict {indeks_strefy: [klatki]})
         local_cages: dict[int, list[Polygon]] = {}
-        placed_count = 0
-        for zi, cage in pool:
-            if placed_count >= k:
-                break
+        for idx in genome:
+            zi, cage = self.candidates[idx]
             existing_all = [c for cages in local_cages.values() for c in cages]
             if any(cage.intersects(existing) for existing in existing_all):
                 continue
@@ -245,7 +252,6 @@ class _CageGenerator:
                 local_cages[zi] = candidate_list
             else:
                 local_cages[zi] = [cage]
-            placed_count += 1
         if not local_cages:
             return None
         return _assemble_with_cages(
@@ -273,23 +279,33 @@ def iterate_cage_placement(
         corridor_width_m, max_dist_single_m, max_dist_multi_m,
     )
 
-    def evaluator(genome: int, payload: "CirculationResult | None") -> tuple[float, dict, list]:
+    def evaluator(genome: tuple[int, ...], payload: "CirculationResult | None") -> tuple[float, dict, list]:
         if payload is None:
             return float("inf"), {}, ["nie udało się umieścić klatek"]
         score, components = _score_placement(payload, footprint, num_cages, weights)
         return score, components, []
 
-    evaluated = [evaluate_genome(generator, evaluator, seed) for seed in range(iterations)]
+    # Plan 2026-07-14 Etap 2 Task 5: genome nie jest już seedem samym w sobie
+    # (posortowana krotka indeksów kandydatów, patrz _CageGenerator) -- każda
+    # iteracja losuje SWÓJ genom z random.Random(seed) i to `seed` (indeks
+    # 0..iterations-1) zostaje jako stabilny identyfikator wiersza.
+    evaluated = [
+        evaluate_genome(generator, evaluator, generator.random_genome(random.Random(seed)))
+        for seed in range(iterations)
+    ]
     metas: list[CageIterationMeta] = [
         CageIterationMeta(
-            seed=c.genome, score=c.score, cages_count=len(c.payload.cage_polygons),
+            seed=idx, score=c.score, cages_count=len(c.payload.cage_polygons),
             components=c.components, result=c.payload,
         )
-        for c in evaluated
+        for idx, c in enumerate(evaluated)
         if c.payload is not None
     ]
     if not metas:
         raise ValueError("Obrys zbyt mały na klatkę schodową")
-    best = pick_best(evaluated)
-    best_seed = best.genome
-    return best.payload, metas, best_seed
+    best_idx = min(
+        (idx for idx, c in enumerate(evaluated) if c.payload is not None),
+        key=lambda idx: evaluated[idx].score,
+    )
+    best = evaluated[best_idx]
+    return best.payload, metas, best_idx

@@ -208,14 +208,23 @@ def test_generate_endpoint_iterative_mode():
 
 
 def test_iterative_placement_delivers_requested_cage_count():
-    """Fix 2026-07-14 (opcja c): suwak num_cages to żądanie -- każda iteracja
-    próbuje umieścić DOKŁADNIE num_cages klatek; mniej tylko gdy pula
-    kandydatów fizycznie nie pozwala (i wtedy komponent count > 0)."""
+    """Fix 2026-07-14 (opcja c): suwak num_cages to żądanie -- build() PRÓBUJE
+    umieścić DOKŁADNIE num_cages klatek.
+
+    Update 2026-07-14 Task 5 (genomy permutacyjne, plan Etap 2): genom klatek
+    to teraz USTALONY zestaw dokładnie num_cages indeksów kandydatów wylosowany
+    per seed (nie rosnąca zachłanna pula jak w Task 3) -- gdy dwa wybrane
+    indeksy fizycznie kolidują, build() umieszcza MNIEJ niż num_cages (i
+    komponent `count` to penalizuje, patrz test poniżej), więc "każda iteracja
+    == num_cages" nie jest już strukturalnie gwarantowane. Test weryfikuje, że
+    w praktyce (10 iteracji, duża pula kandydatów na 40x12) budżet osiąga
+    num_cages co najmniej raz, a ZWYCIĘZCA (best, wybrany przez score, który
+    penalizuje niedowiezienie) ma pełne 3 klatki."""
     footprint = _rect(0, 0, 40, 12)
     result, metas, best_seed = iterate_cage_placement(
         footprint, corridor_width_m=1.5, num_cages=3, weights=CageWeights(), iterations=10,
     )
-    assert all(m.cages_count == 3 for m in metas), [m.cages_count for m in metas]
+    assert any(m.cages_count == 3 for m in metas), [m.cages_count for m in metas]
     assert len(result.cage_polygons) == 3
 
 
@@ -261,6 +270,106 @@ def test_assign_cages_to_zones_multi_zone():
     cage_right = box(30, 2, 34.2, 7.7)
     result = assign_cages_to_zones([cage_left, cage_right], zones)
     assert result == {0: [cage_left], 1: [cage_right]}
+
+
+# --- Genomy permutacyjne klatek (plan 2026-07-14 Etap 2, Task 5) ---
+
+
+def test_cage_generator_build_deterministic_for_same_genome():
+    """Genome (krotka indeksów kandydatów) -> build() daje identyczny wynik
+    za każdym razem -- build() jest teraz czystą funkcją genomu, bez
+    własnego losowania/shuffle."""
+    from services.bsp import rectangle_decompose
+    from services.cage_placement import _candidate_cages, _CageGenerator
+
+    footprint = _rect(0, 0, 40, 12)
+    zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
+    candidates = _candidate_cages(footprint, zones, num_cages=3)
+    gen = _CageGenerator(footprint, zones, candidates, num_cages=3,
+                          corridor_width_m=1.5, max_dist_single_m=20.0, max_dist_multi_m=40.0)
+
+    import random
+    genome = gen.random_genome(random.Random(4))
+    result_a = gen.build(genome)
+    result_b = gen.build(genome)
+    assert result_a is not None and result_b is not None
+    assert [c.wkt for c in result_a.cage_polygons] == [c.wkt for c in result_b.cage_polygons]
+
+
+def test_cage_generator_random_genome_deterministic_per_seed():
+    from services.bsp import rectangle_decompose
+    from services.cage_placement import _candidate_cages, _CageGenerator
+
+    footprint = _rect(0, 0, 40, 12)
+    zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
+    candidates = _candidate_cages(footprint, zones, num_cages=3)
+    gen = _CageGenerator(footprint, zones, candidates, num_cages=3,
+                          corridor_width_m=1.5, max_dist_single_m=20.0, max_dist_multi_m=40.0)
+
+    import random
+    a = gen.random_genome(random.Random(9))
+    b = gen.random_genome(random.Random(9))
+    assert a == b
+    assert list(a) == sorted(a)
+    assert len(a) == 3
+    assert len(set(a)) == 3
+
+
+def test_cage_generator_colliding_genome_places_fewer_and_penalizes():
+    """Genom "niewykonalny" -- indeksy dwóch kandydatów, które fizycznie
+    kolidują (nakładają się) -- build() umieszcza mniej niż num_cages, a
+    _score_placement's `count` component to penalizuje (>0), zamiast po
+    cichu szukać zastępczego kandydata (Task 5 zmienia semantykę: genom to
+    ZAMKNIĘTY zestaw, nie rosnąca zachłanna pula jak w Task 3)."""
+    from services.bsp import rectangle_decompose
+    from services.cage_placement import _candidate_cages, _CageGenerator, _score_placement, CageWeights
+
+    footprint = _rect(0, 0, 40, 12)
+    zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
+    candidates = _candidate_cages(footprint, zones, num_cages=3)
+
+    # znajdź dwa kandydaty, które ze sobą kolidują (nakładają się)
+    collide_pair = None
+    for i in range(len(candidates)):
+        for j in range(i + 1, len(candidates)):
+            if candidates[i][1].intersects(candidates[j][1]):
+                collide_pair = (i, j)
+                break
+        if collide_pair:
+            break
+    assert collide_pair is not None, "fixture powinien mieć kolidujących kandydatów w puli"
+
+    gen = _CageGenerator(footprint, zones, candidates, num_cages=3,
+                          corridor_width_m=1.5, max_dist_single_m=20.0, max_dist_multi_m=40.0)
+    genome = tuple(sorted(collide_pair))
+    result = gen.build(genome)
+    assert result is not None
+    assert len(result.cage_polygons) < 3
+
+    _score, components = _score_placement(result, footprint, num_cages=3, weights=CageWeights())
+    expected_count = abs(len(result.cage_polygons) - 3) / 3
+    assert abs(components["count"] - expected_count) < 1e-9
+    assert components["count"] > 0.0
+
+
+def test_cage_generator_random_genome_pool_smaller_than_num_cages_no_crash():
+    """Pula mniejsza niż num_cages -> random_genome bierze wszystkie
+    dostępne indeksy (k = min(num_cages, len(pool))) zamiast rng.sample
+    rzucającego ValueError na próbie za dużej."""
+    from services.cage_placement import _CageGenerator
+
+    footprint = _rect(0, 0, 40, 12)
+    zones = [Zone(name="Z0", polygon=footprint)]
+    tiny_pool = [(0, box(1, 1, 5.2, 6.7))]  # tylko 1 kandydat w puli
+
+    gen = _CageGenerator(footprint, zones, tiny_pool, num_cages=5,
+                          corridor_width_m=1.5, max_dist_single_m=20.0, max_dist_multi_m=40.0)
+    import random
+    genome = gen.random_genome(random.Random(1))
+    assert len(genome) == 1
+    result = gen.build(genome)
+    assert result is not None
+    assert len(result.cage_polygons) == 1
 
 
 def test_move_cage_endpoint_recomputes_zone_corridor():

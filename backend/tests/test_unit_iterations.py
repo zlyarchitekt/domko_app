@@ -435,6 +435,89 @@ def test_iterate_units_metas_carry_violation_reasons():
         assert m.hard_valid == (m.hard_violations == [])
 
 
+# --- Genomy permutacyjne (plan 2026-07-14 Etap 2, Task 5) ---
+
+
+def test_units_generator_random_genome_deterministic_per_seed():
+    import random
+
+    from services.unit_mix import _UnitsGenerator
+
+    remainder = _rect(0, 0, 24, 10)
+    counts = allocate_counts(SHARES, derive_total_units(240.0, SHARES))
+    from services.layout import ApartmentSpec
+
+    specs = [
+        ApartmentSpec(type=s.type, min_area_m2=(s.area_min_m2 + s.area_max_m2) / 2.0, target_count=counts[s.type])
+        for s in SHARES
+        if counts[s.type] > 0
+    ]
+    gen = _UnitsGenerator(remainder, specs, [], True, _rect(0, -2, 24, 0), 240.0, SHARES)
+    a = gen.random_genome(random.Random(7))
+    b = gen.random_genome(random.Random(7))
+    assert a == b
+    tag, perm, comp_order = a
+    assert tag == "perm"
+    assert sorted(perm) == list(range(len(perm)))
+    assert sorted(comp_order) == list(range(len(comp_order)))
+
+
+def test_units_generator_build_is_deterministic_for_same_genome():
+    """Genome round-trip: budowanie DWA razy z tym samym genomem (permutacje
+    kolejki i komponentów) musi dać identyczne komórki (te same WKT) --
+    build() jest teraz czystą funkcją genomu (rng=None wewnątrz silnika
+    ciachającego), bez własnego losowania."""
+    import random
+
+    from services.unit_mix import _UnitsGenerator
+
+    remainder = _rect(0, 0, 24, 10)
+    counts = allocate_counts(SHARES, derive_total_units(240.0, SHARES))
+    from services.layout import ApartmentSpec
+
+    specs = [
+        ApartmentSpec(type=s.type, min_area_m2=(s.area_min_m2 + s.area_max_m2) / 2.0, target_count=counts[s.type])
+        for s in SHARES
+        if counts[s.type] > 0
+    ]
+    circulation = _rect(0, -2, 24, 0)
+    gen = _UnitsGenerator(remainder, specs, [], True, circulation, 240.0, SHARES)
+    genome = gen.random_genome(random.Random(5))
+
+    cells_a = gen.build(genome)
+    cells_b = gen.build(genome)
+    assert [c.polygon.wkt for c in cells_a] == [c.polygon.wkt for c in cells_b]
+
+
+def test_units_generator_mutate_changes_exactly_one_swap():
+    import random
+
+    from services.unit_mix import _UnitsGenerator
+
+    remainder = _rect(0, 0, 24, 10)
+    counts = allocate_counts(SHARES, derive_total_units(240.0, SHARES))
+    from services.layout import ApartmentSpec
+
+    specs = [
+        ApartmentSpec(type=s.type, min_area_m2=(s.area_min_m2 + s.area_max_m2) / 2.0, target_count=counts[s.type])
+        for s in SHARES
+        if counts[s.type] > 0
+    ]
+    circulation = _rect(0, -2, 24, 0)
+    gen = _UnitsGenerator(remainder, specs, [], True, circulation, 240.0, SHARES)
+    genome = gen.random_genome(random.Random(2))
+    mutated = gen.mutate(genome, random.Random(11))
+
+    _tag_a, perm_a, comp_a = genome
+    _tag_b, perm_b, comp_b = mutated
+    perm_diff = sum(1 for x, y in zip(perm_a, perm_b) if x != y)
+    comp_diff = sum(1 for x, y in zip(comp_a, comp_b) if x != y)
+    # dokładnie jeden swap: albo 2 pozycje różnią się w perm (a comp
+    # niezmienione), albo odwrotnie -- nigdy oba naraz, nigdy więcej niż 2.
+    assert (perm_diff, comp_diff) in {(2, 0), (0, 2), (0, 0)}
+    assert perm_diff <= 2 and comp_diff <= 2
+
+
 def test_user_footprint_20260713_yields_hard_valid_layout():
     """Repro exportu domko_export_2026-07-13 (68x12): po fixie A (korytarz
     trakt-aware) + B (cięcia prostopadłe) przynajmniej jedna iteracja musi

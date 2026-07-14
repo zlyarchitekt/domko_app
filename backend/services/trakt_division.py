@@ -62,7 +62,14 @@ def _clip(component: Polygon, horizontal: bool, lo: float, hi: float):
     return component.intersection(clip)
 
 
-def slice_trakts(remainder, circulation_geometry, specs: list[ApartmentSpec], rng: random.Random | None):
+def slice_trakts(
+    remainder,
+    circulation_geometry,
+    specs: list[ApartmentSpec],
+    rng: random.Random | None,
+    queue_override: list[ApartmentSpec] | None = None,
+    component_order: list[int] | None = None,
+):
     """(cells, leftover) -- kontrakt zwrotu jak fit_program_to_rectangles.
 
     Komponenty remainder to naturalne trakty (korytarz już je rozciął).
@@ -70,13 +77,25 @@ def slice_trakts(remainder, circulation_geometry, specs: list[ApartmentSpec], rn
     (kursor po x), do pionowego -- poziomo. Pole komórki trafia w cel
     bisekcją granicy (radzi sobie z wcięciami klatek: komórka wychodzi
     schodkowa, jak na referencyjnym rzucie usera). Komponenty bez styku
-    z korytarzem w całości idą do leftover."""
+    z korytarzem w całości idą do leftover.
+
+    `queue_override`/`component_order` (plan 2026-07-14 Etap 2, Task 5):
+    genom permutacyjny podaje JUŻ przetasowaną kolejkę specyfikacji
+    (`queue_override`, dokładna lista -- nie ekspandujemy `specs` ponownie)
+    i/lub kolejność indeksów komponentów remainder (`component_order`) --
+    stosowane deterministycznie ZAMIAST losowego `rng.shuffle`, dokładnie
+    tak jak przy `rng=None` (brak tasowania), tylko z jawnym porządkiem."""
     from services.layout import ApartmentCell  # deferred: cykl layout->unit_mix (Zadanie 3 spina moduły)
 
-    queue: list[ApartmentSpec] = []
-    for spec in specs:
-        queue.extend([spec] * spec.target_count)
+    if queue_override is not None:
+        queue: list[ApartmentSpec] = list(queue_override)
+    else:
+        queue = []
+        for spec in specs:
+            queue.extend([spec] * spec.target_count)
     components = _polygons(remainder)
+    if component_order is not None:
+        components = [components[i] for i in component_order]
     corridor_parts = _polygons(circulation_geometry)
     if rng is not None:
         rng.shuffle(queue)

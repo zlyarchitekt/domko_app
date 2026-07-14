@@ -38,19 +38,32 @@ prostokąta wzdłuż osi cięcia — patrz komentarze w fit_program_to_rectangle
 
 
 def fit_program_to_rectangles(
-    rectangles: list[Polygon], specs: list[ApartmentSpec], rng: random.Random | None = None
+    rectangles: list[Polygon],
+    specs: list[ApartmentSpec],
+    rng: random.Random | None = None,
+    queue_override: list[ApartmentSpec] | None = None,
+    rect_order: list[int] | None = None,
 ) -> tuple[list[ApartmentCell], Polygon | None]:
     """Zachłanne dopasowanie: dla każdego prostokąta wybiera specyfikację
     programu dającą najmniejsze odchylenie procentowe od min_area_m2 —
     próbuje WSZYSTKIE pozostałe specyfikacje, nie tylko czoło kolejki FIFO
-    jak dawne _slice_apartments (audyt 2026-07-02, znalezisko #6)."""
-    queue: list[ApartmentSpec] = []
-    for spec in specs:
-        queue.extend([spec] * spec.target_count)
+    jak dawne _slice_apartments (audyt 2026-07-02, znalezisko #6).
+
+    `queue_override`/`rect_order` (plan 2026-07-14 Etap 2, Task 5): genom
+    permutacyjny podaje już przetasowaną kolejkę specyfikacji i/lub kolejność
+    indeksów prostokątów -- stosowane deterministycznie ZAMIAST `rng.shuffle`
+    (jak przy `rng=None`, tylko z jawnym porządkiem)."""
+    if queue_override is not None:
+        queue: list[ApartmentSpec] = list(queue_override)
+    else:
+        queue = []
+        for spec in specs:
+            queue.extend([spec] * spec.target_count)
+    rectangles = [rectangles[i] for i in rect_order] if rect_order is not None else list(rectangles)
 
     if rng is not None:
         rng.shuffle(queue)
-        rng.shuffle(rectangles := list(rectangles))
+        rng.shuffle(rectangles)
 
     if not queue or not rectangles:
         leftover_geoms = [r for r in rectangles if r.area > 1e-6]
@@ -420,9 +433,16 @@ def pick_best_iteration(metas: list[IterationMeta]) -> IterationMeta:
 
 
 class _UnitsGenerator:
-    """Adapter silnika mieszkań do kernela (plan 2026-07-14 Etap 1).
-    Genome = seed (int); build odtwarza dokładnie stare per-seed zachowanie,
-    więc refaktor jest 1:1. Etap 2 podmieni genome na permutacje."""
+    """Adapter silnika mieszkań do kernela (plan 2026-07-14 Etap 2, Task 5).
+
+    Genome = ("perm", perm, comp_order): `perm` to permutacja indeksów
+    kolejki specyfikacji (specs rozwinięte przez target_count, w porządku
+    KANONICZNYM -- ta sama kolejka co dawne `for spec in specs: queue.extend
+    ([spec] * spec.target_count)`); `comp_order` to permutacja indeksów
+    "komponentów" ciachanych przez silnik -- części remainder (tor traktowy)
+    albo prostokątów z rectangle_decompose (tor klasyczny fit_program_to_
+    rectangles). `build` stosuje obie permutacje DETERMINISTYCZNIE (rng=None
+    w wywołaniu silnika ciachającego) zamiast losowego tasowania w środku."""
 
     def __init__(self, remainder, specs, rectangles, use_trakts, circulation_geometry, net_area, shares):
         self.remainder = remainder
@@ -433,19 +453,54 @@ class _UnitsGenerator:
         self.net_area = net_area
         self.shares = shares
 
+        self._canonical_queue: list[ApartmentSpec] = []
+        for spec in specs:
+            self._canonical_queue.extend([spec] * spec.target_count)
+        self._n_queue = len(self._canonical_queue)
+
+        if use_trakts:
+            from services.trakt_division import _polygons
+            self._n_comp = len(_polygons(remainder))
+        else:
+            self._n_comp = len(rectangles)
+
     def random_genome(self, rng: random.Random):
-        raise NotImplementedError("Etap 1: seed-genomes are enumerated, not drawn")
+        perm = list(range(self._n_queue))
+        rng.shuffle(perm)
+        comp_order = list(range(self._n_comp))
+        rng.shuffle(comp_order)
+        return ("perm", tuple(perm), tuple(comp_order))
 
-    def mutate(self, genome, rng):
-        return genome  # Etap 1: brak mutacji (RandomSearch nie mutuje)
+    def mutate(self, genome, rng: random.Random):
+        _tag, perm, comp_order = genome
+        perm = list(perm)
+        comp_order = list(comp_order)
+        # p=0.7 swap dwóch pozycji permutacji kolejki; w przeciwnym razie
+        # (p=0.3) swap dwóch pozycji kolejności komponentów -- ALE gdy
+        # komponentów jest <=1 (nic do zamiany), fallback na swap permutacji.
+        if rng.random() < 0.7 or len(comp_order) <= 1:
+            if len(perm) > 1:
+                i, j = rng.sample(range(len(perm)), 2)
+                perm[i], perm[j] = perm[j], perm[i]
+        else:
+            i, j = rng.sample(range(len(comp_order)), 2)
+            comp_order[i], comp_order[j] = comp_order[j], comp_order[i]
+        return ("perm", tuple(perm), tuple(comp_order))
 
-    def build(self, genome: int):
-        rng = random.Random(genome)
+    def build(self, genome):
+        _tag, perm, comp_order = genome
+        permuted_queue = [self._canonical_queue[i] for i in perm]
         if self.use_trakts:
             from services.trakt_division import slice_trakts
-            cells, leftover = slice_trakts(self.remainder, self.circulation_geometry, self.specs, rng=rng)
+            cells, leftover = slice_trakts(
+                self.remainder, self.circulation_geometry, self.specs, rng=None,
+                queue_override=permuted_queue, component_order=list(comp_order),
+            )
         else:
-            cells, leftover = fit_program_to_rectangles(list(self.rectangles), self.specs, rng=rng)
+            cells, leftover = fit_program_to_rectangles(
+                list(self.rectangles), self.specs, rng=None,
+                queue_override=permuted_queue, rect_order=list(comp_order),
+            )
         _merge_leftover_into_cells(cells, leftover)
         if not cells:
             import uuid as _uuid
@@ -499,12 +554,19 @@ def iterate_units(
 
     from services.optimize import evaluate_genome
 
-    candidates = [evaluate_genome(gen, _evaluator, seed) for seed in range(iterations)]
+    # Plan 2026-07-14 Etap 2 Task 5: genome nie jest już seedem samym w sobie
+    # (permutacje, patrz _UnitsGenerator) -- każda iteracja losuje SWÓJ genom
+    # z random.Random(seed) i to `seed` (indeks 0..iterations-1) zostaje w
+    # IterationMeta.seed jako stabilny identyfikator wiersza dla frontendu.
+    candidates = [
+        evaluate_genome(gen, _evaluator, gen.random_genome(random.Random(seed)))
+        for seed in range(iterations)
+    ]
     metas = [
-        IterationMeta(seed=c.genome, score=c.score, units_count=len(c.payload),
+        IterationMeta(seed=idx, score=c.score, units_count=len(c.payload),
                       components=c.components, cells=list(c.payload),
                       hard_valid=c.hard_valid, hard_violations=list(c.hard_violations))
-        for c in candidates
+        for idx, c in enumerate(candidates)
     ]
     winner = pick_best_iteration(metas)
     return winner.cells, metas, winner.seed, total_units
