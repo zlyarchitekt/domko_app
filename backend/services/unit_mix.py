@@ -419,6 +419,43 @@ def pick_best_iteration(metas: list[IterationMeta]) -> IterationMeta:
     return min(pool, key=lambda m: m.score)
 
 
+class _UnitsGenerator:
+    """Adapter silnika mieszkań do kernela (plan 2026-07-14 Etap 1).
+    Genome = seed (int); build odtwarza dokładnie stare per-seed zachowanie,
+    więc refaktor jest 1:1. Etap 2 podmieni genome na permutacje."""
+
+    def __init__(self, remainder, specs, rectangles, use_trakts, circulation_geometry, net_area, shares):
+        self.remainder = remainder
+        self.specs = specs
+        self.rectangles = rectangles
+        self.use_trakts = use_trakts
+        self.circulation_geometry = circulation_geometry
+        self.net_area = net_area
+        self.shares = shares
+
+    def random_genome(self, rng: random.Random):
+        raise NotImplementedError("Etap 1: seed-genomes are enumerated, not drawn")
+
+    def mutate(self, genome, rng):
+        return genome  # Etap 1: brak mutacji (RandomSearch nie mutuje)
+
+    def build(self, genome: int):
+        rng = random.Random(genome)
+        if self.use_trakts:
+            from services.trakt_division import slice_trakts
+            cells, leftover = slice_trakts(self.remainder, self.circulation_geometry, self.specs, rng=rng)
+        else:
+            cells, leftover = fit_program_to_rectangles(list(self.rectangles), self.specs, rng=rng)
+        _merge_leftover_into_cells(cells, leftover)
+        if not cells:
+            import uuid as _uuid
+            from services.layout import ApartmentCell as _Cell
+            whole = self.remainder if self.remainder.geom_type == "Polygon" else unary_union(self.remainder)
+            cells = [_Cell(id=str(_uuid.uuid4()), type=self.shares[0].type, polygon=whole)]
+            cells[0].net_area_m2 = self.net_area
+        return cells
+
+
 def iterate_units(
     remainder: Polygon | MultiPolygon,
     shares: list[ProgramShare],
@@ -452,28 +489,23 @@ def iterate_units(
     # circulation_geometry (stare testy, klasyczny fallback).
     use_trakts = circulation_geometry is not None and not circulation_geometry.is_empty
     rectangles = [] if use_trakts else rectangle_decompose(remainder)
-    metas: list[IterationMeta] = []
-    for seed in range(iterations):
-        rng = random.Random(seed)
-        if use_trakts:
-            from services.trakt_division import slice_trakts
 
-            cells, leftover = slice_trakts(remainder, circulation_geometry, specs, rng=rng)
-        else:
-            cells, leftover = fit_program_to_rectangles(list(rectangles), specs, rng=rng)
-        _merge_leftover_into_cells(cells, leftover)
-        if not cells:
-            import uuid as _uuid
-            from services.layout import ApartmentCell as _Cell
+    gen = _UnitsGenerator(remainder, specs, rectangles, use_trakts, circulation_geometry, net_area, shares)
 
-            whole = remainder if remainder.geom_type == "Polygon" else unary_union(remainder)
-            cells = [_Cell(id=str(_uuid.uuid4()), type=shares[0].type, polygon=whole)]
-            cells[0].net_area_m2 = net_area
+    def _evaluator(genome, cells):
         score, components = _score_iteration(cells, shares, weights, footprint, circulation_geometry)
         violations = hard_constraint_violations(cells, footprint, circulation_geometry)
-        metas.append(IterationMeta(seed=seed, score=score, units_count=len(cells),
-                                   components=components, cells=list(cells),
-                                   hard_valid=not violations, hard_violations=violations))
+        return score, components, violations
+
+    from services.optimize import evaluate_genome
+
+    candidates = [evaluate_genome(gen, _evaluator, seed) for seed in range(iterations)]
+    metas = [
+        IterationMeta(seed=c.genome, score=c.score, units_count=len(c.payload),
+                      components=c.components, cells=list(c.payload),
+                      hard_valid=c.hard_valid, hard_violations=list(c.hard_violations))
+        for c in candidates
+    ]
     winner = pick_best_iteration(metas)
     return winner.cells, metas, winner.seed, total_units
 
