@@ -962,10 +962,9 @@ export default function CanvasEditor() {
                 />
               ))}
 
-          {/* Podział klatki: biegi/spoczniki/winda/szacht (dekoracja, spec 2026-07-03) */}
-          {cageGeometries.flatMap((geom, i) =>
-            cageSubdivisionShapes(geom, `cage-sub-${i}`, scale, canvasColors.axis, canvasColors.axisText)
-          )}
+          {/* Grafika wnętrza klatki (biegi/spoczniki/winda) usunięta na
+              życzenie usera 2026-07-14 -- cageSubdivisionShapes zostaje w
+              kodzie na wypadek powrotu, ale nie jest renderowana. */}
 
           {/* Linia środkowa korytarza — kolor wg progu odległości do klatki (F2-04-bis) */}
           {state.circulationResult?.centerline?.map((seg, i) => (
@@ -1156,7 +1155,6 @@ export default function CanvasEditor() {
                 stroke="#60a5fa"
                 strokeWidth={2 / scale}
               />
-              {cageSubdivisionShapes(geom, `edit-cage-sub-${i}`, scale, canvasColors.axis, canvasColors.axisText)}
             </Group>
           ))}
 

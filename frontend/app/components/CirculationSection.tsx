@@ -31,6 +31,7 @@ export default function CirculationSection() {
     runPlaceCirculation,
     runSubdivideUnits,
     runRecomputeEvacuation,
+    runResizeCage,
     setMode,
     removeManualElement,
     setHoveredManualId,
@@ -318,6 +319,69 @@ export default function CirculationSection() {
             </div>
           ))}
         </div>
+      )}
+
+      {/* Wymiary klatek per sztuka (user 2026-07-14) -- zwijane <details>,
+          żeby nie zaśmiecać panelu. Zmiana wymiaru = box zakotwiczony w
+          dotychczasowym min-narożniku -> /circulation/move-cage przelicza
+          korytarz (walidacja obrysu/kolizji po stronie backendu). */}
+      {(state.circulationResult?.cage_geometries?.length ?? 0) > 0 && (
+        <details className="rounded-lg border border-zinc-800/60 light:border-zinc-200">
+          <summary className="cursor-pointer select-none px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 hover:text-zinc-300">
+            Wymiary klatek ({state.circulationResult!.cage_geometries.length})
+          </summary>
+          <div className="space-y-1.5 px-2 pb-2">
+            <div className="text-[9px] text-zinc-600">wymiary w osiach ścian [m]; Enter lub Zastosuj przelicza korytarz</div>
+            {state.circulationResult!.cage_geometries.map((g, i) => {
+              const xs = g.coordinates[0].map(([x]) => x);
+              const ys = g.coordinates[0].map(([, y]) => y);
+              const w = Math.max(...xs) - Math.min(...xs);
+              const d = Math.max(...ys) - Math.min(...ys);
+              const wId = `cage-w-${i}`;
+              const dId = `cage-d-${i}`;
+              const apply = () => {
+                const wEl = document.getElementById(wId) as HTMLInputElement | null;
+                const dEl = document.getElementById(dId) as HTMLInputElement | null;
+                const newW = Number(wEl?.value);
+                const newD = Number(dEl?.value);
+                if (newW > 0 && newD > 0) void runResizeCage(i, newW, newD);
+              };
+              return (
+                <div key={`cage-dim-${i}`} className="flex items-center gap-1.5 text-xs text-zinc-300 light:text-zinc-700">
+                  <span className="w-16 shrink-0">Klatka {i + 1}</span>
+                  <input
+                    id={wId}
+                    key={`w-${i}-${w.toFixed(2)}`}
+                    type="number"
+                    step={0.1}
+                    min={1}
+                    defaultValue={w.toFixed(1)}
+                    onKeyDown={(e) => e.key === "Enter" && apply()}
+                    className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-1.5 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+                  />
+                  <span className="text-zinc-600">×</span>
+                  <input
+                    id={dId}
+                    key={`d-${i}-${d.toFixed(2)}`}
+                    type="number"
+                    step={0.1}
+                    min={1}
+                    defaultValue={d.toFixed(1)}
+                    onKeyDown={(e) => e.key === "Enter" && apply()}
+                    className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-1.5 py-1 font-mono text-xs text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+                  />
+                  <button
+                    onClick={apply}
+                    disabled={state.isLoading}
+                    className="ml-auto rounded bg-accent-500/15 px-2 py-1 text-[10px] font-medium text-accent-400 transition-colors hover:bg-accent-500/25 disabled:opacity-50"
+                  >
+                    Zastosuj
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </details>
       )}
 
       {(state.circulationResult?.warnings?.length ?? 0) > 0 && (

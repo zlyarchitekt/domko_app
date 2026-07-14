@@ -586,6 +586,7 @@ interface SessionContextValue {
     circulationOverride?: Partial<api.CirculationSpecInput>;
   }) => Promise<boolean>;
   runMoveCage: (cageIndex: number, dx: number, dy: number) => Promise<boolean>;
+  runResizeCage: (cageIndex: number, widthM: number, depthM: number) => Promise<boolean>;
   runAddManualElement: (kind: "cage" | "corridor", points: Point2D[]) => Promise<boolean>;
   runSubdivideUnits: () => Promise<void>;
   runReshapeCirculation: (segments: [Point2D, Point2D][]) => Promise<void>;
@@ -858,6 +859,50 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         if (i !== cageIndex) return g;
         // przesunięcie wielokąta o (dxM, dyM) w metrach -- ring GeoJSON
         const coords = g.coordinates[0].map(([x, y]) => [x + dxM, y + dyM] as [number, number]);
+        return { type: "Polygon" as const, coordinates: [coords] };
+      });
+      dispatch({ type: "SET_LOADING", loading: true });
+      try {
+        const result = await api.moveCage({
+          footprint: footprintToPoints(state.footprint),
+          cage_geometries: cages,
+          corridor_width_m: state.circulation.corridor_width_m,
+          max_dist_single_m: state.circulation.max_dist_single_m,
+          max_dist_multi_m: state.circulation.max_dist_multi_m,
+        });
+        dispatch({ type: "SET_CIRCULATION_RESULT", result });
+        dispatch({ type: "SET_ERROR", error: null });
+        return true;
+      } catch (err) {
+        dispatch({ type: "SET_ERROR", error: err instanceof api.ApiError ? err.message : String(err) });
+        return false;
+      } finally {
+        dispatch({ type: "SET_LOADING", loading: false });
+      }
+    },
+    [state.footprint, state.circulationResult, state.circulation.corridor_width_m,
+     state.circulation.max_dist_single_m, state.circulation.max_dist_multi_m]
+  );
+
+  const runResizeCage = useCallback(
+    async (cageIndex: number, widthM: number, depthM: number): Promise<boolean> => {
+      if (!state.footprint || !state.circulationResult) return false;
+      // Nowy prostokąt zakotwiczony w dotychczasowym min-narożniku klatki --
+      // reszta identycznie jak runMoveCage: pełny zestaw do /move-cage,
+      // backend waliduje (obrys, kolizje) i przelicza korytarz per strefa.
+      const cages = state.circulationResult.cage_geometries.map((g, i) => {
+        if (i !== cageIndex) return g;
+        const xs = g.coordinates[0].map(([x]) => x);
+        const ys = g.coordinates[0].map(([, y]) => y);
+        const minx = Math.min(...xs);
+        const miny = Math.min(...ys);
+        const coords: [number, number][] = [
+          [minx, miny],
+          [minx + widthM, miny],
+          [minx + widthM, miny + depthM],
+          [minx, miny + depthM],
+          [minx, miny],
+        ];
         return { type: "Polygon" as const, coordinates: [coords] };
       });
       dispatch({ type: "SET_LOADING", loading: true });
@@ -1239,6 +1284,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       regenerate,
       runPlaceCirculation,
       runMoveCage,
+      runResizeCage,
       runAddManualElement,
       runSubdivideUnits,
       runReshapeCirculation,
@@ -1282,6 +1328,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       regenerate,
       runPlaceCirculation,
       runMoveCage,
+      runResizeCage,
       runAddManualElement,
       runSubdivideUnits,
       runReshapeCirculation,
