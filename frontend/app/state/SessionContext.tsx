@@ -5,8 +5,8 @@ import * as api from "../lib/api";
 
 export type Point2D = { x: number; y: number };
 
-/** Liczba iteracji silnika (klatki i mieszkania) -- user 2026-07-13
- * podniósł z 10 do 30. Backend cap: le=50. */
+/** DOMYŚLNA liczba iteracji silnika (klatki i mieszkania) -- user 2026-07-14:
+ * edytowalna w UI (state.iterationsCount), default 30, backend cap le=50. */
 export const ITERATIONS_COUNT = 30;
 
 export type EditorMode =
@@ -72,6 +72,8 @@ interface SessionState {
   mode: EditorMode;
   program: ProgramRow[];
   totalUnits: number;
+  /** Budżet iteracji silnika (klatki + mieszkania), edytowalny w UI. */
+  iterationsCount: number;
   unitWeights: api.UnitWeightsInput;
   lastIterations: api.IterationMeta[];
   derivedTotalUnits: number | null;
@@ -157,6 +159,7 @@ const initialState: SessionState = {
     INITIAL_TOTAL_UNITS
   ),
   totalUnits: INITIAL_TOTAL_UNITS,
+  iterationsCount: ITERATIONS_COUNT,
   unitWeights: DEFAULT_UNIT_WEIGHTS,
   lastIterations: [],
   derivedTotalUnits: null,
@@ -199,6 +202,7 @@ type Action =
   | { type: "UPDATE_PROGRAM_ROW"; id: string; patch: Partial<ProgramRow> }
   | { type: "REMOVE_PROGRAM_ROW"; id: string }
   | { type: "SET_TOTAL_UNITS"; totalUnits: number }
+  | { type: "SET_ITERATIONS_COUNT"; count: number }
   | { type: "SET_UNIT_WEIGHT"; key: keyof api.UnitWeightsInput; value: number }
   | { type: "SET_TYPE_COLOR"; aptType: string; color: string }
   | { type: "SET_ITERATION_RESULTS"; iterations: api.IterationMeta[]; derivedTotalUnits: number; netRemainderM2: number }
@@ -316,6 +320,9 @@ function reducer(state: SessionState, action: Action): SessionState {
         ...state,
         program: recomputeDerivedProgram(state.program.filter((row) => row.id !== action.id), state.totalUnits),
       };
+    case "SET_ITERATIONS_COUNT":
+      // clamp do backendowego capu le=50 i sensownego minimum
+      return { ...state, iterationsCount: Math.max(1, Math.min(50, Math.round(action.count))) };
     case "SET_TOTAL_UNITS":
       return { ...state, totalUnits: action.totalUnits, program: recomputeDerivedProgram(state.program, action.totalUnits) };
     case "SET_UNIT_WEIGHT":
@@ -586,6 +593,7 @@ interface SessionContextValue {
     circulationOverride?: Partial<api.CirculationSpecInput>;
   }) => Promise<boolean>;
   runMoveCage: (cageIndex: number, dx: number, dy: number) => Promise<boolean>;
+  setIterationsCount: (count: number) => void;
   runResizeCage: (cageIndex: number, widthM: number, depthM: number) => Promise<boolean>;
   runAddManualElement: (kind: "cage" | "corridor", points: Point2D[]) => Promise<boolean>;
   runSubdivideUnits: () => Promise<void>;
@@ -627,6 +635,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             state: {
               ...parsed,
               circulation: { ...initialCirculation, ...parsed.circulation },
+              iterationsCount: parsed.iterationsCount ?? ITERATIONS_COUNT,
               typeColors: { ...DEFAULT_TYPE_COLORS, ...parsed.typeColors },
             },
           });
@@ -650,6 +659,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, [state.theme]);
 
   const setMode = useCallback((mode: EditorMode) => dispatch({ type: "SET_MODE", mode }), []);
+  const setIterationsCount = useCallback(
+    (count: number) => dispatch({ type: "SET_ITERATIONS_COUNT", count }), []);
   const addDrawPoint = useCallback((point: Point2D) => dispatch({ type: "ADD_DRAW_POINT", point }), []);
   const removeLastDrawPoint = useCallback(() => dispatch({ type: "REMOVE_LAST_DRAW_POINT" }), []);
 
@@ -1000,7 +1011,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         unitsReq,
         state.footprint ? footprintToPoints(state.footprint) : undefined,
         state.circulationResult.circulation_geometry,
-        ITERATIONS_COUNT,
+        state.iterationsCount,
         state.unitWeights
       );
       const layoutResult: api.LayoutGenerateResponse = {
@@ -1045,7 +1056,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     } finally {
       dispatch({ type: "SET_LOADING", loading: false });
     }
-  }, [state.circulationResult, state.program, state.footprint, state.circulation, state.unitWeights]);
+  }, [state.circulationResult, state.program, state.footprint, state.circulation, state.unitWeights, state.iterationsCount]);
 
   const regenerate = useCallback(async () => {
     if (!state.footprint || state.footprint.length < 3) return;
@@ -1073,7 +1084,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           manual_cages: state.manualCages.map((c) => c.ring.map((p) => [p.x, p.y] as api.Point)),
           manual_corridors: state.manualCorridors.map((c) => c.path.map((p) => [p.x, p.y] as api.Point)),
         },
-        iterations: ITERATIONS_COUNT,
+        iterations: state.iterationsCount,
         weights: state.unitWeights,
       };
       const [layout, validation] = await Promise.all([
@@ -1095,7 +1106,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_LOADING", loading: false });
     }
   }, [state.footprint, state.circulationResult, runSubdivideUnits, buildRequest,
-      state.circulation, state.manualCages, state.manualCorridors, state.unitWeights]);
+      state.circulation, state.manualCages, state.manualCorridors, state.unitWeights,
+      state.iterationsCount]);
 
   const refreshTypologySuggestion = useCallback(async () => {
     if (!state.footprint || state.footprint.length < 3) return;
@@ -1285,6 +1297,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       runPlaceCirculation,
       runMoveCage,
       runResizeCage,
+      setIterationsCount,
       runAddManualElement,
       runSubdivideUnits,
       runReshapeCirculation,
@@ -1329,6 +1342,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       runPlaceCirculation,
       runMoveCage,
       runResizeCage,
+      setIterationsCount,
       runAddManualElement,
       runSubdivideUnits,
       runReshapeCirculation,

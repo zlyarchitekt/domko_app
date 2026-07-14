@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { Move } from "lucide-react";
-import { ITERATIONS_COUNT, useSession } from "../state/SessionContext";
+import { useSession } from "../state/SessionContext";
 import * as api from "../lib/api";
 import { CagePosition } from "../lib/api";
 
@@ -32,6 +32,7 @@ export default function CirculationSection() {
     runSubdivideUnits,
     runRecomputeEvacuation,
     runResizeCage,
+    setIterationsCount,
     setMode,
     removeManualElement,
     setHoveredManualId,
@@ -102,6 +103,22 @@ export default function CirculationSection() {
         />
       </label>
 
+      <label
+        className="flex items-center justify-between text-xs text-zinc-400"
+        title="Budżet prób silnika iteracyjnego (klatki i mieszkania). Więcej = lepsze wyniki, dłuższe liczenie. Backend przyjmuje max 50."
+      >
+        Liczba iteracji (1-50)
+        <input
+          type="number"
+          step={1}
+          min={1}
+          max={50}
+          value={state.iterationsCount}
+          onChange={(e) => setIterationsCount(Number(e.target.value))}
+          className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 font-mono text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
+        />
+      </label>
+
       <label className="flex items-center gap-2 text-xs text-zinc-400">
         <input
           type="checkbox"
@@ -167,7 +184,7 @@ export default function CirculationSection() {
           {(
             [
               ["egress", "Minimalizuj złe dojścia"],
-              ["count", "Minimalizuj liczbę klatek"],
+              ["count", "Dowieź żądaną liczbę klatek"],
               ["corners", "Klatki w narożnikach"],
               ["ends", "Klatki na końcach"],
               ["spread", "Równomierne rozmieszczenie"],
@@ -200,10 +217,10 @@ export default function CirculationSection() {
           {state.isLoading ? "Umieszczam..." : "Umieść korytarz i klatkę"}
         </button>
         <button
-          onClick={() => void runPlaceCirculation({ circulationOverride: { cage_iterations: ITERATIONS_COUNT } })}
+          onClick={() => void runPlaceCirculation({ circulationOverride: { cage_iterations: state.iterationsCount } })}
           disabled={!state.footprint || state.isLoading}
           className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent-500 px-3 py-2 text-xs font-medium text-white transition-all hover:bg-accent-400 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 light:disabled:bg-zinc-200 light:disabled:text-zinc-400"
-          title={`${ITERATIONS_COUNT} iteracji lokalizacji klatek, wygrywa najlepszy score wg wag`}
+          title={`${state.iterationsCount} iteracji lokalizacji klatek, wygrywa najlepszy score wg wag`}
         >
           {state.isLoading ? "Iteruję..." : "Rozmieść iteracyjnie"}
         </button>
