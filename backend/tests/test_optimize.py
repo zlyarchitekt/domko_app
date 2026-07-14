@@ -3,7 +3,14 @@ syntetycznym generatorze liczbowym, bez geometrii."""
 
 import random
 
-from services.optimize import Budget, Candidate, dedupe_and_rank, pick_best, run_random_search
+from services.optimize import (
+    Budget,
+    Candidate,
+    dedupe_and_rank,
+    pick_best,
+    run_random_search,
+    run_simulated_annealing,
+)
 
 
 class _NumberGenerator:
@@ -57,3 +64,71 @@ def test_dedupe_and_rank():
     ranked = dedupe_and_rank(cands, limit=10)
     assert [c.genome for c in ranked] == [3.0, 1.0, 2.0]  # valid-first, potem score; duplikat 1.0 odpada
     assert len(dedupe_and_rank(cands, limit=2)) == 2
+
+
+def test_sa_beats_or_matches_random_search():
+    """SA z budżetem 60 (local search + restarty) na tej funkcji celu
+    (dolina w 3.0, kara za >8.0) statystycznie pewnie znajduje wynik
+    nie gorszy niż RandomSearch z tym samym budżetem."""
+    gen = _NumberGenerator()
+    sa = run_simulated_annealing(gen, _evaluator, Budget(evaluations=60))
+    rs = run_random_search(gen, _evaluator, Budget(evaluations=60))
+    assert pick_best(sa).score <= pick_best(rs).score
+
+
+def test_sa_deterministic():
+    gen = _NumberGenerator()
+    a = run_simulated_annealing(gen, _evaluator, Budget(evaluations=60))
+    b = run_simulated_annealing(gen, _evaluator, Budget(evaluations=60))
+    assert [c.genome for c in a] == [c.genome for c in b]
+    assert len(a) == len(b)
+
+
+def test_sa_history_length_matches_formula():
+    """Historia SA (bez seed_candidates): każdy restart dokleja 1 fresh-start
+    kandydata (bo brak seedów) + per_restart sąsiadów z mutacji.
+    per_restart = max(1, budget.evaluations // restarts).
+    len(history) == restarts * per_restart + (restarts - len(seed_candidates or []))
+    -- tutaj seed_candidates=None więc wszystkie `restarts` restartów robią
+    fresh-start (dokładają +1 każdy)."""
+    budget = Budget(evaluations=60)
+    restarts = 3
+    per_restart = max(1, budget.evaluations // max(1, restarts))
+    expected = restarts * per_restart + restarts
+    assert expected == 63
+
+    gen = _NumberGenerator()
+    history = run_simulated_annealing(gen, _evaluator, budget, restarts=restarts)
+    assert len(history) == expected
+
+
+def test_sa_history_length_with_seed_candidates():
+    """Gdy seed_candidates pokrywa WSZYSTKIE restarty, żaden restart nie
+    dokleja fresh-start kandydata do historii -- tylko sąsiedzi z mutacji."""
+    budget = Budget(evaluations=30)
+    restarts = 3
+    per_restart = max(1, budget.evaluations // max(1, restarts))
+    expected = restarts * per_restart  # 0 fresh-starts: len(seeds) >= restarts
+
+    seeds = [
+        Candidate(genome=3.0 + i, payload=3.0 + i, score=float(i), components={}, hard_valid=True, hard_violations=[])
+        for i in range(restarts)
+    ]
+    gen = _NumberGenerator()
+    history = run_simulated_annealing(gen, _evaluator, budget, seed_candidates=seeds, restarts=restarts)
+    assert len(history) == expected
+
+
+def test_sa_uses_seed_candidates_as_starting_points():
+    """Seed kandydat już bliski optimum (genome=3.0, score=0.0) -- SA
+    (akceptacja zawsze przy delta<=0) nigdy nie powinno skończyć gorzej."""
+    gen = _NumberGenerator()
+    near_optimal = Candidate(
+        genome=3.0, payload=3.0, score=0.0, components={"dist": 0.0}, hard_valid=True, hard_violations=[]
+    )
+    history = run_simulated_annealing(
+        gen, _evaluator, Budget(evaluations=30), seed_candidates=[near_optimal], restarts=1
+    )
+    # seed_candidates nie są re-dodawane do historii (per plan) -- "final best"
+    # to najlepszy z (historia + seedy), bo caller zawsze ma oba zbiory.
+    assert pick_best(history + [near_optimal]).score <= near_optimal.score

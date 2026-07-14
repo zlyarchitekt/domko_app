@@ -9,6 +9,7 @@ NSGA-II. Determinizm: wyłącznie random.Random(seed) pochodne od indeksu."""
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
@@ -73,3 +74,42 @@ def dedupe_and_rank(candidates: list[Candidate], limit: int) -> list[Candidate]:
         unique.append(c)
     unique.sort(key=lambda c: (0 if c.hard_valid else 1, c.score))
     return unique[:limit]
+
+
+def run_simulated_annealing(
+    generator: Generator,
+    evaluator: Evaluator,
+    budget: Budget,
+    seed_candidates: "list[Candidate] | None" = None,
+    restarts: int = 3,
+) -> list[Candidate]:
+    """SA z restartami: budżet dzielony po równo między restarty; każdy restart
+    startuje z kolejnego najlepszego seed-kandydata (albo losowego genomu).
+    Temperatura: T0 = max(1e-6, 0.25 * score startu), wykładniczo do ~T0/100.
+    Akceptacja: lepszy zawsze; gorszy z p = exp(-delta/T). Kandydat łamiący
+    zakazy dostaje score + 1.0 kary do porównań SA (ale w historii zostaje
+    z prawdziwym score) -- SA szuka w stronę ważnych, nie przez nie."""
+    history: list[Candidate] = []
+    seeds = list(seed_candidates or [])
+    per_restart = max(1, budget.evaluations // max(1, restarts))
+    for r in range(restarts):
+        rng = random.Random(10_000 + r)
+        if r < len(seeds):
+            current = seeds[r]
+        else:
+            current = evaluate_genome(generator, evaluator, generator.random_genome(rng))
+            history.append(current)
+
+        def eff(c: Candidate) -> float:
+            return c.score + (0.0 if c.hard_valid else 1.0)
+
+        t = max(1e-6, 0.25 * eff(current))
+        cooling = (0.01) ** (1.0 / max(1, per_restart))
+        for _ in range(per_restart):
+            neighbor = evaluate_genome(generator, evaluator, generator.mutate(current.genome, rng))
+            history.append(neighbor)
+            delta = eff(neighbor) - eff(current)
+            if delta <= 0 or rng.random() < math.exp(-delta / t):
+                current = neighbor
+            t *= cooling
+    return history
