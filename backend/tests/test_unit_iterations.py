@@ -49,7 +49,8 @@ def test_zero_leftover_guarantee():
     assert derived_total >= 1
     total_cells_area = sum(c.polygon.area for c in cells)
     assert abs(total_cells_area - remainder.area) < 1e-6
-    assert len(metas) == 5
+    # Etap 2 Task 7: metas = unikalne kandydaty (dedupe), cap na budżecie
+    assert 1 <= len(metas) <= 5
     assert best_seed in {m.seed for m in metas}
 
 
@@ -226,7 +227,8 @@ def test_units_endpoint_returns_iterations_and_no_leftover():
     body = res.json()
     assert body["leftover"] is None
     assert body["derived_total_units"] >= 1
-    assert len(body["iterations"]) == 5
+    # Etap 2 Task 7: iterations = unikalne kandydaty (dedupe), cap na budżecie
+    assert 1 <= len(body["iterations"]) <= 5
     assert body["best_seed"] in [m["seed"] for m in body["iterations"]]
 
 
@@ -303,7 +305,8 @@ def test_units_endpoint_iterations_carry_geometry_and_walls():
     res = client.post("/api/v1/layout/units", json=payload)
     assert res.status_code == 200, res.text
     body = res.json()
-    assert len(body["iterations"]) == 5
+    # Etap 2 Task 7: iterations = unikalne kandydaty (dedupe), cap na budżecie
+    assert 1 <= len(body["iterations"]) <= 5
     for it in body["iterations"]:
         assert len(it["apartments"]) == it["units_count"]
         assert len(it["wall_bands"]) > 0

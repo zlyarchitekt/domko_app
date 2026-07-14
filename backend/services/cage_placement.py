@@ -285,27 +285,36 @@ def iterate_cage_placement(
         score, components = _score_placement(payload, footprint, num_cages, weights)
         return score, components, []
 
-    # Plan 2026-07-14 Etap 2 Task 5: genome nie jest już seedem samym w sobie
-    # (posortowana krotka indeksów kandydatów, patrz _CageGenerator) -- każda
-    # iteracja losuje SWÓJ genom z random.Random(seed) i to `seed` (indeks
-    # 0..iterations-1) zostaje jako stabilny identyfikator wiersza.
-    evaluated = [
+    # Plan 2026-07-14 Etap 2 Task 7: hybryda random+SA w ramach budżetu
+    # `iterations` ewaluacji -- n_seed losowych genomów (eksploracja), potem
+    # symulowane wyżarzanie od top-3. Metas = unikalne kandydaty z całej
+    # historii, valid-first po score, max `iterations` wierszy; `seed` pola
+    # = indeks rankingu (stabilny identyfikator wiersza dla frontendu).
+    from services.optimize import Budget, dedupe_and_rank, run_simulated_annealing
+
+    n_seed = max(5, iterations // 3) if iterations >= 2 else iterations
+    n_seed = min(n_seed, iterations)
+    random_phase = [
         evaluate_genome(generator, evaluator, generator.random_genome(random.Random(seed)))
-        for seed in range(iterations)
+        for seed in range(n_seed)
     ]
+    sa_budget = iterations - n_seed
+    history = list(random_phase)
+    if sa_budget > 0:
+        starts = dedupe_and_rank([c for c in random_phase if c.payload is not None], limit=3)
+        history += run_simulated_annealing(
+            generator, evaluator, Budget(evaluations=sa_budget),
+            seed_candidates=starts, restarts=min(3, len(starts)) or 1,
+        )
+    ranked = [c for c in dedupe_and_rank(history, limit=iterations) if c.payload is not None]
     metas: list[CageIterationMeta] = [
         CageIterationMeta(
             seed=idx, score=c.score, cages_count=len(c.payload.cage_polygons),
             components=c.components, result=c.payload,
         )
-        for idx, c in enumerate(evaluated)
-        if c.payload is not None
+        for idx, c in enumerate(ranked)
     ]
     if not metas:
         raise ValueError("Obrys zbyt mały na klatkę schodową")
-    best_idx = min(
-        (idx for idx, c in enumerate(evaluated) if c.payload is not None),
-        key=lambda idx: evaluated[idx].score,
-    )
-    best = evaluated[best_idx]
-    return best.payload, metas, best_idx
+    # ranking jest valid-first po score, więc wiersz 0 == pick_best
+    return ranked[0].payload, metas, 0

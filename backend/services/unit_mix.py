@@ -552,21 +552,34 @@ def iterate_units(
         violations = hard_constraint_violations(cells, footprint, circulation_geometry)
         return score, components, violations
 
-    from services.optimize import evaluate_genome
+    from services.optimize import Budget, dedupe_and_rank, evaluate_genome, run_simulated_annealing
 
-    # Plan 2026-07-14 Etap 2 Task 5: genome nie jest już seedem samym w sobie
-    # (permutacje, patrz _UnitsGenerator) -- każda iteracja losuje SWÓJ genom
-    # z random.Random(seed) i to `seed` (indeks 0..iterations-1) zostaje w
-    # IterationMeta.seed jako stabilny identyfikator wiersza dla frontendu.
-    candidates = [
+    # Plan 2026-07-14 Etap 2 Task 7: hybryda random+SA w ramach JEDNEGO
+    # budżetu `iterations` ewaluacji. Faza 1: n_seed losowych genomów
+    # (eksploracja, deterministycznie po seed=0..n-1). Faza 2: symulowane
+    # wyżarzanie od top-3 valid-first. Lista metas = unikalne kandydaty z
+    # CAŁEJ historii (random + SA + seedy), valid-first po score, max
+    # `iterations` wierszy; IterationMeta.seed = indeks rankingu (stabilny
+    # identyfikator wiersza dla frontendu, genome nie jest już seedem).
+    n_seed = max(5, iterations // 3) if iterations >= 2 else iterations
+    n_seed = min(n_seed, iterations)
+    random_phase = [
         evaluate_genome(gen, _evaluator, gen.random_genome(random.Random(seed)))
-        for seed in range(iterations)
+        for seed in range(n_seed)
     ]
+    sa_budget = iterations - n_seed
+    history = list(random_phase)
+    if sa_budget > 0:
+        starts = dedupe_and_rank(random_phase, limit=3)
+        history += run_simulated_annealing(
+            gen, _evaluator, Budget(evaluations=sa_budget), seed_candidates=starts, restarts=min(3, len(starts)) or 1,
+        )
+    ranked = dedupe_and_rank(history, limit=iterations)
     metas = [
         IterationMeta(seed=idx, score=c.score, units_count=len(c.payload),
                       components=c.components, cells=list(c.payload),
                       hard_valid=c.hard_valid, hard_violations=list(c.hard_violations))
-        for idx, c in enumerate(candidates)
+        for idx, c in enumerate(ranked)
     ]
     winner = pick_best_iteration(metas)
     return winner.cells, metas, winner.seed, total_units
