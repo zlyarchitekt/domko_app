@@ -544,3 +544,64 @@ def test_user_footprint_20260713_yields_hard_valid_layout():
     for c in cells:
         assert c.polygon.distance(circ.circulation_geometry) < 0.01
         assert c.polygon.boundary.intersection(edge).length > 0
+
+
+# --- Etap 3 (plan 2026-07-14): wiązki celów do Pareto, solar odłożony ---
+
+
+def test_objectives_from_components_bundles():
+    from services.unit_mix import objectives_from_components
+
+    w = UnitWeights(size=1, mix=1, grid=1, shape=1, daylight=1, squareness=1, adjacency=1)
+    comps = {"size": 0.2, "mix": 0.4, "grid": 0.1, "shape": 0.2, "squareness": 0.3,
+             "daylight": 0.4, "adjacency": 0.5}
+    pf, gq = objectives_from_components(comps, w)
+    assert abs(pf - 0.3) < 1e-9  # średnia(0.2, 0.4)
+    assert abs(gq - 0.3) < 1e-9  # średnia(0.1, 0.2, 0.3, 0.4, 0.5)
+
+    # brakujące komponenty (bez footprintu/komunikacji) wypadają z wiązki
+    comps_partial = {"size": 0.2, "mix": 0.4, "grid": 0.0, "shape": 0.0, "squareness": 0.6}
+    _, gq2 = objectives_from_components(comps_partial, w)
+    assert abs(gq2 - 0.2) < 1e-9  # średnia(0, 0, 0.6)
+
+    # wagi ważą wewnątrz wiązki
+    w2 = UnitWeights(size=1, mix=0, grid=0, shape=0, daylight=0, squareness=1, adjacency=0)
+    pf3, gq3 = objectives_from_components(comps, w2)
+    assert abs(pf3 - 0.2) < 1e-9  # tylko size
+    assert abs(gq3 - 0.3) < 1e-9  # tylko squareness
+
+    # zerowa wiązka wag -> 0.0 (nie dzielenie przez zero)
+    w3 = UnitWeights(size=0, mix=0, grid=0, shape=0, daylight=0, squareness=0, adjacency=0)
+    assert objectives_from_components(comps, w3) == (0.0, 0.0)
+
+
+def test_iterate_units_pareto_strategy():
+    """strategy='pareto' (Etap 3, bez solara): metas niosą objectives
+    (2 wiązki) i is_pareto; front przed resztą; zwycięzca hard_valid gdy
+    jakikolwiek istnieje; determinizm."""
+    remainder = _rect(0, 0, 30, 10)
+    footprint = _rect(0, 0, 30, 12)
+    circulation = _rect(0, 10, 30, 12)
+    cells_a, metas_a, best_a, _ = iterate_units(
+        remainder, SHARES, iterations=24, footprint=footprint,
+        circulation_geometry=circulation, strategy="pareto",
+    )
+    cells_b, metas_b, best_b, _ = iterate_units(
+        remainder, SHARES, iterations=24, footprint=footprint,
+        circulation_geometry=circulation, strategy="pareto",
+    )
+    assert best_a == best_b
+    assert [m.score for m in metas_a] == [m.score for m in metas_b]
+
+    assert all(len(m.objectives) == 2 for m in metas_a)
+    assert any(m.is_pareto for m in metas_a)
+    # front (w obrębie ważnych) przed nie-frontem
+    valid = [m for m in metas_a if m.hard_valid]
+    seen_non_front = False
+    for m in valid:
+        if not m.is_pareto:
+            seen_non_front = True
+        else:
+            assert not seen_non_front, "front Pareto musi być przed resztą w rankingu"
+    if any(m.hard_valid for m in metas_a):
+        assert metas_a[best_a].hard_valid

@@ -224,6 +224,34 @@ class IterationMeta:
     scoringiem -- zakaz sprawdza sam styk (>0) i sam limit proporcji."""
     hard_violations: list = field(default_factory=list)
     """list[str] -- powody naruszenia zakazu po polsku (puste = hard_valid)."""
+    objectives: tuple = ()
+    """(program_fit, geometry_quality) przy strategy='pareto' (plan 2026-07-14
+    Etap 3, solar odłożony przez usera 2026-07-15 -- dojdzie jako trzeci
+    element krotki). Puste przy anneal/random."""
+    is_pareto: bool = False
+    """True = kandydat leży na froncie Pareto finalnej populacji NSGA-II."""
+
+
+_PROGRAM_FIT_KEYS = ("size", "mix")
+_GEOMETRY_QUALITY_KEYS = ("grid", "shape", "squareness", "daylight", "adjacency")
+
+
+def objectives_from_components(components: dict, weights: "UnitWeights") -> tuple[float, float]:
+    """Dwie wiązki celów do optymalizacji wielokryterialnej (Etap 3):
+    program_fit = ważona średnia (size, mix), geometry_quality = ważona
+    średnia (grid, shape, squareness, daylight, adjacency). Wagi suwaków
+    działają WEWNĄTRZ wiązki (jak dotąd w score); MIĘDZY wiązkami rozstrzyga
+    dominacja Pareto. Komponenty nieobecne (np. daylight bez footprintu)
+    wypadają z wiązki razem ze swoją wagą, jak w _score_iteration."""
+
+    def bundle(keys: tuple[str, ...]) -> float:
+        pairs = [(getattr(weights, k), components[k]) for k in keys if k in components]
+        total = sum(w for w, _ in pairs)
+        if total <= 0:
+            return 0.0
+        return sum(w * c for w, c in pairs) / total
+
+    return bundle(_PROGRAM_FIT_KEYS), bundle(_GEOMETRY_QUALITY_KEYS)
 
 
 def derive_total_units(net_remainder_m2: float, shares: list[ProgramShare]) -> int:
@@ -553,7 +581,40 @@ def iterate_units(
         violations = hard_constraint_violations(cells, footprint, circulation_geometry)
         return score, components, violations
 
-    from services.optimize import Budget, dedupe_and_rank, evaluate_genome, run_simulated_annealing
+    from services.optimize import (
+        Budget,
+        dedupe_and_rank,
+        evaluate_genome,
+        pareto_front,
+        run_nsga2,
+        run_simulated_annealing,
+    )
+
+    # Plan 2026-07-14 Etap 3 (solar odłożony, user 2026-07-15): strategia
+    # "pareto" = NSGA-II na dwóch wiązkach celów (program_fit,
+    # geometry_quality); wagi suwaków działają wewnątrz wiązek, między nimi
+    # rozstrzyga dominacja. Metas: front najpierw (is_pareto=True), potem
+    # reszta finalnej populacji; zwycięzca = wiersz 0.
+    if strategy == "pareto":
+        def _evaluator_multi(genome, cells):
+            _score, components = _score_iteration(cells, shares, weights, footprint, circulation_geometry)
+            violations = hard_constraint_violations(cells, footprint, circulation_geometry)
+            return objectives_from_components(components, weights), components, violations
+
+        population = max(6, min(24, iterations // 4 * 2))
+        pop = run_nsga2(gen, _evaluator_multi, Budget(evaluations=iterations), population=population)
+        front_ids = {id(c) for c in pareto_front(pop)}
+        ranked = dedupe_and_rank(pop, limit=iterations)
+        ranked.sort(key=lambda c: (0 if c.hard_valid else 1, 0 if id(c) in front_ids else 1, c.score))
+        metas = [
+            IterationMeta(seed=idx, score=c.score, units_count=len(c.payload),
+                          components=c.components, cells=list(c.payload),
+                          hard_valid=c.hard_valid, hard_violations=list(c.hard_violations),
+                          objectives=tuple(c.objectives), is_pareto=id(c) in front_ids)
+            for idx, c in enumerate(ranked)
+        ]
+        winner = pick_best_iteration(metas)
+        return winner.cells, metas, winner.seed, total_units
 
     # Plan 2026-07-14 Etap 2 Task 7: hybryda random+SA w ramach JEDNEGO
     # budżetu `iterations` ewaluacji. Faza 1: n_seed losowych genomów
