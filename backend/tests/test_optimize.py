@@ -6,8 +6,11 @@ import random
 from services.optimize import (
     Budget,
     Candidate,
+    _dominates,
     dedupe_and_rank,
+    pareto_front,
     pick_best,
+    run_nsga2,
     run_random_search,
     run_simulated_annealing,
 )
@@ -132,3 +135,60 @@ def test_sa_uses_seed_candidates_as_starting_points():
     # seed_candidates nie są re-dodawane do historii (per plan) -- "final best"
     # to najlepszy z (historia + seedy), bo caller zawsze ma oba zbiory.
     assert pick_best(history + [near_optimal]).score <= near_optimal.score
+
+
+# --- Etap 3: NSGA-II ---------------------------------------------------
+
+
+def _evaluator_multi(genome: float, payload: float):
+    """Dwucelowa: min (g-2)^2, min (g-8)^2 -- front Pareto rozpięty [2, 8]."""
+    objectives = ((payload - 2.0) ** 2, (payload - 8.0) ** 2)
+    violations: list = []
+    return objectives, {"a": objectives[0], "b": objectives[1]}, violations
+
+
+def test_nsga2_front_spans_objective_space():
+    gen = _NumberGenerator()
+    pop = run_nsga2(gen, _evaluator_multi, Budget(evaluations=24 * 6), population=24)
+    front = pareto_front(pop)
+    assert len(front) >= 3
+    genomes = [c.genome for c in front]
+    assert any(g < 3.5 for g in genomes)
+    assert any(g > 6.5 for g in genomes)
+    assert any(3.5 <= g <= 6.5 for g in genomes)
+
+
+def test_nsga2_deterministic():
+    gen = _NumberGenerator()
+    a = run_nsga2(gen, _evaluator_multi, Budget(evaluations=24 * 6), population=24)
+    b = run_nsga2(gen, _evaluator_multi, Budget(evaluations=24 * 6), population=24)
+    assert [c.genome for c in a] == [c.genome for c in b]
+
+
+def test_pareto_front_excludes_dominated_keeps_incomparable():
+    dominant = Candidate(genome=1, payload=1, score=0.0, objectives=(1.0, 1.0))
+    dominated = Candidate(genome=2, payload=2, score=0.0, objectives=(2.0, 2.0))
+    incomparable_a = Candidate(genome=3, payload=3, score=0.0, objectives=(0.5, 3.0))
+    incomparable_b = Candidate(genome=4, payload=4, score=0.0, objectives=(3.0, 0.5))
+    front = pareto_front([dominant, dominated, incomparable_a, incomparable_b])
+    genomes = {c.genome for c in front}
+    assert dominated.genome not in genomes
+    assert dominant.genome in genomes
+    assert incomparable_a.genome in genomes
+    assert incomparable_b.genome in genomes
+
+
+def test_dominates_hard_valid_beats_invalid():
+    valid = Candidate(genome=1, payload=1, score=5.0, hard_valid=True, hard_violations=[], objectives=(5.0, 5.0))
+    invalid = Candidate(genome=2, payload=2, score=0.0, hard_valid=False, hard_violations=["x"], objectives=(0.0, 0.0))
+    assert _dominates(valid, invalid)
+    assert not _dominates(invalid, valid)
+
+
+def test_hard_invalid_never_on_front_when_valid_exists():
+    valid = Candidate(genome=1, payload=1, score=5.0, hard_valid=True, hard_violations=[], objectives=(5.0, 5.0))
+    invalid = Candidate(genome=2, payload=2, score=0.0, hard_valid=False, hard_violations=["x"], objectives=(0.0, 0.0))
+    front = pareto_front([valid, invalid])
+    genomes = {c.genome for c in front}
+    assert invalid.genome not in genomes
+    assert valid.genome in genomes

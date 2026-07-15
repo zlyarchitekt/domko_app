@@ -23,6 +23,7 @@ class Candidate:
     components: dict = field(default_factory=dict)
     hard_valid: bool = True
     hard_violations: list = field(default_factory=list)
+    objectives: tuple = ()
 
 
 @dataclass
@@ -113,3 +114,93 @@ def run_simulated_annealing(
                 current = neighbor
             t *= cooling
     return history
+
+
+EvaluatorMulti = Callable[[Any, Any], "tuple[tuple[float, ...], dict, list]"]
+
+
+def _dominates(a: Candidate, b: Candidate) -> bool:
+    """a dominuje b: hard_valid dominuje invalid; przy równym hard_valid --
+    a <= b na wszystkich celach i < na przynajmniej jednym (minimalizacja)."""
+    if a.hard_valid != b.hard_valid:
+        return a.hard_valid
+    return all(x <= y for x, y in zip(a.objectives, b.objectives)) and any(
+        x < y for x, y in zip(a.objectives, b.objectives)
+    )
+
+
+def pareto_front(candidates: list[Candidate]) -> list[Candidate]:
+    return [c for c in candidates if not any(_dominates(o, c) for o in candidates if o is not c)]
+
+
+def _crowding(front: list[Candidate]) -> dict[int, float]:
+    n = len(front)
+    dist = {id(c): 0.0 for c in front}
+    if n <= 2:
+        return {k: float("inf") for k in dist}
+    n_obj = len(front[0].objectives)
+    for m in range(n_obj):
+        ordered = sorted(front, key=lambda c: c.objectives[m])
+        dist[id(ordered[0])] = dist[id(ordered[-1])] = float("inf")
+        span = ordered[-1].objectives[m] - ordered[0].objectives[m] or 1.0
+        for i in range(1, n - 1):
+            dist[id(ordered[i])] += (ordered[i + 1].objectives[m] - ordered[i - 1].objectives[m]) / span
+    return dist
+
+
+def run_nsga2(
+    generator: Generator,
+    evaluator_multi: EvaluatorMulti,
+    budget: Budget,
+    population: int = 24,
+) -> list[Candidate]:
+    """Hand-rolled NSGA-II: fast non-dominated sort (przez powtórny pareto_front)
+    + crowding distance + turniej binarny + mutacja jako jedyny operator wariacji
+    (crossover pominięty świadomie -- YAGNI dopóki front nie jest za ubogi)."""
+
+    def _eval(genome: Any) -> Candidate:
+        payload = generator.build(genome)
+        objectives, components, violations = evaluator_multi(genome, payload)
+        return Candidate(genome=genome, payload=payload, score=sum(objectives), components=components,
+                         hard_valid=not violations, hard_violations=list(violations),
+                         objectives=tuple(objectives))
+
+    pop = [_eval(generator.random_genome(random.Random(i))) for i in range(population)]
+    evals = population
+    gen_idx = 0
+    while evals + population <= budget.evaluations:
+        gen_idx += 1
+        rng_g = random.Random(1000 + gen_idx)
+
+        def better(a: Candidate, b: Candidate) -> Candidate:
+            if _dominates(a, b):
+                return a
+            if _dominates(b, a):
+                return b
+            return a if rng_g.random() < 0.5 else b
+
+        offspring = []
+        for _ in range(population):
+            p1, p2 = rng_g.sample(pop, 2)
+            parent = better(p1, p2)
+            offspring.append(_eval(generator.mutate(parent.genome, rng_g)))
+        evals += population
+        merged = pop + offspring
+        # selekcja: kolejne fronty + crowding do rozmiaru population
+        next_pop: list[Candidate] = []
+        rest = list(merged)
+        while rest and len(next_pop) < population:
+            front = pareto_front(rest)
+            if len(next_pop) + len(front) <= population:
+                next_pop.extend(front)
+            else:
+                cd = _crowding(front)
+                front.sort(key=lambda c: -cd[id(c)])
+                next_pop.extend(front[: population - len(next_pop)])
+            # tożsamość, nie wartość: dataclass __eq__ porównuje pola, więc
+            # dwa RÓŻNE kandydaty o identycznych wartościach wyleciałyby
+            # hurtem, kurcząc populację (finding Task 9 review 2026-07-15)
+            front_ids = {id(c) for c in front}
+            rest = [c for c in rest if id(c) not in front_ids]
+        pop = next_pop
+    return pop
