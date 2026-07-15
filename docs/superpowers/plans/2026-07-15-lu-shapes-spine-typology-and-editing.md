@@ -18,6 +18,9 @@
 - Hard bans unchanged: every apartment touches circulation AND facade, MRR ratio ≤ 3 (`HARD_MAX_ASPECT_RATIO`); winner = best hard-valid.
 - Dual-surface rule: any new request/response field goes through BOTH `/layout/circulation`+`/layout/units` and `/layout/generate` (shared serializers `_serialize_cage_iteration` / `_serialize_unit_iteration` / `layout_result_to_response`).
 - `MIN_TRAKT_DEPTH_M` (circulation.py) and `NET_SHRINK_M` (wall_geometry.py) are imported, never re-hardcoded.
+- Trakt depth rule (user 2026-07-15): a residential band between corridor and facade is valid ONLY at depth `[MIN_TRAKT_DEPTH_M, MAX_ONE_SIDED_TRAKT_M]` (one-sided daylighting, ≤ 7 m) or `≥ MIN_THROUGH_TRAKT_M` (through-apartments, ≥ 10 m). The (7, 10) range is forbidden for axis candidates and warned about in validation. New constants in circulation.py: `MAX_ONE_SIDED_TRAKT_M = 7.0`, `MIN_THROUGH_TRAKT_M = 10.0` — import, never re-hardcode.
+- Corridor NEVER hugs a facade in `corridor_mode="double"` (user 2026-07-15: "korytarz powinien środkować") — flush axis candidates exist ONLY in `corridor_mode="gallery"`. Legacy clamp remains the last-resort fallback for degenerate zones.
+- Cage philosophy (user 2026-07-15): as FEW cages as evacuation allows (slider = maximum, engine picks the smallest k with zero red dots), positioned to waste no daylight facade (interior/by-corridor, north facade, or concave corner — never gratuitously on the south facade).
 - Git hygiene: stage ONLY files the task names, by name; never `git add -A` / `git add .`. Commit message per task as given.
 - Implementer contract: TDD where a task defines tests (write → RED → implement → GREEN); full suite once before reporting; report lists every pre-existing test you had to update, each with a 1-line justification; never weaken an assertion to presence-only.
 
@@ -772,16 +775,74 @@ def test_gallery_mode_endpoint_produces_single_loaded_corridor():
 
 (Match the target test file's existing client/fixture convention before pasting.)
 
-- [ ] **Step 2: Implement.** `_corridor_axis_offset`: add the parameter; after building `candidates`, insert:
+- [ ] **Step 2: Implement the NEW axis-candidate rule** (this REPLACES the Etap-1 rule inside `_corridor_axis_offset` — user 2026-07-15: corridor must centre in double mode, flush only in gallery, trakt depths in [4,7] ∪ [10,∞)):
+
+Add constants next to `MIN_TRAKT_DEPTH_M`:
 
 ```python
-    if prefer_flush:
-        flush = [c for c in candidates if abs(c - (lo + half)) < 1e-9 or abs(c - (hi - half)) < 1e-9]
-        if flush:
-            candidates = flush
+MAX_ONE_SIDED_TRAKT_M = 7.0
+"""Maks. głębokość traktu doświetlanego jednostronnie (user 2026-07-15)."""
+MIN_THROUGH_TRAKT_M = 10.0
+"""Min. głębokość traktu mieszkań na przestrzał; zakres (7, 10) m jest
+architektonicznie martwy -- ani jednostronne, ani przestrzałowe."""
+
+
+def _band_depth_ok(depth: float) -> bool:
+    """Dopuszczalna głębokość pasa mieszkalnego: ~0 (brak pasa), [MIN, 7]
+    (jednostronne) albo >= 10 (przestrzał)."""
+    return (
+        depth <= 1e-6
+        or MIN_TRAKT_DEPTH_M - 1e-9 <= depth <= MAX_ONE_SIDED_TRAKT_M + 1e-9
+        or depth >= MIN_THROUGH_TRAKT_M - 1e-9
+    )
 ```
 
-(Placed AFTER the touch-interval filter, so gallery never sacrifices cage contact; when no flush candidate survives, ordinary selection continues — graceful degradation.) Thread `prefer_flush` through `_build_corridor`/`_corridor_centerline` (both already share the helper) and `corridor_spine._zone_axis_segment`/`build_spine`; `place_circulation(corridor_mode: str = "double")` maps to `prefer_flush=corridor_mode == "gallery"`. Endpoint fields + frontend select per Interfaces (copy the "Strategia szukania" select block as a template; state field goes in `state.circulation` like `strategy`).
+Rewrite `_corridor_axis_offset` body (signature: `(lo, hi, half, cage_bounds, prefer_flush: bool = False)`), keeping `legacy` fallback identical:
+
+```python
+    center = (lo + hi) / 2.0
+    anchor = (cage_bounds[0] + cage_bounds[1]) / 2.0 if cage_bounds is not None else center
+    legacy = max(lo + half, min(hi - half, anchor))
+
+    def bands(mid: float) -> tuple[float, float]:
+        return (mid - half) - lo, hi - (mid + half)
+
+    candidates: list[float] = []
+    if prefer_flush:
+        # galeriowiec: korytarz przy krawędzi, jedyny trakt musi być legalny
+        for flush in (lo + half, hi - half):
+            b1, b2 = bands(flush)
+            if _band_depth_ok(b1) and _band_depth_ok(b2):
+                candidates.append(flush)
+    if not candidates:
+        # dwutrakt: oba pasy legalnej głębokości, oś możliwie blisko klatki.
+        # Szukamy najbliższego anchora punktu, gdzie OBA pasy przechodzą
+        # _band_depth_ok: skan po siatce 0.1 m jest deterministyczny, tani
+        # (max ~kilkaset kroków) i odporny na nieciągłość przedziałów.
+        step = 0.1
+        best = None
+        mid = lo + half
+        while mid <= hi - half + 1e-9:
+            b1, b2 = bands(mid)
+            if b1 > 1e-6 and b2 > 1e-6 and _band_depth_ok(b1) and _band_depth_ok(b2):
+                if best is None or abs(mid - anchor) < abs(best - anchor):
+                    best = mid
+            mid += step
+        if best is not None:
+            candidates.append(best)
+    if cage_bounds is not None:
+        touch_lo, touch_hi = cage_bounds[0] - half, cage_bounds[1] + half
+        candidates = [c for c in candidates if touch_lo <= c <= touch_hi]
+    if not candidates:
+        return legacy
+    return min(candidates, key=lambda c: abs(c - anchor))
+```
+
+Note the intentional change vs Etap 1: double mode has NO flush candidates anymore (they exist only under `prefer_flush`). Etap-1 tests that assert flush behavior in double mode (search `test_corridor_axis_offset_prefers_balanced_then_flush` and the trakt-rule contract tests from 2026-07-13) MUST be updated to the new contract: bands ~0-or-legal-depth, flush only via prefer_flush — each update justified in the report. The 68×12 repro test keeps passing (bands 4.0/6.3 valid) — if it fails, the scan logic is wrong, not the test.
+
+Thread `prefer_flush` through `_build_corridor`/`_corridor_centerline` (both already share the helper) and `corridor_spine._zone_axis_segment`/`build_spine`; `place_circulation(corridor_mode: str = "double")` maps to `prefer_flush=corridor_mode == "gallery"`. Endpoint fields + frontend select per Interfaces (copy the "Strategia szukania" select block as a template; state field goes in `state.circulation` like `strategy`).
+
+- [ ] **Step 2b: Trakt-depth warning in validation.** In `backend/services/wt_validation.py` (find the existing "heurystyka" rules — e.g. "Udział komunikacji w obrysie" — and follow their exact result-object convention) add a heuristic rule `code="heurystyka"`, description "Głębokość traktu": for each remainder band implied by the corridor (compute from `circulation_geometry` bounds vs footprint bounds per horizontal/vertical spine segment, or simpler: for each apartment cell, its depth = MRR shorter side), flag apartments whose depth falls in `(MAX_ONE_SIDED_TRAKT_M, MIN_THROUGH_TRAKT_M)` — detail listing the offending cells. NEVER cite a WT § for this — it is a user heuristic (repo rule: no fabricated §-citations).
 
 - [ ] **Step 3: GREEN + full suite + tsc + commit.**
 
@@ -792,7 +853,131 @@ git commit -m "feat: corridor_mode double|gallery replaces the cage-position sel
 
 ---
 
-### Task 9: Presety typologii naprawdę konfigurują układ
+### Task 9: Sensowne rozmieszczanie klatek (minimum klatek, bez marnowania światła, kotwice przy spine)
+
+**Files:**
+- Modify: `backend/services/cage_placement.py` (`_candidate_cages`, `_score_placement`, `iterate_cage_placement`), `frontend/app/components/CirculationSection.tsx` (slider label + weight label)
+- Test: `backend/tests/test_cage_placement.py` (append + update old-contract tests with justifications)
+
+**Interfaces:**
+- `_candidate_cages(footprint, zones, num_cages=1, spine_segments=None)` — NEW anchors along the spine (cage snapped to either side of the corridor strip, every `CANDIDATE_EDGE_STEP_M` of arc) so cages can finally sit INTERIOR by the corridor, not only on zone edges (root cause of "klatki zawsze przy elewacji").
+- `_score_placement`: component `corners` REPLACED by `light_waste` (same dict key budget: remove "corners", add "light_waste"; `CageWeights.corners` field renamed `light_waste` — update the API `CageWeightsInput`, frontend type, defaults and slider label, dual-surface).
+- `iterate_cage_placement`: minimal-k search — slider is a MAXIMUM; budget split across k=1..num_cages; winner = smallest k whose best candidate has zero red evacuation dots; if no k achieves zero, the candidate with the lowest red-dot share wins.
+
+- [ ] **Step 1: Failing tests:**
+
+```python
+def test_light_waste_component():
+    """Klatka przy południowej elewacji marnuje światło (dev→1), klatka
+    wewnętrzna/przy północnej -- nie (dev→0). Północ = +y (konwencja
+    solar.py: azymut 0 = N)."""
+    from services.cage_placement import _light_waste_for_cage
+    from shapely.geometry import box
+
+    fp = box(0, 0, 40, 12)
+    south_cage = box(10, 0, 14.2, 5.7)      # styk z y=0 (południe)
+    north_cage = box(10, 6.3, 14.2, 12)     # styk z y=12 (północ)
+    interior = box(10, 3, 14.2, 8.7)        # zero styku z obrysem
+
+    assert _light_waste_for_cage(south_cage, fp) > 0.9
+    assert _light_waste_for_cage(north_cage, fp) < 0.1
+    assert _light_waste_for_cage(interior, fp) == 0.0
+
+
+def test_minimal_k_wins_when_evacuation_satisfied():
+    """Suwak = maksimum: na 40x12 z progami domyślnymi 1 klatka wystarcza
+    (zero czerwonych) -> zwycięzca ma 1 klatkę mimo num_cages=3."""
+    footprint = _rect(0, 0, 40, 12)
+    result, metas, best_seed = iterate_cage_placement(
+        footprint, corridor_width_m=1.5, num_cages=3, weights=CageWeights(), iterations=30,
+    )
+    winner = next(m for m in metas if m.seed == best_seed)
+    reds = sum(1 for d in winner.result.evacuation_dots if d.status == "red")
+    assert reds == 0
+    assert winner.cages_count == 1, "1 klatka wystarcza na 40 m przy progach 20/40"
+
+
+def test_more_cages_when_evacuation_demands():
+    """Bardzo ciasny próg dojścia wymusza więcej klatek: zwycięzca to
+    najmniejsze k dowożące zero czerwonych (albo najlepszy egress)."""
+    footprint = _rect(0, 0, 60, 12)
+    result, metas, best_seed = iterate_cage_placement(
+        footprint, corridor_width_m=1.5, num_cages=4, weights=CageWeights(),
+        iterations=40, max_dist_single_m=12.0, max_dist_multi_m=18.0,
+    )
+    winner = next(m for m in metas if m.seed == best_seed)
+    assert winner.cages_count >= 2
+
+
+def test_candidate_pool_contains_spine_adjacent_anchors():
+    """Kotwice przy korytarzu: istnieją kandydaci NIE dotykający obrysu
+    (wnętrze budynku, dosunięci do pasa korytarza)."""
+    from services.bsp import rectangle_decompose
+    from services.circulation import Zone
+    from services.cage_placement import _candidate_cages
+
+    footprint = _rect(0, 0, 40, 12)
+    zones = [Zone(name="Z0", polygon=p) for p in rectangle_decompose(footprint)]
+    spine = [((0.0, 6.0), (40.0, 6.0))]
+    candidates = _candidate_cages(footprint, zones, num_cages=2, spine_segments=spine)
+    interior = [
+        c for _zi, c in candidates
+        if c.exterior.distance(footprint.exterior) > 0.5
+    ]
+    assert interior, "brak kandydatów wewnętrznych przy spine"
+```
+
+- [ ] **Step 2: Implement.**
+
+`_light_waste_for_cage(cage, footprint) -> float` in cage_placement.py:
+
+```python
+def _light_waste_for_cage(cage: Polygon, footprint: Polygon) -> float:
+    """Udział obwodu klatki sklejonego z elewacją NIE-północną (user
+    2026-07-15: klatka ma nie marnować doświetlanej elewacji; północ i
+    wnętrze/narożnik wewnętrzny są darmowe). Krawędź elewacji jest
+    'północna', gdy jej zewnętrzna normalna ma składową +y > |składowej x|
+    (konwencja solar.py: azymut 0 = N = +y)."""
+    edge = footprint.exterior.buffer(0.01)
+    contact = cage.boundary.intersection(edge)
+    if contact.is_empty or contact.length <= 1e-9:
+        return 0.0
+    non_north = 0.0
+    coords = list(footprint.exterior.coords)
+    # CCW ring: zewnętrzna normalna krawędzi (dx,dy) to (dy,-dx)
+    if not footprint.exterior.is_ccw:
+        coords = coords[::-1]
+    from shapely.geometry import LineString
+    for a, b in zip(coords[:-1], coords[1:]):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        nx, ny = dy, -dx
+        seg_contact = cage.boundary.intersection(LineString([a, b]).buffer(0.02))
+        if seg_contact.is_empty:
+            continue
+        is_north = ny > abs(nx)
+        if not is_north:
+            non_north += seg_contact.length
+    return min(1.0, non_north / max(contact.length, 1e-9))
+```
+
+In `_score_placement`: replace the `corners_devs` block with `light_waste = sum(_light_waste_for_cage(c, footprint) for c in cages) / k if k else 1.0`; components dict key `"corners"` → `"light_waste"`; `CageWeights.corners` → `CageWeights.light_waste` (default 0.5). Grep ALL references to `corners` in cage weights across backend (`CageWeightsInput` in endpoints), frontend (`api.ts` CageWeightsInput, `initialCirculation.cage_weights`, the WAGI KLATEK label list — new label: `["light_waste", "Nie marnuj elewacji (płd.)"]`), and localStorage backfill (merge `{ ...defaults, ...parsed }` pattern handles the rename: old sessions carry `corners`, ignored; `light_waste` fills from defaults — verify the cage_weights merge is per-key, if it's a plain object replace add a one-line backfill).
+
+Spine anchors in `_candidate_cages(..., spine_segments=None)`: after existing anchors, for each spine segment place anchors every `CANDIDATE_EDGE_STEP_M` of its length, with the cage rectangle snapped to EITHER side of the corridor strip (offset from the axis by `corridor_half + cage_depth/2`, both orientations; corridor_half = unknown here — pass `corridor_half_m: float = 0.0` as an extra parameter, threaded from the caller which knows `corridor_width_m`; candidates filtered by footprint containment as today). `iterate_cage_placement` builds a preliminary spine (`build_spine(zones..., cages_by_zone={}, ...)` — lazy import) to feed both `_candidate_cages` and (post-selection) the final assembly.
+
+Minimal-k in `iterate_cage_placement`: replace the single hybrid run with a deterministic loop `for k in range(1, num_cages + 1)`, each k getting `max(6, iterations // num_cages)` evaluations of the existing hybrid (genomes sample exactly k candidates); collect per-k best; winner = smallest k with `red_dots == 0` on its best candidate, else global best by (red-dot share, score). Metas: unique candidates across ALL k, ranked as today (dedupe_and_rank), so the user still browses everything.
+
+- [ ] **Step 3: GREEN + full suite.** Expected old-contract updates (justify each): `test_iterative_placement_delivers_requested_cage_count` / `test_count_component_penalizes_shortfall_not_more_cages` (Etap-1 "deliver requested k" contract → new minimal-k contract: slider is max; count component becomes `k / num_cages` cost again OR is dropped in favor of the minimal-k selection — implementer picks the simpler and documents it), plus any test asserting `corners` in components.
+
+- [ ] **Step 4: Commit.**
+
+```bash
+git add backend/services/cage_placement.py backend/tests/test_cage_placement.py backend/api/v1/endpoints/layout.py frontend/app/lib/api.ts frontend/app/state/SessionContext.tsx frontend/app/components/CirculationSection.tsx
+git commit -m "feat: cages seek interior/north positions (light_waste), spine-adjacent candidates, minimal count satisfying evacuation"
+```
+
+---
+
+### Task 10: Presety typologii naprawdę konfigurują układ (po Tasku 9 — używa light_waste)
 
 **Files:**
 - Modify: `frontend/app/state/SessionContext.tsx` (`applyTypologyPreset`, search that name), `frontend/app/components/CirculationSection.tsx` (`TYPOLOGY_LABELS` descriptions)
@@ -812,23 +997,23 @@ const TYPOLOGY_CONFIG: Record<string, {
 }> = {
   klatkowiec_wzdluzny: {
     corridor_mode: "double", cagesPer25m: true,
-    cage_weights: { egress: 1.0, count: 0.8, corners: 0.1, ends: 0.2, spread: 1.0 },
+    cage_weights: { egress: 1.0, count: 0.8, light_waste: 0.8, ends: 0.2, spread: 1.0 },
   },
   punktowiec: {
     corridor_mode: "double", cagesPer25m: false, // zawsze 1 klatka
-    cage_weights: { egress: 1.0, count: 0.8, corners: 0.2, ends: 0.0, spread: 0.0 },
+    cage_weights: { egress: 1.0, count: 0.8, light_waste: 0.8, ends: 0.0, spread: 0.0 },
   },
   galeriowiec: {
     corridor_mode: "gallery", cagesPer25m: true,
-    cage_weights: { egress: 1.0, count: 0.8, corners: 0.2, ends: 0.8, spread: 0.6 },
+    cage_weights: { egress: 1.0, count: 0.8, light_waste: 0.6, ends: 0.8, spread: 0.6 },
   },
   klatkowiec_narozny: {
     corridor_mode: "double", cagesPer25m: true,
-    cage_weights: { egress: 1.0, count: 0.8, corners: 1.0, ends: 0.3, spread: 0.6 },
+    cage_weights: { egress: 1.0, count: 0.8, light_waste: 1.0, ends: 0.3, spread: 0.6 },
   },
   szeregowiec: {
     corridor_mode: "gallery", cagesPer25m: true,
-    cage_weights: { egress: 1.0, count: 0.5, corners: 0.2, ends: 0.5, spread: 1.0 },
+    cage_weights: { egress: 1.0, count: 0.5, light_waste: 0.6, ends: 0.5, spread: 1.0 },
   },
 };
 ```
@@ -844,7 +1029,7 @@ git commit -m "feat: typology presets configure corridor mode, cage count and we
 
 ---
 
-### Task 10: Weryfikacja całości na żywo
+### Task 11: Weryfikacja całości na żywo
 
 **Files:** none.
 
