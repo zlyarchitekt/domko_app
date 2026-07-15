@@ -122,11 +122,14 @@ export default function IterationsSidebar() {
               const pool = state.lastIterations.filter((o) => !anyValid || o.hard_valid !== false);
               const bestSeed = pool.reduce((a, b) => (b.score < a.score ? b : a)).seed;
               // Sortowanie (user 2026-07-13): najlepsze u góry — ważne przed
-              // łamiącymi zakaz, w obrębie grupy rosnąco po score.
+              // łamiącymi zakaz; przy strategy=pareto front przed resztą
+              // (Etap 3); w obrębie grupy rosnąco po score.
               const sorted = [...state.lastIterations].sort((a, b) => {
                 const av = a.hard_valid === false ? 1 : 0;
                 const bv = b.hard_valid === false ? 1 : 0;
-                return av - bv || a.score - b.score;
+                const ap = a.is_pareto ? 0 : 1;
+                const bp = b.is_pareto ? 0 : 1;
+                return av - bv || ap - bp || a.score - b.score;
               });
               return (
                 <>
@@ -147,13 +150,19 @@ export default function IterationsSidebar() {
                         title={
                           invalid
                             ? `Narusza zakaz: ${(m.hard_violations ?? []).join("; ") || "mieszkanie bez styku z komunikacją/elewacją lub proporcje > 1:3"}`
-                            : undefined
+                            : m.objectives && m.objectives.length >= 2
+                              ? `Front Pareto — program: ${m.objectives[0].toFixed(3)}, geometria: ${m.objectives[1].toFixed(3)} (niżej = lepiej)`
+                              : undefined
                         }
                         className={`flex w-full items-center justify-between rounded px-2 py-0.5 font-mono text-[11px] transition-colors ${
                           isBest ? "text-accent-400" : "text-zinc-500"
                         } ${isActive ? "bg-accent-500/15 ring-1 ring-inset ring-accent-500/40" : "hover:bg-zinc-800/50"}`}
                       >
-                        <span>#{m.seed}{isBest ? " ★" : ""}{invalid ? <span className="text-amber-400"> ⚠</span> : ""}</span>
+                        <span>
+                          #{m.seed}{isBest ? " ★" : ""}
+                          {m.is_pareto ? <span className="text-emerald-400"> P</span> : ""}
+                          {invalid ? <span className="text-amber-400"> ⚠</span> : ""}
+                        </span>
                         <span>{m.units_count} szt.</span>
                         <span>odchylenie {m.score.toFixed(3)}</span>
                       </button>

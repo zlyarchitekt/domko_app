@@ -148,6 +148,10 @@ export interface IterationMeta {
   hard_valid?: boolean;
   /** Powody naruszenia zakazu (puste/brak gdy hard_valid). */
   hard_violations?: string[];
+  /** (program_fit, geometry_quality) przy strategy=pareto; puste inaczej. */
+  objectives?: number[];
+  /** True = kandydat na froncie Pareto (NSGA-II). */
+  is_pareto?: boolean;
 }
 
 export interface ProgramEvaluationResult {
@@ -206,7 +210,7 @@ export interface CirculationSpecInput {
   cage_iterations: number;
   cage_weights: CageWeightsInput;
   /** Strategia szukania (plan 2026-07-14 Etap 2): anneal (default) | random. */
-  strategy?: "anneal" | "random";
+  strategy?: "anneal" | "random" | "pareto";
 }
 
 export interface LayoutGenerateRequest {
@@ -216,7 +220,7 @@ export interface LayoutGenerateRequest {
   local_law?: string | null;
   iterations?: number;
   weights?: UnitWeightsInput;
-  strategy?: "anneal" | "random";
+  strategy?: "anneal" | "random" | "pareto";
 }
 
 export interface ApartmentResult {
@@ -381,7 +385,7 @@ export function subdivideUnits(
   circulationGeometry?: GeoJsonPolygon | null,
   iterations?: number,
   weights?: UnitWeightsInput,
-  strategy?: "anneal" | "random"
+  strategy?: "anneal" | "random" | "pareto"
 ): Promise<UnitsResponse> {
   // footprint/circulation_geometry are optional on the backend (older calls
   // still work without them) but required for it to compute wall_bands --

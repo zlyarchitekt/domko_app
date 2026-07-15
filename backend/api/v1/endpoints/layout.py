@@ -59,6 +59,11 @@ class IterationMetaResult(BaseModel):
     jest ważna, najlepsza w ogóle -- frontend pokazuje wtedy ostrzeżenie."""
     hard_violations: list[str] = []
     """Powody naruszenia zakazu (puste gdy hard_valid)."""
+    objectives: list[float] = []
+    """(program_fit, geometry_quality) przy strategy=pareto (plan 2026-07-14
+    Etap 3, solar dojdzie później jako trzeci element). Puste inaczej."""
+    is_pareto: bool = False
+    """True = kandydat na froncie Pareto finalnej populacji NSGA-II."""
 
 
 class CageWeightsInput(BaseModel):
@@ -112,7 +117,7 @@ class CirculationSpec(BaseModel):
     """0 = klasyczny auto-placement; >0 = tryb iteracyjny (spec 2026-07-04-
     cage-placement-iterations §4)."""
     cage_weights: CageWeightsInput = Field(default_factory=CageWeightsInput)
-    strategy: str = Field(default="anneal", pattern="^(anneal|random)$")
+    strategy: str = Field(default="anneal", pattern="^(anneal|random|pareto)$")
     """Strategia szukania silnika iteracyjnego (plan 2026-07-14 Etap 2):
     anneal = hybryda random+wyżarzanie (default), random = czysty random
     search (debug/porównania)."""
@@ -125,7 +130,7 @@ class LayoutGenerateRequest(BaseModel):
     local_law: str | None = Field(default=None)
     iterations: int = Field(default=10, ge=1, le=50)
     weights: UnitWeightsInput = Field(default_factory=UnitWeightsInput)
-    strategy: str = Field(default="anneal", pattern="^(anneal|random)$")
+    strategy: str = Field(default="anneal", pattern="^(anneal|random|pareto)$")
 
 
 class ApartmentResult(BaseModel):
@@ -516,6 +521,7 @@ def _serialize_unit_iteration(m, footprint: Polygon | None, circulation_geometry
         seed=m.seed, score=m.score, units_count=m.units_count, components=m.components,
         apartments=apartments_out, wall_bands=wall_bands_out, hard_valid=m.hard_valid,
         hard_violations=list(m.hard_violations),
+        objectives=list(m.objectives), is_pareto=m.is_pareto,
     )
 
 
@@ -656,7 +662,7 @@ class UnitsRequest(BaseModel):
     korytarzem/klatką też się narysowała."""
     iterations: int = Field(default=10, ge=1, le=50)
     weights: UnitWeightsInput = Field(default_factory=UnitWeightsInput)
-    strategy: str = Field(default="anneal", pattern="^(anneal|random)$")
+    strategy: str = Field(default="anneal", pattern="^(anneal|random|pareto)$")
 
 
 class UnitsResponse(BaseModel):

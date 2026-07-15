@@ -126,10 +126,11 @@ export default function CirculationSection() {
         Strategia szukania
         <select
           value={state.circulation.strategy ?? "anneal"}
-          onChange={(e) => setCirculation({ strategy: e.target.value as "anneal" | "random" })}
+          onChange={(e) => setCirculation({ strategy: e.target.value as "anneal" | "random" | "pareto" })}
           className="rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
         >
           <option value="anneal">Wyżarzanie (zalecane)</option>
+          <option value="pareto">Front Pareto (kompromisy)</option>
           <option value="random">Losowa</option>
         </select>
       </label>
