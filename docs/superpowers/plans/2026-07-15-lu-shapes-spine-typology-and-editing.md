@@ -20,6 +20,7 @@
 - `MIN_TRAKT_DEPTH_M` (circulation.py) and `NET_SHRINK_M` (wall_geometry.py) are imported, never re-hardcoded.
 - Trakt depth rule (user 2026-07-15): a residential band between corridor and facade is valid ONLY at depth `[MIN_TRAKT_DEPTH_M, MAX_ONE_SIDED_TRAKT_M]` (one-sided daylighting, ≤ 7 m) or `≥ MIN_THROUGH_TRAKT_M` (through-apartments, ≥ 10 m). The (7, 10) range is forbidden for axis candidates and warned about in validation. New constants in circulation.py: `MAX_ONE_SIDED_TRAKT_M = 7.0`, `MIN_THROUGH_TRAKT_M = 10.0` — import, never re-hardcode.
 - Corridor NEVER hugs a facade in `corridor_mode="double"` (user 2026-07-15: "korytarz powinien środkować") — flush axis candidates exist ONLY in `corridor_mode="gallery"`. Legacy clamp remains the last-resort fallback for degenerate zones.
+- Evacuation direction rule (user 2026-07-15): a dot counts as two-directional (gray, próg `max_dist_multi_m`) ONLY when routes to two DIFFERENT cages leave the dot in two DIFFERENT directions along the corridor graph (disjoint first edges). Two cages reachable through the SAME initial direction (e.g. dead-end stub left of the left cage) = one-directional, próg `max_dist_single_m`. Escape routes must not overlap at the start.
 - Cage philosophy (user 2026-07-15): as FEW cages as evacuation allows (slider = maximum, engine picks the smallest k with zero red dots), positioned to waste no daylight facade (interior/by-corridor, north facade, or concave corner — never gratuitously on the south facade).
 - Git hygiene: stage ONLY files the task names, by name; never `git add -A` / `git add .`. Commit message per task as given.
 - Implementer contract: TDD where a task defines tests (write → RED → implement → GREEN); full suite once before reporting; report lists every pre-existing test you had to update, each with a 1-line justification; never weaken an assertion to presence-only.
@@ -168,7 +169,7 @@ git commit -m "feat: corridor centerline segments are draggable (parallel move, 
 
 ---
 
-## CZĘŚĆ B — spine komunikacji dla L/U (backend; Taski 3→7 sekwencyjnie)
+## CZĘŚĆ B — spine komunikacji dla L/U (backend; Taski 3→8 sekwencyjnie)
 
 ### Task 3: `services/corridor_spine.py` — spójny spine z segmentów stref
 
@@ -714,7 +715,90 @@ git commit -m "feat: cage ends/spread metrics measured along the spine arc - cor
 
 ---
 
-### Task 7: Weryfikacja Części B na żywo + frontend spine passthrough
+### Task 7: Dojścia dwustronne bez pokrywania dróg (kierunkowość ewakuacji)
+
+**Files:**
+- Modify: `backend/services/evacuation.py` (dot classification — find `compute_evacuation_dots` and the code that counts reachable cages per dot)
+- Test: `backend/tests/test_evacuation.py` (append + update old-counting tests with justifications)
+
+**Interfaces:**
+- No API change. Dot statuses keep meaning: `gray` = dwustronne (≤ `max_dist_multi_m`), `green` = jednostronne (≤ `max_dist_single_m`), `red` = żadne. Classification changes: gray REQUIRES direction-disjoint routes.
+
+**Algorithm (user 2026-07-15):** a dot lies on a centerline segment between graph nodes `a` and `b`. Its two exit directions are "via a" and "via b". For each cage `c`: `via_a(c) = |dot→a| + dist_graph(a, c)`, `via_b(c) = |dot→b| + dist_graph(b, c)` (dist_graph = existing Dijkstra over the centerline graph with nodes at joints and cage entries). Status:
+- `gray` iff exist two DIFFERENT cages `c1 ≠ c2` with `via_a(c1) ≤ max_dist_multi_m` AND `via_b(c2) ≤ max_dist_multi_m` (route pair leaving in opposite directions — pick the pair greedily: best cage via a, best DIFFERENT cage via b, and the symmetric swap; two candidates, check both).
+- else `green` iff `min over cages, directions ≤ max_dist_single_m`.
+- else `red`.
+Dead-end stub beyond the outermost cage: both cages are reachable only "via" the single inward direction → never gray → user's rule holds. Between two cages: c1 via one direction, c2 via the other → gray. T-joints generalize for free (directions = incident edges of the nearest node when the dot sits at a joint — if the current implementation samples dots strictly inside segments, the two-direction model above is sufficient; note it in the report if joints carry dots).
+
+- [ ] **Step 1: Failing tests** (append to `backend/tests/test_evacuation.py`; match the file's existing fixture/builder conventions — it already builds corridors + cages for `compute_evacuation_dots`):
+
+```python
+def test_dead_end_stub_is_one_directional_even_with_two_cages():
+    """Kropka na lewo od LEWEJ klatki: obie klatki osiągalne tylko w prawo
+    (tym samym korytarzem) -> to dojście JEDNOSTRONNE (próg single), nigdy
+    gray -- drogi ewakuacji nie mogą się pokrywać (user 2026-07-15)."""
+    from services.circulation import place_circulation
+
+    footprint = Polygon([(0, 0), (60, 0), (60, 12), (0, 12)])
+    result = place_circulation(
+        footprint, corridor_width_m=1.5, stair_width_m=1.2,
+        place_cage=True, cage_size_m=2.5, cage_position="auto", num_cages=2,
+        max_dist_single_m=20.0, max_dist_multi_m=40.0,
+    )
+    if len(result.cage_polygons) < 2:
+        import pytest
+        pytest.skip("auto nie postawił 2 klatek")
+    xs = sorted(c.centroid.x for c in result.cage_polygons)
+    left_cage_x, right_cage_x = xs[0], xs[-1]
+    if left_cage_x < 6.0:
+        import pytest
+        pytest.skip("brak martwego odcinka na lewo od lewej klatki")
+    stub = [d for d in result.evacuation_dots if d.x < left_cage_x - 3.0]
+    between = [d for d in result.evacuation_dots if left_cage_x + 3.0 < d.x < right_cage_x - 3.0]
+    assert stub, "fixture ma mieć kropki na martwym odcinku"
+    assert all(d.status != "gray" for d in stub), (
+        "kropki za skrajną klatką nie mogą być dwustronne (drogi się pokrywają)"
+    )
+    assert between and any(d.status == "gray" for d in between)
+
+
+def test_gray_requires_direction_disjoint_routes_unit():
+    """Czysty test klasyfikatora (bez pipeline): korytarz 0-60, klatki w
+    x=15 i x=45. x=5: obie w prawo -> green (10 m <= 20). x=30: c1 w lewo,
+    c2 w prawo -> gray. x=5 przy progu single=8 -> red."""
+    from services.evacuation import compute_evacuation_dots
+    from shapely.geometry import box
+
+    segments = [((0.0, 6.0), (60.0, 6.0))]
+    cages = [box(12.9, 3.15, 17.1, 8.85), box(42.9, 3.15, 47.1, 8.85)]
+
+    dots = compute_evacuation_dots(segments, cages, green_max_m=20.0, gray_max_m=40.0)
+    def at(x):
+        return min(dots, key=lambda d: abs(d.x - x))
+    assert at(5.0).status == "green"
+    assert at(30.0).status == "gray"
+
+    dots_tight = compute_evacuation_dots(segments, cages, green_max_m=8.0, gray_max_m=40.0)
+    tight_at_5 = min(dots_tight, key=lambda d: abs(d.x - 5.0))
+    assert tight_at_5.status == "red"
+```
+
+(Adjust `compute_evacuation_dots`'s exact signature/cage-entry convention to the real one — read the function first; the SPEC is the three expected statuses above, do not weaken them.)
+
+- [ ] **Step 2: RED**, then implement the via-a/via-b classification per Algorithm, reusing the existing graph + Dijkstra untouched (only the per-dot status decision changes). Keep `distance_m` on the dot = the overall minimum distance (unchanged meaning).
+
+- [ ] **Step 3: GREEN + full suite.** Existing tests that counted "2 cages reachable = gray" on dead-end sections must be updated to the direction rule (justify each). The Etap-3 threshold tests (green/red flips by threshold) should pass unchanged.
+
+- [ ] **Step 4: Commit.**
+
+```bash
+git add backend/services/evacuation.py backend/tests/test_evacuation.py
+git commit -m "feat: two-directional evacuation requires direction-disjoint routes - dead-end stubs are single-direction"
+```
+
+---
+
+### Task 8: Weryfikacja Części B na żywo + frontend spine passthrough
 
 **Files:**
 - Modify: `frontend/app/lib/api.ts` (`CirculationResponse` + `subdivideUnits`), `frontend/app/state/SessionContext.tsx` (`runSubdivideUnits`)
@@ -733,7 +817,7 @@ git commit -m "feat: frontend threads spine_segments from circulation response i
 
 ## CZĘŚĆ C — uczciwa typologia (po Części B)
 
-### Task 8: `corridor_mode` (double | gallery) + usunięcie selecta "Pozycja klatki"
+### Task 9: `corridor_mode` (double | gallery) + usunięcie selecta "Pozycja klatki"
 
 **Files:**
 - Modify: `backend/services/circulation.py` (`_corridor_axis_offset` + `place_circulation`), `backend/services/corridor_spine.py` (threading), `backend/services/layout.py` (`LayoutInput`), `backend/api/v1/endpoints/layout.py` (`CirculationSpec`), `frontend/app/lib/api.ts`, `frontend/app/state/SessionContext.tsx`, `frontend/app/components/CirculationSection.tsx`
@@ -853,7 +937,7 @@ git commit -m "feat: corridor_mode double|gallery replaces the cage-position sel
 
 ---
 
-### Task 9: Sensowne rozmieszczanie klatek (minimum klatek, bez marnowania światła, kotwice przy spine)
+### Task 10: Sensowne rozmieszczanie klatek (minimum klatek, bez marnowania światła, kotwice przy spine)
 
 **Files:**
 - Modify: `backend/services/cage_placement.py` (`_candidate_cages`, `_score_placement`, `iterate_cage_placement`), `frontend/app/components/CirculationSection.tsx` (slider label + weight label)
@@ -977,7 +1061,7 @@ git commit -m "feat: cages seek interior/north positions (light_waste), spine-ad
 
 ---
 
-### Task 10: Presety typologii naprawdę konfigurują układ (po Tasku 9 — używa light_waste)
+### Task 11: Presety typologii naprawdę konfigurują układ (po Tasku 10 — używa light_waste)
 
 **Files:**
 - Modify: `frontend/app/state/SessionContext.tsx` (`applyTypologyPreset`, search that name), `frontend/app/components/CirculationSection.tsx` (`TYPOLOGY_LABELS` descriptions)
@@ -1029,7 +1113,7 @@ git commit -m "feat: typology presets configure corridor mode, cage count and we
 
 ---
 
-### Task 11: Weryfikacja całości na żywo
+### Task 12: Weryfikacja całości na żywo
 
 **Files:** none.
 
