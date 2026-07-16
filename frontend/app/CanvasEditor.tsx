@@ -973,7 +973,34 @@ export default function CanvasEditor() {
               points={toCanvasPoints(seg.points.map(([x, y]) => ({ x, y })))}
               stroke="#60a5fa"
               strokeWidth={3 / scale}
+              hitStrokeWidth={12 / scale}
               listening={state.mode === "edit-corridor-centerline"}
+              draggable={state.mode === "edit-corridor-centerline"}
+              onDragStart={(e) => {
+                e.cancelBubble = true;
+              }}
+              onDragMove={(e) => {
+                snapNodeToGrid(e.target);
+              }}
+              onDragEnd={(e) => {
+                // Przesunięcie CAŁEGO segmentu osi (user 2026-07-15): oba końce
+                // dostają tę samą deltę -> segment zostaje równoległy do siebie
+                // (odpowiednik Shift-dragu krawędzi obrysu). Wspólne końce
+                // sąsiadów jadą razem, bo edytujemy flat-path pod indeksami
+                // i oraz i+1 (flat[i]/flat[i+1] == seg.points, jak w onDblClick).
+                e.cancelBubble = true;
+                if (!state.circulationResult) return;
+                const node = e.target;
+                const dxM = Math.round(node.x() / METER_PX / CIRCULATION_SNAP_M) * CIRCULATION_SNAP_M;
+                const dyM = -Math.round(node.y() / METER_PX / CIRCULATION_SNAP_M) * CIRCULATION_SNAP_M;
+                node.position({ x: 0, y: 0 });
+                if (dxM === 0 && dyM === 0) return;
+                const flat = flattenCenterline(state.circulationResult.centerline);
+                const moved = flat.map((p, idx) =>
+                  idx === i || idx === i + 1 ? { x: p.x + dxM, y: p.y + dyM } : p
+                );
+                void runReshapeCirculation(segmentsFromFlatPath(moved));
+              }}
               onDblClick={(e) => {
                 if (state.mode !== "edit-corridor-centerline" || !state.circulationResult) return;
                 e.cancelBubble = true;

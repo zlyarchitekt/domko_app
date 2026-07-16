@@ -4,15 +4,6 @@ import { useEffect } from "react";
 import { Move } from "lucide-react";
 import { useSession } from "../state/SessionContext";
 import * as api from "../lib/api";
-import { CagePosition } from "../lib/api";
-
-const CAGE_MODES: { value: CagePosition; label: string }[] = [
-  { value: "1a", label: "1A: elewacja front" },
-  { value: "1b", label: "1B: elewacja tył/dziedziniec" },
-  { value: "2", label: "2: środek traktu" },
-  { value: "3", label: "3: narożnik" },
-  { value: "auto", label: "Auto" },
-];
 
 const TYPOLOGY_LABELS: Record<string, string> = {
   klatkowiec_wzdluzny: "Klatkowiec wzdłużny",
@@ -20,6 +11,15 @@ const TYPOLOGY_LABELS: Record<string, string> = {
   galeriowiec: "Galeriowiec",
   klatkowiec_narozny: "Klatkowiec narożny",
   szeregowiec: "Szeregowiec",
+};
+
+// Uczciwe opisy — co preset FAKTYCZNIE ustawia (plan 2026-07-15 Task 11).
+const TYPOLOGY_HINTS: Record<string, string> = {
+  klatkowiec_wzdluzny: "Dwutrakt (korytarz w środku), klatki co ~25 m, równomierny rozstaw.",
+  punktowiec: "Dwutrakt, dokładnie 1 klatka centralna.",
+  galeriowiec: "Korytarz przy elewacji (jednotrakt), klatki co ~25 m.",
+  klatkowiec_narozny: "Dwutrakt, klatki co ~25 m, silnie unikają doświetlanej elewacji.",
+  szeregowiec: "Korytarz przy elewacji, klatki co ~25 m, równomierny rozstaw.",
 };
 
 export default function CirculationSection() {
@@ -68,25 +68,25 @@ export default function CirculationSection() {
       >
         <option value="">— wybierz typologię (opcjonalnie) —</option>
         {Object.entries(TYPOLOGY_LABELS).map(([key, label]) => (
-          <option key={key} value={key}>
+          <option key={key} value={key} title={TYPOLOGY_HINTS[key]}>
             {label}
             {state.typologySuggestion?.typology === key ? " (sugerowana)" : ""}
           </option>
         ))}
       </select>
 
-      <label className="flex items-center justify-between text-xs text-zinc-400">
-        Pozycja klatki
+      <label
+        className="flex items-center justify-between text-xs text-zinc-400"
+        title="Dwutrakt: korytarz w środku, mieszkania po obu stronach. Galeriowiec: korytarz przy elewacji, mieszkania jednostronnie doświetlane."
+      >
+        Tryb korytarza
         <select
-          value={state.circulation.cage_position}
-          onChange={(e) => setCirculation({ cage_position: e.target.value as CagePosition })}
+          value={state.circulation.corridor_mode ?? "double"}
+          onChange={(e) => setCirculation({ corridor_mode: e.target.value as "double" | "gallery" })}
           className="rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
         >
-          {CAGE_MODES.map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.label}
-            </option>
-          ))}
+          <option value="double">Dwutrakt (środek)</option>
+          <option value="gallery">Galeriowiec (elewacja)</option>
         </select>
       </label>
 
@@ -200,8 +200,8 @@ export default function CirculationSection() {
           {(
             [
               ["egress", "Minimalizuj złe dojścia"],
-              ["count", "Dowieź żądaną liczbę klatek"],
-              ["corners", "Klatki w narożnikach"],
+              ["count", "Minimalizuj liczbę klatek"],
+              ["light_waste", "Nie marnuj elewacji (płd.)"],
               ["ends", "Klatki na końcach"],
               ["spread", "Równomierne rozmieszczenie"],
             ] as [keyof api.CageWeightsInput, string][]

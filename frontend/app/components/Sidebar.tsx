@@ -29,7 +29,7 @@ const TABS = ALL_TABS.filter(
 );
 
 export default function Sidebar() {
-  const { state, regenerate, clearLayout, toggleTheme } = useSession();
+  const { state, regenerate, clearLayout, clearApartments, toggleTheme } = useSession();
   const [activeTab, setActiveTab] = useState<(typeof ALL_TABS)[number]["key"]>("layout");
 
   return (
@@ -95,13 +95,23 @@ export default function Sidebar() {
               </button>
 
               <button
+                onClick={() => clearApartments()}
+                disabled={!state.layoutResult && state.lastIterations.length === 0}
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 transition-colors hover:bg-zinc-700/40 hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-30 light:hover:bg-zinc-100 light:hover:text-zinc-700"
+                title="Usuwa podział na mieszkania (iteracje, walidację); korytarz i klatki zostają"
+              >
+                <Trash2 size={13} strokeWidth={2} />
+                Wyczyść mieszkania
+              </button>
+
+              <button
                 onClick={() => clearLayout()}
                 disabled={!state.footprint || state.isLoading}
                 className="flex w-full items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 transition-colors hover:bg-red-500/10 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30 light:hover:bg-red-50 light:hover:text-red-600"
                 title="Czyści komunikację, mieszkania i elementy ręczne — obrys zostaje"
               >
                 <Trash2 size={13} strokeWidth={2} />
-                Wyczyść
+                Wyczyść wszystko
               </button>
 
               {state.error && (

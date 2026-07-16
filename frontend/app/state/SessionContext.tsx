@@ -9,6 +9,13 @@ export type Point2D = { x: number; y: number };
  * edytowalna w UI (state.iterationsCount), default 30, backend cap le=50. */
 export const ITERATIONS_COUNT = 30;
 
+/** Świeża baza seedów per uruchomienie silnika (user 2026-07-16): każde
+ * kliknięcie eksploruje INNE warianty. Odtwarzalność w ramach jednej
+ * odpowiedzi zostaje (backend deterministyczny dla danej bazy). */
+function freshBaseSeed(): number {
+  return Math.floor(Math.random() * 1_000_000_000);
+}
+
 export type EditorMode =
   | "idle"
   | "draw"
@@ -115,8 +122,40 @@ const initialCirculation: api.CirculationSpecInput = {
   max_dist_single_m: 20,
   max_dist_multi_m: 40,
   cage_iterations: 0,
-  cage_weights: { egress: 1.0, count: 0.5, corners: 0.3, ends: 0.3, spread: 0.5 },
+  cage_weights: { egress: 1.0, count: 0.5, light_waste: 0.5, ends: 0.3, spread: 0.5 },
   strategy: "anneal",
+  corridor_mode: "double",
+};
+
+/** Uczciwe presety typologii (plan 2026-07-15 §C): typologia ustawia
+ * topologię korytarza, liczbę klatek i profil wag -- nie tylko szerokość
+ * korytarza jak dotąd. num_cages liczony z długości budynku (1 klatka na
+ * każde rozpoczęte 25 m dłuższego boku bbox obrysu, min 1). */
+const TYPOLOGY_CONFIG: Record<string, {
+  corridor_mode: "double" | "gallery";
+  cagesPer25m: boolean;
+  cage_weights: api.CageWeightsInput;
+}> = {
+  klatkowiec_wzdluzny: {
+    corridor_mode: "double", cagesPer25m: true,
+    cage_weights: { egress: 1.0, count: 0.8, light_waste: 0.8, ends: 0.2, spread: 1.0 },
+  },
+  punktowiec: {
+    corridor_mode: "double", cagesPer25m: false,
+    cage_weights: { egress: 1.0, count: 0.8, light_waste: 0.8, ends: 0.0, spread: 0.0 },
+  },
+  galeriowiec: {
+    corridor_mode: "gallery", cagesPer25m: true,
+    cage_weights: { egress: 1.0, count: 0.8, light_waste: 0.6, ends: 0.8, spread: 0.6 },
+  },
+  klatkowiec_narozny: {
+    corridor_mode: "double", cagesPer25m: true,
+    cage_weights: { egress: 1.0, count: 0.8, light_waste: 1.0, ends: 0.3, spread: 0.6 },
+  },
+  szeregowiec: {
+    corridor_mode: "gallery", cagesPer25m: true,
+    cage_weights: { egress: 1.0, count: 0.5, light_waste: 0.6, ends: 0.5, spread: 1.0 },
+  },
 };
 
 const INITIAL_TOTAL_UNITS = 10;
@@ -204,6 +243,7 @@ type Action =
   | { type: "REMOVE_PROGRAM_ROW"; id: string }
   | { type: "SET_TOTAL_UNITS"; totalUnits: number }
   | { type: "SET_ITERATIONS_COUNT"; count: number }
+  | { type: "CLEAR_APARTMENTS" }
   | { type: "SET_UNIT_WEIGHT"; key: keyof api.UnitWeightsInput; value: number }
   | { type: "SET_TYPE_COLOR"; aptType: string; color: string }
   | { type: "SET_ITERATION_RESULTS"; iterations: api.IterationMeta[]; derivedTotalUnits: number; netRemainderM2: number }
@@ -324,6 +364,21 @@ function reducer(state: SessionState, action: Action): SessionState {
     case "SET_ITERATIONS_COUNT":
       // clamp do backendowego capu le=50 i sensownego minimum
       return { ...state, iterationsCount: Math.max(1, Math.min(50, Math.round(action.count))) };
+    case "CLEAR_APARTMENTS":
+      // Czyści WYŁĄCZNIE wynik podziału na mieszkania (user 2026-07-15):
+      // komunikacja (circulationResult + elementy ręczne) zostaje nietknięta,
+      // w przeciwieństwie do istniejącego "Wyczyść", które zeruje oba.
+      return {
+        ...state,
+        layoutResult: null,
+        lastIterations: [],
+        validation: null,
+        solarResult: null,
+        activeUnitSeed: null,
+        derivedTotalUnits: null,
+        netRemainderM2: null,
+        selectedApartmentId: null,
+      };
     case "SET_TOTAL_UNITS":
       return { ...state, totalUnits: action.totalUnits, program: recomputeDerivedProgram(state.program, action.totalUnits) };
     case "SET_UNIT_WEIGHT":
@@ -595,6 +650,7 @@ interface SessionContextValue {
   }) => Promise<boolean>;
   runMoveCage: (cageIndex: number, dx: number, dy: number) => Promise<boolean>;
   setIterationsCount: (count: number) => void;
+  clearApartments: () => void;
   runResizeCage: (cageIndex: number, widthM: number, depthM: number) => Promise<boolean>;
   runAddManualElement: (kind: "cage" | "corridor", points: Point2D[]) => Promise<boolean>;
   runSubdivideUnits: () => Promise<void>;
@@ -635,7 +691,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             type: "RESTORE_STATE",
             state: {
               ...parsed,
-              circulation: { ...initialCirculation, ...parsed.circulation },
+              circulation: {
+                ...initialCirculation,
+                ...parsed.circulation,
+                // per-key backfill wag klatek: stare sesje mają `corners`
+                // (usunięte 2026-07-15) i brak `light_waste` -> defaulty
+                // wypełniają brak, `corners` ignorowane. Bez tego
+                // toFixed(undefined) rzuca TypeError.
+                cage_weights: { ...initialCirculation.cage_weights, ...parsed.circulation?.cage_weights },
+              },
               iterationsCount: parsed.iterationsCount ?? ITERATIONS_COUNT,
               typeColors: { ...DEFAULT_TYPE_COLORS, ...parsed.typeColors },
             },
@@ -662,6 +726,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const setMode = useCallback((mode: EditorMode) => dispatch({ type: "SET_MODE", mode }), []);
   const setIterationsCount = useCallback(
     (count: number) => dispatch({ type: "SET_ITERATIONS_COUNT", count }), []);
+  const clearApartments = useCallback(() => dispatch({ type: "CLEAR_APARTMENTS" }), []);
   const addDrawPoint = useCallback((point: Point2D) => dispatch({ type: "ADD_DRAW_POINT", point }), []);
   const removeLastDrawPoint = useCallback(() => dispatch({ type: "REMOVE_LAST_DRAW_POINT" }), []);
 
@@ -789,6 +854,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       try {
         const result = await api.placeCirculation(footprintToPoints(state.footprint), {
           ...state.circulation,
+          base_seed: freshBaseSeed(),
           ...(overrides?.circulationOverride ?? {}),
           // manual_cages/manual_corridors zawsze na końcu — circulationOverride
           // (np. { cage_iterations: 10 } z przycisku "Rozmieść iteracyjnie")
@@ -1014,7 +1080,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         state.circulationResult.circulation_geometry,
         state.iterationsCount,
         state.unitWeights,
-        state.circulation.strategy
+        state.circulation.strategy,
+        state.circulationResult.spine_segments,
+        freshBaseSeed()
       );
       const layoutResult: api.LayoutGenerateResponse = {
         footprint_area_m2: state.footprint ? polygonAreaFromPoints(state.footprint) : 0,
@@ -1089,6 +1157,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         iterations: state.iterationsCount,
         weights: state.unitWeights,
         strategy: state.circulation.strategy,
+        base_seed: freshBaseSeed(),
       };
       const [layout, validation] = await Promise.all([
         api.generateLayout(req),
@@ -1129,18 +1198,36 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       const preset = presets.find((p) => p.key === key);
       if (!preset) return;
       const cageSize = (preset.staircase_dims_m[0] + preset.staircase_dims_m[1]) / 2;
+      // Uczciwe presety (plan 2026-07-15 Task 11): typologia ustawia też tryb
+      // korytarza, liczbę klatek i profil wag -- nie tylko szerokość korytarza.
+      const cfg = TYPOLOGY_CONFIG[key];
+      let numCages = state.circulation.num_cages;
+      if (cfg && state.footprint) {
+        const xs = state.footprint.map((p) => p.x);
+        const ys = state.footprint.map((p) => p.y);
+        const longerSide = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+        numCages = cfg.cagesPer25m ? Math.max(1, Math.ceil(longerSide / 25)) : 1;
+      }
       dispatch({
         type: "SET_CIRCULATION",
         patch: {
           corridor_width_m: preset.corridor_width_m > 0 ? preset.corridor_width_m : 1.2,
           cage_size_m: cageSize,
           place_cage: preset.corridor_width_m > 0,
+          ...(cfg
+            ? {
+                corridor_mode: cfg.corridor_mode,
+                num_cages: numCages,
+                cage_weights: cfg.cage_weights,
+                cage_iterations: state.iterationsCount,
+              }
+            : {}),
         },
       });
     } catch (err) {
       dispatch({ type: "SET_ERROR", error: err instanceof Error ? err.message : String(err) });
     }
-  }, []);
+  }, [state.footprint, state.circulation.num_cages, state.iterationsCount]);
 
   const updateApartmentsAndValidate = useCallback(async (apartments: api.ApartmentResult[]) => {
     dispatch({ type: "UPDATE_APARTMENTS", apartments });
@@ -1301,6 +1388,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       runMoveCage,
       runResizeCage,
       setIterationsCount,
+      clearApartments,
       runAddManualElement,
       runSubdivideUnits,
       runReshapeCirculation,
@@ -1346,6 +1434,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       runMoveCage,
       runResizeCage,
       setIterationsCount,
+      clearApartments,
       runAddManualElement,
       runSubdivideUnits,
       runReshapeCirculation,

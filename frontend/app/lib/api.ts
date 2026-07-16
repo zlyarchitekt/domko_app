@@ -177,7 +177,9 @@ export interface ProgramSuggestResponse {
 export interface CageWeightsInput {
   egress: number;
   count: number;
-  corners: number;
+  /** Kara za marnowanie doświetlanej elewacji przez klatkę (user 2026-07-15,
+   * zastąpiło `corners`). */
+  light_waste: number;
   ends: number;
   spread: number;
 }
@@ -211,6 +213,12 @@ export interface CirculationSpecInput {
   cage_weights: CageWeightsInput;
   /** Strategia szukania (plan 2026-07-14 Etap 2): anneal (default) | random. */
   strategy?: "anneal" | "random" | "pareto";
+  /** Topologia korytarza (plan 2026-07-15 §C): double (dwutrakt, korytarz
+   * w środku) | gallery (galeriowiec, korytarz przy elewacji). */
+  corridor_mode?: "double" | "gallery";
+  /** Baza seedów silnika (2026-07-16): losowana per klik -> każde
+   * uruchomienie eksploruje inne warianty. */
+  base_seed?: number;
 }
 
 export interface LayoutGenerateRequest {
@@ -221,6 +229,7 @@ export interface LayoutGenerateRequest {
   iterations?: number;
   weights?: UnitWeightsInput;
   strategy?: "anneal" | "random" | "pareto";
+  base_seed?: number;
 }
 
 export interface ApartmentResult {
@@ -300,6 +309,9 @@ export interface CirculationResponse {
   evacuation_dots?: EvacuationDot[];
   cage_iterations?: CageIterationMeta[];
   cage_best_seed?: number;
+  /** Segmenty osi korytarza (plan 2026-07-15) [[x,y],[x,y]] -- oddawane do
+   * /layout/units jako kierunki cięcia traktów per ramię L/U. */
+  spine_segments?: number[][][];
 }
 
 export function placeCirculation(
@@ -385,7 +397,9 @@ export function subdivideUnits(
   circulationGeometry?: GeoJsonPolygon | null,
   iterations?: number,
   weights?: UnitWeightsInput,
-  strategy?: "anneal" | "random" | "pareto"
+  strategy?: "anneal" | "random" | "pareto",
+  spineSegments?: number[][][],
+  baseSeed?: number
 ): Promise<UnitsResponse> {
   // footprint/circulation_geometry are optional on the backend (older calls
   // still work without them) but required for it to compute wall_bands --
@@ -399,6 +413,8 @@ export function subdivideUnits(
     iterations,
     weights,
     strategy,
+    spine_segments: spineSegments,
+    base_seed: baseSeed,
   });
 }
 
