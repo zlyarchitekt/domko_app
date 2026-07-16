@@ -16,10 +16,11 @@ bezpośrednio, więc robimy tak samo tutaj dla spójności."""
 
 from __future__ import annotations
 
+import math
 import random
 import uuid
 
-from shapely.geometry import Polygon, box
+from shapely.geometry import LineString, Polygon, box
 from shapely.ops import unary_union
 
 from services.layout import MIN_CELL_DIMENSION_M, ApartmentSpec
@@ -69,6 +70,8 @@ def slice_trakts(
     rng: random.Random | None,
     queue_override: list[ApartmentSpec] | None = None,
     component_order: list[int] | None = None,
+    spine_segments: list | None = None,
+    footprint=None,
 ):
     """(cells, leftover) -- kontrakt zwrotu jak fit_program_to_rectangles.
 
@@ -93,24 +96,57 @@ def slice_trakts(
         queue = []
         for spec in specs:
             queue.extend([spec] * spec.target_count)
-    components = _polygons(remainder)
+    # Typed components = (poligon, kierunek_cięcia). Kierunek pochodzi z
+    # segmentu spine dominującego w STREFIE, do której należy komponent.
+    # Fix 2026-07-15 (repro L z głęboką nogą): remainder to często JEDEN
+    # spójny poligon-L; cięty jednym kierunkiem robił długie "kiszki" w nodze.
+    # Tniemy per strefa obrysu (rectangle_decompose) -- każde ramię dostaje
+    # kierunek prostopadły do SWOJEGO korytarza. Segment dominujący = ten
+    # o najdłuższym pokryciu w strefie (sam dystans daje remisy w narożniku).
+    def _seg_horizontal(s) -> bool:
+        return abs(s[1][1] - s[0][1]) <= abs(s[1][0] - s[0][0])
+
+    typed: list[tuple[Polygon, "bool | None"]] = []
+    if footprint is not None and spine_segments:
+        from services.bsp import rectangle_decompose
+        for zone in rectangle_decompose(footprint):
+            zr = remainder.intersection(zone)
+            zparts = _polygons(zr)
+            if not zparts:
+                continue
+            zbuf = zone.buffer(0.01)
+            best = max(spine_segments, key=lambda s: LineString([s[0], s[1]]).intersection(zbuf).length)
+            horiz = _seg_horizontal(best)
+            for poly in zparts:
+                if poly.area > _AREA_TOL_M2:
+                    typed.append((poly, horiz))
+    else:
+        for poly in _polygons(remainder):
+            typed.append((poly, None))
+
     if component_order is not None:
-        components = [components[i] for i in component_order]
+        typed = [typed[i] for i in component_order if i < len(typed)]
     corridor_parts = _polygons(circulation_geometry)
     if rng is not None:
         rng.shuffle(queue)
-        rng.shuffle(components)
+        rng.shuffle(typed)
 
     cells: list = []
     leftover_parts: list[Polygon] = []
 
-    for component in components:
+    for component, precomputed_horiz in typed:
         part = next((p for p in corridor_parts if component.distance(p) < _TOUCH_TOL_M), None)
         if part is None or not queue:
             leftover_parts.append(component)
             continue
-        pminx, pminy, pmaxx, pmaxy = part.bounds
-        horizontal = (pmaxx - pminx) >= (pmaxy - pminy)
+        if precomputed_horiz is not None:
+            horizontal = precomputed_horiz
+        elif spine_segments:
+            best = min(spine_segments, key=lambda s: LineString([s[0], s[1]]).distance(component))
+            horizontal = abs(best[1][1] - best[0][1]) <= abs(best[1][0] - best[0][0])
+        else:
+            pminx, pminy, pmaxx, pmaxy = part.bounds
+            horizontal = (pmaxx - pminx) >= (pmaxy - pminy)
 
         minx, miny, maxx, maxy = component.bounds
         cursor = minx if horizontal else miny
@@ -169,13 +205,26 @@ def slice_trakts(
             leftover_parts.append(component)
             continue
 
+        # Plan cięć = (typ, bazowe_pole) z wybranych specyfikacji. Gdy
+        # komponent jest tak duży, że przy tej liczbie komórek któraś
+        # przekroczyłaby limit proporcji (component.area / n > max_cell_area),
+        # dopychamy dodatkowe cięcia POWTARZAJĄC typy (fix L 2026-07-15:
+        # wąskie głębokie skrzydło dostawało 1 specyfikację z współdzielonej
+        # kolejki i robiło jedną komórkę 6.3x20 ratio>3). Zakaz 1:3 jest
+        # twardy, więc wolimy więcej mniejszych legalnych mieszkań niż jedno
+        # nielegalne.
+        plan: list[tuple[str, float]] = [(queue[i].type, queue[i].min_area_m2) for i in selected]
+        min_cells = math.ceil(component.area / max_cell_area - 1e-9) if max_cell_area > 1e-9 else 1
+        while len(plan) < min_cells:
+            plan.append(plan[len(plan) % len(selected)])
+        total = sum(area for _, area in plan)
+
         # FAZA 2: cięcie prostopadłe z celami przeskalowanymi do pełnego
         # pola komponentu; ostatnia komórka domyka do końca (zero ogona).
         scale = component.area / total
-        for order, i in enumerate(selected):
-            spec = queue[i]
-            target = spec.min_area_m2 * scale
-            if order == len(selected) - 1:
+        for order, (cell_type, base_area) in enumerate(plan):
+            target = base_area * scale
+            if order == len(plan) - 1:
                 hi = end
             else:
                 lo_b, hi_b = cursor, end
@@ -204,7 +253,7 @@ def slice_trakts(
                 if polys2:
                     main = max(polys2, key=lambda p: p.area)
                     hi = hi2
-            cells.append(ApartmentCell(id=str(uuid.uuid4()), type=spec.type, polygon=main))
+            cells.append(ApartmentCell(id=str(uuid.uuid4()), type=cell_type, polygon=main))
             cursor = hi
 
         for i in sorted(selected, reverse=True):

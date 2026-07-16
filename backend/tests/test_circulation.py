@@ -534,29 +534,44 @@ def test_corridor_leaves_no_dead_band_user_footprint_20260713():
         assert result.circulation_geometry.distance(cage) < 1e-6
 
 
-def test_corridor_axis_offset_prefers_balanced_then_flush():
-    from services.circulation import MIN_TRAKT_DEPTH_M, _corridor_axis_offset
+def test_corridor_axis_offset_double_mode_never_flush():
+    """Zaktualizowane 2026-07-15 (Task 9): w dwutrakcie (prefer_flush=False)
+    korytarz NIGDY nie skleja się z elewacją -- oba pasy muszą mieć legalną
+    głębokość ([4,7] lub >=10), inaczej legacy clamp. Stary test zakładał
+    flush w płytkiej strefie w dwutrakcie -- to teraz zabronione."""
+    from services.circulation import MIN_TRAKT_DEPTH_M, _corridor_axis_offset, _band_depth_ok
 
-    # strefa [0, 12], korytarz half=0.85, klatka przy dole (bounds 0..5.7)
+    # strefa [0, 12], half=0.85, klatka przy dole: oba pasy legalne, oś blisko klatki
     mid = _corridor_axis_offset(0.0, 12.0, 0.85, (0.0, 5.7))
     south, north = (mid - 0.85) - 0.0, 12.0 - (mid + 0.85)
-    assert south >= MIN_TRAKT_DEPTH_M - 1e-9 and north >= MIN_TRAKT_DEPTH_M - 1e-9
-    # przedział touch: [0-0.85, 5.7+0.85] -> mid <= 6.55
-    assert mid <= 5.7 + 0.85 + 1e-9
+    assert _band_depth_ok(south) and _band_depth_ok(north)
+    assert south > 1e-6 and north > 1e-6, "dwutrakt: żaden pas nie skleja się z elewacją"
+    assert mid <= 5.7 + 0.85 + 1e-9  # touch klatki
 
-    # strefa za płytka na dwa trakty (0..7): jednotrakt przy krawędzi
+    # strefa za płytka na dwa legalne pasy (0..7) w dwutrakcie -> legacy clamp
     mid2 = _corridor_axis_offset(0.0, 7.0, 0.85, (0.0, 5.7))
-    band_lo, band_hi = (mid2 - 0.85) - 0.0, 7.0 - (mid2 + 0.85)
-    assert min(band_lo, band_hi) <= 1e-6
-    assert max(band_lo, band_hi) >= MIN_TRAKT_DEPTH_M - 1e-9
+    assert 0.85 <= mid2 <= 7.0 - 0.85 + 1e-9
 
     # strefa zbyt płytka na regułę (0..3): legacy clamp, bez wyjątku
     mid3 = _corridor_axis_offset(0.0, 3.0, 0.85, (0.0, 5.7))
     assert 0.85 <= mid3 <= 3.0 - 0.85 + 1e-9
 
-    # bez klatki, głęboka strefa: środek spełnia regułę
+    # bez klatki, głęboka strefa: oś blisko środka (skan po siatce 0.1 m nie
+    # trafia dokładnie w 6.0), oba pasy legalne
     mid4 = _corridor_axis_offset(0.0, 12.0, 0.85, None)
-    assert abs(mid4 - 6.0) < 1e-9
+    assert abs(mid4 - 6.0) <= 0.1 + 1e-9
+    assert _band_depth_ok((mid4 - 0.85) - 0.0) and _band_depth_ok(12.0 - (mid4 + 0.85))
+
+
+def test_corridor_axis_offset_prefer_flush():
+    from services.circulation import MIN_TRAKT_DEPTH_M, _corridor_axis_offset
+
+    # strefa [0,12], half 0.85, bez klatki: galeriowiec wybiera krawędź
+    # (jednotrakt >= MIN), nie środek
+    mid = _corridor_axis_offset(0.0, 12.0, 0.85, None, prefer_flush=True)
+    band_lo, band_hi = (mid - 0.85) - 0.0, 12.0 - (mid + 0.85)
+    assert min(band_lo, band_hi) <= 1e-6
+    assert max(band_lo, band_hi) >= MIN_TRAKT_DEPTH_M - 1e-9
 
 
 def test_corridor_and_centerline_share_axis():
@@ -572,3 +587,30 @@ def test_corridor_and_centerline_share_axis():
     assert y1 == y2  # korytarz poziomy
     cminy, cmaxy = corridor.bounds[1], corridor.bounds[3]
     assert abs((cminy + cmaxy) / 2.0 - y1) < 1e-9
+
+
+def test_l_shape_corridor_is_connected_and_reaches_both_wings():
+    """Plan 2026-07-15 §B: na L korytarz to JEDEN spójny poligon łączący oba
+    skrzydła (stare paski per strefa umiały się nie stykać), a centerline
+    podąża za spine (wspólny staw)."""
+    from shapely.ops import unary_union
+    from services.circulation import place_circulation
+
+    l_shape = Polygon([(0, 0), (30, 0), (30, 8), (8, 8), (8, 20), (0, 20)])
+    result = place_circulation(
+        l_shape, corridor_width_m=1.5, stair_width_m=1.2,
+        place_cage=True, cage_size_m=2.5, cage_position="auto",
+    )
+    # CAŁA komunikacja (korytarz + klatki jako spinacze) jest jednym spójnym
+    # systemem -- klatka stojąca NA korytarzu może rozbić sam pas korytarza na
+    # 2 widoczne kawałki, ale oba dotykają klatki, więc suma jest spójna.
+    assert result.circulation_geometry.geom_type == "Polygon", (
+        f"komunikacja na L musi być spójna, jest {result.circulation_geometry.geom_type}"
+    )
+    # a sam korytarz (bez klatek) dotyka każdej klatki
+    corridor_only = result.circulation_geometry.difference(unary_union(result.cage_polygons))
+    for cage in result.cage_polygons:
+        assert corridor_only.distance(cage) < 1e-6, "korytarz musi dotykać każdej klatki"
+    assert len(result.spine_segments) >= 2
+    assert result.evacuation_dots
+    assert any(d.status != "red" for d in result.evacuation_dots)

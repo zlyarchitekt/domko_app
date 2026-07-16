@@ -91,6 +91,7 @@ def validate_layout_wt(
     rules: list[WTRule] = []
     rules.append(_rule_apartment_area(layout))
     rules.append(_rule_room_width(layout))
+    rules.append(_rule_trakt_depth(layout))
     rules.append(_rule_corridor_width(layout))
     rules.append(_rule_stair_width(layout))
     rules.append(_rule_max_corridor_distance(layout, max_distance))
@@ -148,6 +149,38 @@ def _rule_room_width(layout: LayoutResult) -> WTRule:
         else "Mieszkania poniżej zalecanej szerokości pokoju (heurystyka nie-WT): " + "; ".join(failing)
     )
     return WTRule(code="heurystyka", description="Min. szerokość pokoju", passed=passed, detail=detail)
+
+
+def _apartment_depth(apt: ApartmentCell) -> float:
+    """Głębokość mieszkania = krótszy bok prostokąta opisanego (MRR)."""
+    mrr = apt.polygon.minimum_rotated_rectangle
+    xs = [p[0] for p in mrr.exterior.coords[:-1]]
+    ys = [p[1] for p in mrr.exterior.coords[:-1]]
+    import math as _m
+    side_a = _m.hypot(xs[1] - xs[0], ys[1] - ys[0])
+    side_b = _m.hypot(xs[2] - xs[1], ys[2] - ys[1])
+    return min(side_a, side_b)
+
+
+def _rule_trakt_depth(layout: LayoutResult) -> WTRule:
+    """Heurystyka (NIE WT, user 2026-07-15): trakt doświetlany jednostronnie
+    ma być <= 7 m, na przestrzał >= 10 m; głębokość w (7, 10) m jest
+    architektonicznie martwa. Flaguje mieszkania w tym zakresie."""
+    from services.circulation import MAX_ONE_SIDED_TRAKT_M, MIN_THROUGH_TRAKT_M
+    failing = [
+        f"{apt.id}: {_apartment_depth(apt):.2f} m"
+        for apt in layout.apartments
+        if MAX_ONE_SIDED_TRAKT_M + 1e-6 < _apartment_depth(apt) < MIN_THROUGH_TRAKT_M - 1e-6
+    ]
+    passed = not failing
+    detail = (
+        f"Głębokości traktów w normie (<= {MAX_ONE_SIDED_TRAKT_M:g} m jednostronne "
+        f"lub >= {MIN_THROUGH_TRAKT_M:g} m na przestrzał, heurystyka nie-WT)."
+        if passed
+        else f"Mieszkania o martwej głębokości traktu ({MAX_ONE_SIDED_TRAKT_M:g}-{MIN_THROUGH_TRAKT_M:g} m, "
+        "ani jednostronne ani na przestrzał): " + "; ".join(failing)
+    )
+    return WTRule(code="heurystyka", description="Głębokość traktu", passed=passed, detail=detail)
 
 
 def _rule_corridor_width(layout: LayoutResult) -> WTRule:

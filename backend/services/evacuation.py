@@ -135,14 +135,35 @@ def compute_evacuation_dots(
         sources = [i for i, p in enumerate(nodes) if cage.distance(Point(p)) <= CAGE_ENTRY_TOLERANCE_M]
         dist_per_cage.append(_dijkstra(len(nodes), adj, sources) if sources else [math.inf] * len(nodes))
 
-    def _status(dists: list[float]) -> tuple[str, float | None]:
-        reachable = [d for d in dists if math.isfinite(d)]
-        if not reachable:
+    def _status_directional(vu: list[float], vv: list[float]) -> tuple[str, float | None]:
+        """Klasyfikacja kierunkowa (plan 2026-07-15 Task 7): kropka jest
+        DWUSTRONNA (gray) tylko gdy istnieją DWIE RÓŻNE klatki osiągalne w
+        RÓŻNYCH kierunkach korytarza -- jedna "przez u", druga "przez v",
+        obie <= gray_max. `vu[i]`/`vv[i]` = dojście do klatki i idąc w stronę
+        węzła u / węzła v. Ślepy odcinek za skrajną klatką: obie klatki
+        osiągalne tylko w jedną stronę -> nigdy gray (drogi się pokrywają)."""
+        finite = [x for x in (vu + vv) if math.isfinite(x)]
+        if not finite:
             return "red", None
-        d = min(reachable)
-        if len(reachable) >= 2:
-            return ("gray" if d < gray_max_m else "red"), d
-        return ("green" if d < green_max_m else "red"), d
+        overall = min(finite)
+        n = len(vu)
+        gray = False
+        if n >= 2:
+            # kandydat 1: najlepsza przez u + najlepsza INNA przez v
+            cu = min(range(n), key=lambda i: vu[i])
+            cv_alt = min((i for i in range(n) if i != cu), key=lambda i: vv[i], default=None)
+            if cv_alt is not None and vu[cu] < gray_max_m and vv[cv_alt] < gray_max_m:
+                gray = True
+            # kandydat 2: najlepsza przez v + najlepsza INNA przez u
+            cv = min(range(n), key=lambda i: vv[i])
+            cu_alt = min((i for i in range(n) if i != cv), key=lambda i: vu[i], default=None)
+            if cu_alt is not None and vv[cv] < gray_max_m and vu[cu_alt] < gray_max_m:
+                gray = True
+        if gray:
+            return "gray", overall
+        if overall < green_max_m:
+            return "green", overall
+        return "red", overall
 
     dots: list[EvacuationDot] = []
     seen: set[tuple[float, float]] = set()
@@ -159,9 +180,9 @@ def compute_evacuation_dots(
             # spec §5: oś wewnątrz klatki nie dostaje kropek
             if any(c.contains(Point((x, y))) for c in cage_polygons):
                 continue
-            sample_dists = [
-                min(dc[u] + t, dc[v] + (w - t)) for dc in dist_per_cage
-            ] if dist_per_cage else []
-            status, d = _status(sample_dists)
+            # dojścia rozbite na kierunki: "przez u" i "przez v" osobno
+            vu = [dc[u] + t for dc in dist_per_cage]
+            vv = [dc[v] + (w - t) for dc in dist_per_cage]
+            status, d = _status_directional(vu, vv)
             dots.append(EvacuationDot(x=x, y=y, status=status, distance_m=d))
     return dots

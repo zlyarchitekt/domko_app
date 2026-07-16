@@ -69,3 +69,19 @@ def test_vertical_corridor_slices_horizontally():
     assert len(cells) == 3
     for c in cells:
         assert c.polygon.bounds[0] < 1e-6 and c.polygon.bounds[2] > 6 - 1e-6  # pełna szerokość
+
+
+def test_l_corridor_cuts_follow_nearest_segment():
+    """L-korytarz jako jeden poligon: bez spine bbox całości kłamie o kierunku.
+    Ze spine komponent przy poziomym ramieniu tnie się pionowo (pełna głębokość
+    traktu w pionie); każda komórka dotyka korytarza."""
+    corridor = Polygon([(0, 3), (30, 3), (30, 5), (2, 5), (2, 20), (0, 20)])
+    north_wing = box(0, 5, 30, 12).difference(box(0, 5, 2, 12))
+    spine = [((0.0, 4.0), (30.0, 4.0)), ((1.0, 5.0), (1.0, 20.0))]
+
+    cells_n, _ = slice_trakts(north_wing, corridor, _specs(60, 60, 60), rng=None, spine_segments=spine)
+    assert len(cells_n) == 3
+    for c in cells_n:
+        minx, miny, maxx, maxy = c.polygon.bounds
+        assert (maxy - miny) > 6.9  # pełna głębokość traktu (7 m) -> cięcia pionowe
+        assert c.polygon.distance(corridor) < 1e-6

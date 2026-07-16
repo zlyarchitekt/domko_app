@@ -179,30 +179,76 @@ MIN_TRAKT_DEPTH_M = 4.0
 (spec 2026-07-13 trakt-aware-corridor §A). Trakt płytszy niż to jest
 architektonicznie martwy (pokoje < 2.4 m, proporcje > 1:3) -- korytarz ma
 zostawić pas ~0 (jednotrakt) albo >= tej wartości."""
+MAX_ONE_SIDED_TRAKT_M = 7.0
+"""Maks. głębokość traktu doświetlanego jednostronnie (user 2026-07-15)."""
+MIN_THROUGH_TRAKT_M = 10.0
+"""Min. głębokość traktu mieszkań na przestrzał; zakres (7, 10) m jest
+architektonicznie martwy -- ani jednostronne, ani przestrzałowe."""
+
+
+def _band_depth_ok(depth: float) -> bool:
+    """Dopuszczalna głębokość pasa mieszkalnego (user 2026-07-15): ~0 (brak
+    pasa), [MIN_TRAKT_DEPTH_M, MAX_ONE_SIDED_TRAKT_M] (doświetlane
+    jednostronnie) albo >= MIN_THROUGH_TRAKT_M (na przestrzał). Zakres
+    (7, 10) m jest architektonicznie martwy."""
+    return (
+        depth <= 1e-6
+        or MIN_TRAKT_DEPTH_M - 1e-9 <= depth <= MAX_ONE_SIDED_TRAKT_M + 1e-9
+        or depth >= MIN_THROUGH_TRAKT_M - 1e-9
+    )
 
 
 def _corridor_axis_offset(
-    lo: float, hi: float, half: float, cage_bounds: tuple[float, float] | None
+    lo: float, hi: float, half: float, cage_bounds: tuple[float, float] | None,
+    prefer_flush: bool = False,
 ) -> float:
     """Pozycja osi korytarza na osi poprzecznej strefy [lo, hi].
 
-    Kandydaci (spec §A): (a) oba trakty >= MIN_TRAKT_DEPTH_M, oś możliwie
-    blisko klatki; (b)/(c) korytarz przy krawędzi lo/hi (jednotrakt), gdy
-    pozostały trakt >= MIN_TRAKT_DEPTH_M. Kandydat odpada, jeśli korytarz
-    przestałby dotykać klatki (przedział touch = bounds klatki +- half).
-    Brak kandydatów (strefa zbyt płytka) -> dotychczasowy clamp do wnętrza
-    strefy, żeby degeneraty zachowywały się jak przed zmianą."""
+    Reguła (user 2026-07-15): głębokości pasów mieszkalnych muszą przejść
+    `_band_depth_ok` (~0 / [4,7] / >=10). `prefer_flush=True` (galeriowiec):
+    korytarz przy krawędzi (jednotrakt), jedyny pas legalny. Inaczej
+    (dwutrakt): oś możliwie blisko klatki, gdzie OBA pasy legalne -- korytarz
+    NIGDY nie skleja się z elewacją w dwutrakcie. Kandydat odpada, jeśli
+    korytarz przestałby dotykać klatki (przedział touch = bounds klatki +-
+    half). Brak kandydatów (strefa zbyt płytka) -> clamp do wnętrza strefy."""
     center = (lo + hi) / 2.0
     anchor = (cage_bounds[0] + cage_bounds[1]) / 2.0 if cage_bounds is not None else center
     legacy = max(lo + half, min(hi - half, anchor))
 
+    def bands(mid: float) -> tuple[float, float]:
+        return (mid - half) - lo, hi - (mid + half)
+
+    def flush_candidates() -> list[float]:
+        out = []
+        for flush in (lo + half, hi - half):
+            b1, b2 = bands(flush)
+            if _band_depth_ok(b1) and _band_depth_ok(b2):
+                out.append(flush)
+        return out
+
     candidates: list[float] = []
-    bal_lo, bal_hi = lo + half + MIN_TRAKT_DEPTH_M, hi - half - MIN_TRAKT_DEPTH_M
-    if bal_lo <= bal_hi:
-        candidates.append(max(bal_lo, min(bal_hi, anchor)))
-    if (hi - lo) - 2.0 * half >= MIN_TRAKT_DEPTH_M:
-        candidates.append(lo + half)
-        candidates.append(hi - half)
+    if prefer_flush:
+        # galeriowiec: korytarz przy krawędzi, jedyny trakt musi być legalny
+        candidates = flush_candidates()
+    if not candidates:
+        # dwutrakt: oba pasy legalnej głębokości, oś możliwie blisko klatki.
+        # Skan po siatce 0.1 m jest deterministyczny, tani i odporny na
+        # nieciągłość przedziałów [4,7] u [10,inf).
+        best = None
+        mid = lo + half
+        while mid <= hi - half + 1e-9:
+            b1, b2 = bands(mid)
+            if b1 > 1e-6 and b2 > 1e-6 and _band_depth_ok(b1) and _band_depth_ok(b2):
+                if best is None or abs(mid - anchor) < abs(best - anchor):
+                    best = mid
+            mid += 0.1
+        if best is not None:
+            candidates.append(best)
+    if not candidates:
+        # strefa za płytka na legalny dwutrakt -> flush z legalnym pojedynczym
+        # traktem (jednostronne) bije martwe pasy 7-10 z centrowania. Zgodne
+        # z regułą usera: dwutrakt środkuje GDY MOŻE, inaczej jednotrakt.
+        candidates = flush_candidates()
     if cage_bounds is not None:
         touch_lo, touch_hi = cage_bounds[0] - half, cage_bounds[1] + half
         candidates = [c for c in candidates if touch_lo <= c <= touch_hi]
@@ -211,12 +257,15 @@ def _corridor_axis_offset(
     return min(candidates, key=lambda c: abs(c - anchor))
 
 
-def _build_corridor(polygon: Polygon, width: float, cage_polygon: Polygon | None = None) -> Polygon:
+def _build_corridor(
+    polygon: Polygon, width: float, cage_polygon: Polygon | None = None,
+    prefer_flush: bool = False,
+) -> Polygon:
     """Buduje korytarz wzdłuż osi dłuższego boku prostokątnej (po
     rectangle_decompose) strefy, uwzględniając wyrównanie do pozycji klatki
-    schodowej (F2-04). Przeniesiona bez zmian logiki z layout.py — działa
-    poprawnie teraz, bo strefa jest już prawie-prostokątna (patrz spec §1a:
-    to nigdy nie było zepsute, tylko strefy, które dostawała na wejściu)."""
+    schodowej (F2-04). `prefer_flush` -> galeriowiec (korytarz przy elewacji).
+    Uwaga: główny tor geometrii to teraz build_spine (Task 4); ta funkcja
+    zostaje dla _cages_share_valid_corridor (feasibility, mode-agnostic)."""
     bounds = polygon.bounds
     if len(bounds) != 4:
         return Polygon()
@@ -227,14 +276,14 @@ def _build_corridor(polygon: Polygon, width: float, cage_polygon: Polygon | None
     if w >= h:
         half = (width + 2 * NET_SHRINK_M) / 2.0
         cage_bounds = (cage_polygon.bounds[1], cage_polygon.bounds[3]) if cage_polygon else None
-        mid_y = _corridor_axis_offset(miny, maxy, half, cage_bounds)
+        mid_y = _corridor_axis_offset(miny, maxy, half, cage_bounds, prefer_flush)
         corridor = Polygon(
             [(minx, mid_y - half), (maxx, mid_y - half), (maxx, mid_y + half), (minx, mid_y + half)]
         )
     else:
         half = (width + 2 * NET_SHRINK_M) / 2.0
         cage_bounds = (cage_polygon.bounds[0], cage_polygon.bounds[2]) if cage_polygon else None
-        mid_x = _corridor_axis_offset(minx, maxx, half, cage_bounds)
+        mid_x = _corridor_axis_offset(minx, maxx, half, cage_bounds, prefer_flush)
         corridor = Polygon(
             [(mid_x - half, miny), (mid_x + half, miny), (mid_x + half, maxy), (mid_x - half, maxy)]
         )
@@ -243,7 +292,8 @@ def _build_corridor(polygon: Polygon, width: float, cage_polygon: Polygon | None
 
 
 def _corridor_centerline(
-    polygon: Polygon, width: float, cage_polygon: Polygon | None = None
+    polygon: Polygon, width: float, cage_polygon: Polygon | None = None,
+    prefer_flush: bool = False,
 ) -> tuple[tuple[float, float], tuple[float, float]] | None:
     """Oś korytarza strefy jako 2-punktowy odcinek — ta sama oś, ten sam
     warunek wyrównania do klatki co _build_corridor(), tylko zwrócona jako
@@ -262,13 +312,13 @@ def _corridor_centerline(
         if grown_width >= h:
             return None
         cage_bounds = (cage_polygon.bounds[1], cage_polygon.bounds[3]) if cage_polygon else None
-        mid_y = _corridor_axis_offset(miny, maxy, half, cage_bounds)
+        mid_y = _corridor_axis_offset(miny, maxy, half, cage_bounds, prefer_flush)
         return ((minx, mid_y), (maxx, mid_y))
     else:
         if grown_width >= w:
             return None
         cage_bounds = (cage_polygon.bounds[0], cage_polygon.bounds[2]) if cage_polygon else None
-        mid_x = _corridor_axis_offset(minx, maxx, half, cage_bounds)
+        mid_x = _corridor_axis_offset(minx, maxx, half, cage_bounds, prefer_flush)
         return ((mid_x, miny), (mid_x, maxy))
 
 
@@ -459,6 +509,10 @@ class CirculationResult:
     """list[EvacuationDot] -- spec 2026-07-04-evacuation-dots. Typ `list`
     bez parametru, żeby uniknąć importu cyklicznego (evacuation.py importuje
     stałe z tego modułu)."""
+    spine_segments: list = field(default_factory=list)
+    """Segmenty spine (plan 2026-07-15) -- źródło kierunków cięcia traktów.
+    list[tuple[tuple[float,float], tuple[float,float]]]; puste w wynikach
+    sprzed spine'u (reshape/manual, które budują geometrię inaczej)."""
 
 
 @dataclass
@@ -505,6 +559,7 @@ def _assemble_with_cages(
     corridor_width_m: float,
     max_dist_single_m: float,
     max_dist_multi_m: float,
+    prefer_flush: bool = False,
 ) -> CirculationResult:
     """Buduje korytarze, linię środkową i kropki ewakuacyjne dla zadanych klatek
     (wyznaczonych w place_circulation). Pobiera słownik local_cages (indeks strefy
@@ -520,33 +575,37 @@ def _assemble_with_cages(
 
     remainder_parts: list[Polygon] = []
 
+    # Spine (plan 2026-07-15): segmenty per strefa liczone tą samą regułą
+    # traktów co _build_corridor, ale ŁĄCZONE na szwach stref -- na L/U
+    # korytarz jest jednym spójnym poligonem zamiast luźnych pasków.
+    from services.corridor_spine import build_spine, spine_polygon  # lazy: cykl
+
+    spine = build_spine(
+        [z.polygon for z in zones],
+        {i: local_cages.get(i, []) for i in range(len(zones))},
+        corridor_width_m,
+        prefer_flush=prefer_flush,
+    )
+    corridor_poly = spine_polygon(spine, corridor_width_m, footprint)
+    if corridor_poly.area > 0:
+        circulation_geom = unary_union([circulation_geom, corridor_poly])
+
     for i, zone in enumerate(zones):
         if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
             continue
-
         zone_cages = local_cages.get(i, [])
         cages_union = unary_union(zone_cages) if zone_cages else None
         zone_remaining = zone.polygon.difference(cages_union) if cages_union is not None else zone.polygon
-
-        corridor = _build_corridor(zone_remaining, corridor_width_m, cages_union)
-        if corridor.area > 0:
-            circulation_geom = unary_union([circulation_geom, corridor])
-            zone_remaining = zone_remaining.difference(corridor)
-
+        zone_remaining = zone_remaining.difference(corridor_poly)
         if not zone_remaining.is_empty and zone_remaining.area > 1e-6:
             remainder_parts.append(zone_remaining)
 
     remainder = unary_union(remainder_parts) if remainder_parts else Polygon()
 
     raw_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
-    for i, zone in enumerate(zones):
-        if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
-            continue
-        zone_cages = local_cages.get(i, [])
-        cages_union = unary_union(zone_cages) if zone_cages else None
-        seg = _corridor_centerline(zone.polygon, corridor_width_m, cages_union)
-        if seg is not None:
-            raw_segments.extend(_split_segment_at_cage_positions(seg, zone_cages))
+    for s in spine:
+        zone_cages = local_cages.get(s.zone_index, [])
+        raw_segments.extend(_split_segment_at_cage_positions((s.p1, s.p2), zone_cages))
 
     centerline_path = _join_centerlines(raw_segments)
     cage_points = [(c.centroid.x, c.centroid.y) for c in cage_polygons]
@@ -580,6 +639,7 @@ def _assemble_with_cages(
         remainder=remainder,
         centerline=centerline,
         evacuation_dots=evacuation_dots,
+        spine_segments=[(s.p1, s.p2) for s in spine],
     )
 
 
@@ -595,6 +655,7 @@ def place_circulation(
     manual_corridors: list[list[tuple[float, float]]] | None = None,
     max_dist_single_m: float = CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M,
     max_dist_multi_m: float = CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M,
+    corridor_mode: str = "double",
 ) -> CirculationResult:
     """Etap 1: dzieli obrys na prawie-prostokątne strefy (rectangle_decompose),
     umieszcza klatkę i korytarz w każdej, zwraca zunifikowany wynik.
@@ -687,6 +748,7 @@ def place_circulation(
     result = _assemble_with_cages(
         footprint, zones, local_cages, corridor_width_m,
         max_dist_single_m, max_dist_multi_m,
+        prefer_flush=(corridor_mode == "gallery"),
     )
 
     return _merge_manual_elements(

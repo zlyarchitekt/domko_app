@@ -125,3 +125,47 @@ def test_circulation_endpoint_serializes_evacuation_dots():
     dot = body["evacuation_dots"][0]
     assert set(dot.keys()) >= {"x", "y", "status", "distance_m"}
     assert dot["status"] in {"green", "gray", "red"}
+
+
+def test_gray_requires_direction_disjoint_routes_unit():
+    """Plan 2026-07-15 Task 7: korytarz 0-60, klatki x=15 i x=45.
+    x=5: obie w prawo -> green (10 m <= 20). x=30: c1 w lewo, c2 w prawo ->
+    gray. x=5 przy progu single=8 -> red."""
+    from shapely.geometry import box
+
+    # segmenty rozcięte w pozycjach klatek (jak _split_segment_at_cage_positions
+    # w pipeline), żeby graf miał węzeł-wejście przy każdej klatce
+    segments = [((0.0, 6.0), (15.0, 6.0)), ((15.0, 6.0), (45.0, 6.0)), ((45.0, 6.0), (60.0, 6.0))]
+    cages = [box(12.9, 3.15, 17.1, 8.85), box(42.9, 3.15, 47.1, 8.85)]
+
+    dots = compute_evacuation_dots(segments, cages, green_max_m=20.0, gray_max_m=40.0)
+
+    def at(x):
+        return min(dots, key=lambda d: abs(d.x - x))
+
+    assert at(5.0).status == "green"
+    assert at(30.0).status == "gray"
+
+    dots_tight = compute_evacuation_dots(segments, cages, green_max_m=8.0, gray_max_m=40.0)
+    tight_at_5 = min(dots_tight, key=lambda d: abs(d.x - 5.0))
+    assert tight_at_5.status == "red"
+
+
+def test_dead_end_stub_is_one_directional_even_with_two_cages():
+    """Kropka na lewo od LEWEJ klatki: obie klatki osiągalne tylko w prawo
+    (tym samym korytarzem) -> dojście JEDNOSTRONNE, nigdy gray."""
+    from shapely.geometry import box
+
+    # korytarz 0-60; klatki blisko siebie po prawej (x=40, x=50), martwy
+    # odcinek 0-40 na lewo od lewej klatki. Segmenty rozcięte w pozycjach klatek.
+    segments = [((0.0, 6.0), (40.0, 6.0)), ((40.0, 6.0), (50.0, 6.0)), ((50.0, 6.0), (60.0, 6.0))]
+    cages = [box(37.9, 3.15, 42.1, 8.85), box(47.9, 3.15, 52.1, 8.85)]
+
+    dots = compute_evacuation_dots(segments, cages, green_max_m=20.0, gray_max_m=40.0)
+    stub = [d for d in dots if d.x < 35.0]
+    assert stub, "fixture ma mieć kropki na martwym odcinku"
+    assert all(d.status != "gray" for d in stub), (
+        "kropki za skrajną klatką nie mogą być dwustronne (drogi się pokrywają)"
+    )
+    between = [d for d in dots if 43.0 < d.x < 47.0]
+    assert between and any(d.status == "gray" for d in between)
