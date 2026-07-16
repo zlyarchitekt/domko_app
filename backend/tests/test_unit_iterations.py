@@ -636,6 +636,62 @@ def test_l_footprint_units_all_touch_circulation_and_facade():
     assert next(m for m in metas if m.seed == best_seed).hard_valid
 
 
+def test_l_leg_gets_filled_no_massive_leftover():
+    """Fix 2026-07-16 (user screenshot: czarna pustka w nodze L): zwycięska
+    iteracja nie może zostawić >10% remainder pustego. Łańcuch fixów:
+    component_order liczony po typed_components (nie _polygons), kara+zakaz
+    leftover w score, dolny limit pola komórki w głębokim trakcie."""
+    from services.circulation import place_circulation
+
+    fp = _rect(0, 0, 74, 12).union(_rect(60, -30, 74, 0))
+    res = place_circulation(fp, corridor_width_m=1.5, stair_width_m=1.2,
+                            place_cage=True, cage_size_m=2.6,
+                            cage_position="auto", num_cages=3)
+    cells, metas, _, _ = iterate_units(
+        res.remainder, SHARES, iterations=10,
+        circulation_geometry=res.circulation_geometry, footprint=fp,
+        spine_segments=res.spine_segments)
+    used = sum(c.polygon.area for c in cells)
+    assert used / res.remainder.area >= 0.9
+    assert metas[0].components["leftover"] <= 0.10
+    # dolny limit pola: żadna komórka w głębokim trakcie nie łamie 1:3
+    from services.unit_mix import HARD_MAX_ASPECT_RATIO, _mrr_aspect_ratio
+    assert max(_mrr_aspect_ratio(c.polygon) for c in cells) <= HARD_MAX_ASPECT_RATIO + 0.05
+
+
+def test_leftover_share_in_components_and_hard_ban():
+    """Kara leftover (2026-07-16): metas niosą components['leftover'];
+    iteracja z pustką >10% ma zakaz twardy w hard_violations."""
+    remainder = _rect(0, 0, 24, 10)
+    _, metas, _, _ = iterate_units(remainder, SHARES, iterations=3)
+    assert all("leftover" in (m.components or {}) for m in metas)
+    for m in metas:
+        share = m.components["leftover"]
+        flagged = any("niewykorzystane" in v for v in (m.hard_violations or []))
+        assert flagged == (share > 0.10)
+
+
+def test_deep_band_repeats_types_instead_of_giant_cells():
+    """Cap skali (user 2026-07-16, "kloce"): w głębokim trakcie silnik ma
+    dokładać powtórki wykonalnych typów, nie rozciągać 2 komórek do 130 m2
+    (2x max programu). Żadna komórka nie może przekroczyć 1.25x bazowego
+    metrażu + domknięcie ogona."""
+    from services.circulation import place_circulation
+
+    fp = _rect(0, 0, 74, 12).union(_rect(60, -30, 74, 0))
+    res = place_circulation(fp, corridor_width_m=1.5, stair_width_m=1.2,
+                            place_cage=True, cage_size_m=2.6,
+                            cage_position="auto", num_cages=3)
+    cells, metas, _, _ = iterate_units(
+        res.remainder, SHARES, iterations=10,
+        circulation_geometry=res.circulation_geometry, footprint=fp,
+        spine_segments=res.spine_segments)
+    biggest = max(c.polygon.area for c in cells)
+    # najcięższy typ M4: mid 81 m2; 81*1.25=101 + luz na domknięcie ogona
+    assert biggest <= 110, f"komórka {biggest:.0f} m2 -- cap skali nie działa"
+    assert metas[0].components["leftover"] <= 0.10
+
+
 def test_deep_leg_L_no_long_kiszki():
     """Repro screena 2026-07-15: L z głęboką nogą -- prawa część nogi robiła
     długie pionowe 'kiszki' (ratio 14+), bo remainder-L cięty jednym kierunkiem.

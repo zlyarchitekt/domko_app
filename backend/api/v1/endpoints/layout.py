@@ -115,7 +115,7 @@ class CirculationSpec(BaseModel):
     """Edytowalny próg zielonej kropki (heurystyka usera, nie § WT)."""
     max_dist_multi_m: float = Field(default=CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M, gt=0)
     """Edytowalny próg szarej kropki (>=2 klatki osiągalne)."""
-    cage_iterations: int = Field(default=0, ge=0, le=50)
+    cage_iterations: int = Field(default=0, ge=0, le=100)
     """0 = klasyczny auto-placement; >0 = tryb iteracyjny (spec 2026-07-04-
     cage-placement-iterations §4)."""
     cage_weights: CageWeightsInput = Field(default_factory=CageWeightsInput)
@@ -137,7 +137,7 @@ class LayoutGenerateRequest(BaseModel):
     circulation: CirculationSpec = Field(default_factory=CirculationSpec)
     apartments: list[ApartmentProgram] = Field(default_factory=list)
     local_law: str | None = Field(default=None)
-    iterations: int = Field(default=10, ge=1, le=50)
+    iterations: int = Field(default=10, ge=1, le=100)
     weights: UnitWeightsInput = Field(default_factory=UnitWeightsInput)
     strategy: str = Field(default="anneal", pattern="^(anneal|random|pareto)$")
     base_seed: int = Field(default=0, ge=0)
@@ -683,7 +683,7 @@ class UnitsRequest(BaseModel):
     wall_cells tak samo jak layout.circulation_geometry w
     layout_result_to_response(), żeby ściana między mieszkaniem a
     korytarzem/klatką też się narysowała."""
-    iterations: int = Field(default=10, ge=1, le=50)
+    iterations: int = Field(default=10, ge=1, le=100)
     weights: UnitWeightsInput = Field(default_factory=UnitWeightsInput)
     strategy: str = Field(default="anneal", pattern="^(anneal|random|pareto)$")
     spine_segments: list[list[list[float]]] | None = None

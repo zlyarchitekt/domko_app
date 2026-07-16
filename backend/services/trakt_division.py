@@ -33,6 +33,11 @@ w tym silniku są liniami osiowymi, geometrie stykają się na 0)."""
 _AREA_TOL_M2 = 0.01
 _BISECT_ITERS = 48
 
+_SCALE_CAP = 1.25
+"""Maksymalne rozciągnięcie komórki ponad bazowy metraż specyfikacji (user
+2026-07-16): powyżej dokładamy POWTÓRKI wykonalnych typów zamiast pompować
+istniejące komórki (M3 130 m2 przy targecie 64 "bez sensu")."""
+
 
 def _polygons(geom) -> list[Polygon]:
     """Wyciąga poligony z dowolnego wyniku Shapely -- w tym zdegenerowanych
@@ -61,6 +66,46 @@ def _clip(component: Polygon, horizontal: bool, lo: float, hi: float):
         box(lo, miny - 1.0, hi, maxy + 1.0) if horizontal else box(minx - 1.0, lo, maxx + 1.0, hi)
     )
     return component.intersection(clip)
+
+
+def typed_components(remainder, spine_segments=None, footprint=None) -> list:
+    """Komponenty do cięcia jako (poligon, kierunek_cięcia|None).
+
+    Kierunek pochodzi z segmentu spine dominującego w STREFIE, do której
+    należy komponent. Fix 2026-07-15 (repro L z głęboką nogą): remainder to
+    często JEDEN spójny poligon-L; cięty jednym kierunkiem robił długie
+    "kiszki" w nodze. Tniemy per strefa obrysu (rectangle_decompose) --
+    każde ramię dostaje kierunek prostopadły do SWOJEGO korytarza. Segment
+    dominujący = ten o najdłuższym pokryciu w strefie (sam dystans daje
+    remisy w narożniku).
+
+    Wydzielone z slice_trakts (fix 2026-07-16): generator genomów liczył
+    komponenty po _polygons(remainder) (np. 2), a slice_trakts budował typed
+    per strefa (np. 4) -- component_order z guardem `i < len(typed)` wycinał
+    resztę komponentów i cała noga L lądowała w leftover. Obie strony muszą
+    liczyć komponenty TĄ SAMĄ funkcją."""
+
+    def _seg_horizontal(s) -> bool:
+        return abs(s[1][1] - s[0][1]) <= abs(s[1][0] - s[0][0])
+
+    typed: list[tuple[Polygon, "bool | None"]] = []
+    if footprint is not None and spine_segments:
+        from services.bsp import rectangle_decompose
+        for zone in rectangle_decompose(footprint):
+            zr = remainder.intersection(zone)
+            zparts = _polygons(zr)
+            if not zparts:
+                continue
+            zbuf = zone.buffer(0.01)
+            best = max(spine_segments, key=lambda s: LineString([s[0], s[1]]).intersection(zbuf).length)
+            horiz = _seg_horizontal(best)
+            for poly in zparts:
+                if poly.area > _AREA_TOL_M2:
+                    typed.append((poly, horiz))
+    else:
+        for poly in _polygons(remainder):
+            typed.append((poly, None))
+    return typed
 
 
 def slice_trakts(
@@ -96,33 +141,7 @@ def slice_trakts(
         queue = []
         for spec in specs:
             queue.extend([spec] * spec.target_count)
-    # Typed components = (poligon, kierunek_cięcia). Kierunek pochodzi z
-    # segmentu spine dominującego w STREFIE, do której należy komponent.
-    # Fix 2026-07-15 (repro L z głęboką nogą): remainder to często JEDEN
-    # spójny poligon-L; cięty jednym kierunkiem robił długie "kiszki" w nodze.
-    # Tniemy per strefa obrysu (rectangle_decompose) -- każde ramię dostaje
-    # kierunek prostopadły do SWOJEGO korytarza. Segment dominujący = ten
-    # o najdłuższym pokryciu w strefie (sam dystans daje remisy w narożniku).
-    def _seg_horizontal(s) -> bool:
-        return abs(s[1][1] - s[0][1]) <= abs(s[1][0] - s[0][0])
-
-    typed: list[tuple[Polygon, "bool | None"]] = []
-    if footprint is not None and spine_segments:
-        from services.bsp import rectangle_decompose
-        for zone in rectangle_decompose(footprint):
-            zr = remainder.intersection(zone)
-            zparts = _polygons(zr)
-            if not zparts:
-                continue
-            zbuf = zone.buffer(0.01)
-            best = max(spine_segments, key=lambda s: LineString([s[0], s[1]]).intersection(zbuf).length)
-            horiz = _seg_horizontal(best)
-            for poly in zparts:
-                if poly.area > _AREA_TOL_M2:
-                    typed.append((poly, horiz))
-    else:
-        for poly in _polygons(remainder):
-            typed.append((poly, None))
+    typed = typed_components(remainder, spine_segments, footprint)
 
     if component_order is not None:
         typed = [typed[i] for i in component_order if i < len(typed)]
@@ -131,12 +150,30 @@ def slice_trakts(
         rng.shuffle(queue)
         rng.shuffle(typed)
 
+    # Fix 2026-07-16 (repro L): komponenty o NAJPŁYTSZYM trakcie mają
+    # najmniejsze max_cell_area, więc muszą wybierać specyfikacje z kolejki
+    # PIERWSZE -- inaczej wcześniejsze głębokie komponenty zjadają wszystkie
+    # małe typy i płytki pas zostaje w całości w leftover (206 m2 pustki,
+    # bo w kolejce zostały same M3/M4 > 48 m2). Sort stabilny: w ramach tej
+    # samej głębokości porządek genomu (shuffle/component_order) zostaje.
+    def _component_depth(item):
+        poly, horiz = item
+        minx, miny, maxx, maxy = poly.bounds
+        if horiz is None:
+            return min(maxx - minx, maxy - miny)
+        return (maxy - miny) if horiz else (maxx - minx)
+
+    typed.sort(key=_component_depth)
+
     cells: list = []
     leftover_parts: list[Polygon] = []
 
     for component, precomputed_horiz in typed:
         part = next((p for p in corridor_parts if component.distance(p) < _TOUCH_TOL_M), None)
-        if part is None or not queue:
+        # Pusta kolejka NIE wysyła komponentu do leftover (fix 2026-07-16):
+        # selekcja niżej ma fallback powtórek spoza kolejki -- lepiej dołożyć
+        # mieszkanie ponad zadane liczby niż zostawić pusty komponent.
+        if part is None:
             leftover_parts.append(component)
             continue
         if precomputed_horiz is not None:
@@ -164,12 +201,22 @@ def slice_trakts(
         # komponentu, więc komponent nie zostawia ogona (stary kod mergował
         # ogon w ostatnią komórkę -> 102.7 m2, ratio 6.4).
         max_cell_area = HARD_MAX_ASPECT_RATIO * component_depth * component_depth
-        min_cell_area = MIN_CELL_DIMENSION_M * component_depth
+        # Dolny limit pola z DWÓCH ograniczeń: minimalny wymiar komórki ORAZ
+        # zakaz 1:3 od dołu (fix 2026-07-16, repro L z traktem 12.2 m: komórka
+        # A w trakcie D ma szerokość A/D, więc A < D^2/3 daje proporcje D/(A/D)
+        # > 3 -- M2 43 m2 w trakcie 12.2 m wychodziła 3.5 m szeroka, ratio 3.5).
+        min_cell_area = max(
+            MIN_CELL_DIMENSION_M,
+            component_depth / HARD_MAX_ASPECT_RATIO,
+        ) * component_depth
 
         selected: list[int] = []
         total = 0.0
         for i, spec in enumerate(queue):
-            if spec.min_area_m2 > max_cell_area:
+            # Za duży NA ten trakt (ratio od góry) LUB za mały (fix 2026-07-16:
+            # M1 28.5 w trakcie 12.2 m to szerokość 2.3, ratio 5.2 -- a wybrany
+            # kotwiczył skalę i blokował cap powtórek, stąd komórki 141 m2).
+            if spec.min_area_m2 > max_cell_area or spec.min_area_m2 < min_cell_area - 1e-9:
                 continue
             selected.append(i)
             total += spec.min_area_m2
@@ -201,10 +248,6 @@ def slice_trakts(
             total += queue[addable].min_area_m2
             next_i = addable + 1
 
-        if not selected:
-            leftover_parts.append(component)
-            continue
-
         # Plan cięć = (typ, bazowe_pole) z wybranych specyfikacji. Gdy
         # komponent jest tak duży, że przy tej liczbie komórek któraś
         # przekroczyłaby limit proporcji (component.area / n > max_cell_area),
@@ -214,10 +257,44 @@ def slice_trakts(
         # twardy, więc wolimy więcej mniejszych legalnych mieszkań niż jedno
         # nielegalne.
         plan: list[tuple[str, float]] = [(queue[i].type, queue[i].min_area_m2) for i in selected]
+        if not plan:
+            # Kolejka nie ma już specyfikacji wykonalnych przy tej głębokości
+            # (np. M1/M2 zostały, a trakt 12 m wymaga >=D^2/3 ~ 50 m2).
+            # Powtórki SPOZA kolejki (user 2026-07-16: "niech robi powtórki"):
+            # bierzemy wykonalny typ z pełnego programu -- przekroczenie
+            # zadanych liczb typów to miękka kara (mix), pusty komponent to
+            # zakaz twardy (leftover >10%).
+            feasible = [
+                s for s in specs
+                if min_cell_area - 1e-9 <= s.min_area_m2 <= max_cell_area
+            ]
+            if not feasible:
+                leftover_parts.append(component)
+                continue
+            base = max(feasible, key=lambda s: (s.target_count, -s.min_area_m2))
+            plan = [(base.type, base.min_area_m2)]
         min_cells = math.ceil(component.area / max_cell_area - 1e-9) if max_cell_area > 1e-9 else 1
         while len(plan) < min_cells:
-            plan.append(plan[len(plan) % len(selected)])
+            plan.append(plan[len(plan) % max(1, len(plan))])
+        base_cycle = list(plan)
         total = sum(area for _, area in plan)
+
+        # Cap skali (user 2026-07-16, "kloce" w nodze L): bez niego 2 sztuki
+        # M3 z końca kolejki rozciągały się do 130 m2 (2x max programu),
+        # zamiast dołożyć POWTÓRKI wykonalnego typu. Dokładamy powtórki
+        # cyklicznie, aż komórki wracają w okolice targetu -- chyba że
+        # kolejna powtórka zwęziłaby najmniejszą komórkę poniżej
+        # min_cell_area (wtedy lekkie rozciągnięcie legalne > nielegalne
+        # wąskie cięcie).
+        while component.area / total > _SCALE_CAP:
+            candidate = base_cycle[len(plan) % len(base_cycle)]
+            new_total = total + candidate[1]
+            new_scale = component.area / new_total
+            smallest = min(a for _, a in plan + [candidate])
+            if smallest * new_scale < min_cell_area - 1e-9:
+                break
+            plan.append(candidate)
+            total = new_total
 
         # FAZA 2: cięcie prostopadłe z celami przeskalowanymi do pełnego
         # pola komponentu; ostatnia komórka domyka do końca (zero ogona).

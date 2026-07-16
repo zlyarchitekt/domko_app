@@ -285,6 +285,14 @@ HARD_MAX_ASPECT_RATIO = 3.0
 Dla kształtów nieprostokątnych liczone po prostokącie opisanym
 (minimum_rotated_rectangle) -- "wpisywanie kształtu w prostokąt"."""
 
+LEFTOVER_WEIGHT = 3.0
+LEFTOVER_HARD_SHARE = 0.10
+"""Kara za niewykorzystaną powierzchnię remainder (user 2026-07-16, repro L:
+zwycięska iteracja zostawiała 476 m2 pustki w nodze, bo score w ogóle tego
+nie widział). Udział pustki wchodzi do score z wagą LEFTOVER_WEIGHT
+(nienastawialna suwakiem -- pustka to wada planu, nie preferencja), a powyżej
+LEFTOVER_HARD_SHARE iteracja łamie zakaz twardy."""
+
 
 def _mrr_aspect_ratio(polygon) -> float:
     """Stosunek dłuższego do krótszego boku prostokąta opisanego (>= 1.0).
@@ -319,15 +327,28 @@ def _cell_geometry_devs(cell: ApartmentCell) -> tuple[float, float, float]:
     return grid, shape, squareness
 
 
-def _merge_leftover_into_cells(cells: list[ApartmentCell], leftover) -> None:
-    """Zero resztek: część leftover -> mieszkanie o najdłuższej wspólnej
-    krawędzi; bez sąsiada -> najbliższe mieszkanie + merged_disjoint.
-    Mutuje cells in-place."""
+MERGE_MAX_M2 = 40.0
+"""Górny limit części leftover wchłanianej przez sąsiednie mieszkanie (user
+2026-07-16, "kloce"): merge służy domykaniu OGONÓW cięcia, nie ukrywaniu
+całych niepociętych komponentów -- 586 m2 wcielone w M4 zerowało leftover
+i przechodziło zakazy. Większe części zostają leftoverem, więc kara i
+hard-ban >10% je widzą, a iteracja uczciwie przegrywa."""
+
+
+def _merge_leftover_into_cells(cells: list[ApartmentCell], leftover):
+    """Zero resztek dla ogonów: część leftover (<= MERGE_MAX_M2) ->
+    mieszkanie o najdłuższej wspólnej krawędzi; bez sąsiada -> najbliższe
+    mieszkanie + merged_disjoint. Większe części ZOSTAJĄ i wracają jako
+    (Multi)Polygon | None. Mutuje cells in-place."""
     if leftover is None or leftover.is_empty or not cells:
-        return
+        return leftover
     parts = list(leftover.geoms) if hasattr(leftover, "geoms") else [leftover]
+    kept: list = []
     for part in parts:
         if part.is_empty or part.area < 1e-9:
+            continue
+        if part.area > MERGE_MAX_M2:
+            kept.append(part)
             continue
         best_i, best_shared = -1, 0.0
         for i, cell in enumerate(cells):
@@ -342,6 +363,9 @@ def _merge_leftover_into_cells(cells: list[ApartmentCell], leftover) -> None:
             cells[nearest].merged_disjoint = True
     for cell in cells:
         cell.net_area_m2 = net_polygon(cell.polygon).area
+    if not kept:
+        return None
+    return unary_union(kept)
 
 
 def _score_iteration(
@@ -490,8 +514,11 @@ class _UnitsGenerator:
         self._n_queue = len(self._canonical_queue)
 
         if use_trakts:
-            from services.trakt_division import _polygons
-            self._n_comp = len(_polygons(remainder))
+            # TA SAMA funkcja co w slice_trakts (fix 2026-07-16): liczenie po
+            # _polygons(remainder) rozjeżdżało się z typed per-strefa i
+            # component_order wycinał komponenty (pusta noga L).
+            from services.trakt_division import typed_components
+            self._n_comp = len(typed_components(remainder, spine_segments, footprint))
         else:
             self._n_comp = len(rectangles)
 
@@ -586,10 +613,29 @@ def iterate_units(
     gen = _UnitsGenerator(remainder, specs, rectangles, use_trakts, circulation_geometry, net_area, shares,
                           spine_segments=spine_segments, footprint=footprint)
 
+    remainder_area = remainder.area if remainder is not None else 0.0
+
+    def _leftover_share(cells) -> float:
+        if remainder_area <= 1e-9:
+            return 0.0
+        used = sum(c.polygon.area for c in cells)
+        return max(0.0, 1.0 - used / remainder_area)
+
+    def _apply_leftover(score, components, violations, cells):
+        share = _leftover_share(cells)
+        components = dict(components)
+        components["leftover"] = round(share, 4)
+        score += LEFTOVER_WEIGHT * share
+        if share > LEFTOVER_HARD_SHARE:
+            violations = list(violations) + [
+                f"niewykorzystane {share:.0%} powierzchni (limit {LEFTOVER_HARD_SHARE:.0%})"
+            ]
+        return score, components, violations
+
     def _evaluator(genome, cells):
         score, components = _score_iteration(cells, shares, weights, footprint, circulation_geometry)
         violations = hard_constraint_violations(cells, footprint, circulation_geometry)
-        return score, components, violations
+        return _apply_leftover(score, components, violations, cells)
 
     from services.optimize import (
         Budget,
@@ -609,7 +655,10 @@ def iterate_units(
         def _evaluator_multi(genome, cells):
             _score, components = _score_iteration(cells, shares, weights, footprint, circulation_geometry)
             violations = hard_constraint_violations(cells, footprint, circulation_geometry)
-            return objectives_from_components(components, weights), components, violations
+            _zero, components, violations = _apply_leftover(0.0, components, violations, cells)
+            prog, geo = objectives_from_components(components, weights)
+            prog += LEFTOVER_WEIGHT * components["leftover"]
+            return (prog, geo), components, violations
 
         population = max(6, min(24, iterations // 4 * 2))
         pop = run_nsga2(gen, _evaluator_multi, Budget(evaluations=iterations), population=population,

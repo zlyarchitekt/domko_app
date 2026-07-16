@@ -6,7 +6,7 @@ import * as api from "../lib/api";
 export type Point2D = { x: number; y: number };
 
 /** DOMYŚLNA liczba iteracji silnika (klatki i mieszkania) -- user 2026-07-14:
- * edytowalna w UI (state.iterationsCount), default 30, backend cap le=50. */
+ * edytowalna w UI (state.iterationsCount), default 30, backend cap le=100. */
 export const ITERATIONS_COUNT = 30;
 
 /** Świeża baza seedów per uruchomienie silnika (user 2026-07-16): każde
@@ -362,8 +362,8 @@ function reducer(state: SessionState, action: Action): SessionState {
         program: recomputeDerivedProgram(state.program.filter((row) => row.id !== action.id), state.totalUnits),
       };
     case "SET_ITERATIONS_COUNT":
-      // clamp do backendowego capu le=50 i sensownego minimum
-      return { ...state, iterationsCount: Math.max(1, Math.min(50, Math.round(action.count))) };
+      // clamp do backendowego capu le=100 i sensownego minimum
+      return { ...state, iterationsCount: Math.max(1, Math.min(100, Math.round(action.count))) };
     case "CLEAR_APARTMENTS":
       // Czyści WYŁĄCZNIE wynik podziału na mieszkania (user 2026-07-15):
       // komunikacja (circulationResult + elementy ręczne) zostaje nietknięta,

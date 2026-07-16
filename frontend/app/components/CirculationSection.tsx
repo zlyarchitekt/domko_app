@@ -112,7 +112,7 @@ export default function CirculationSection() {
           type="number"
           step={1}
           min={1}
-          max={50}
+          max={100}
           value={state.iterationsCount}
           onChange={(e) => setIterationsCount(Number(e.target.value))}
           className="w-16 rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 font-mono text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
