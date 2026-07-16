@@ -110,6 +110,10 @@ class LayoutInput:
     iterations: int = 10
     strategy: str = "anneal"
     """Strategia szukania (plan 2026-07-14 Etap 2): anneal | random."""
+    corridor_mode: str = "double"
+    """Topologia korytarza (plan 2026-07-15 §C): double | gallery."""
+    base_seed: int = 0
+    """Baza seedów silnika (user 2026-07-16) -- patrz CirculationSpec."""
     unit_weights: object = None
     """services.unit_mix.UnitWeights | None."""
     program_shares: list = field(default_factory=list)
@@ -209,6 +213,8 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
             max_dist_single_m=input.max_dist_single_m,
             max_dist_multi_m=input.max_dist_multi_m,
             strategy=input.strategy,
+            corridor_mode=input.corridor_mode,
+            base_seed=input.base_seed,
         )
         circulation = _merge_manual_elements(
             circulation, footprint, input.corridor_width_m,
@@ -246,6 +252,7 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
             manual_corridors=input.manual_corridors,
             max_dist_single_m=input.max_dist_single_m,
             max_dist_multi_m=input.max_dist_multi_m,
+            corridor_mode=input.corridor_mode,
         )
 
     if input.program_shares:
@@ -259,6 +266,8 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
             footprint=footprint,
             circulation_geometry=circulation.circulation_geometry,
             strategy=input.strategy,
+            spine_segments=getattr(circulation, "spine_segments", None) or None,
+            base_seed=input.base_seed,
         )
         leftover = None
         rem = circulation.remainder

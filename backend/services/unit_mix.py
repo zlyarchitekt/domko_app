@@ -472,7 +472,8 @@ class _UnitsGenerator:
     rectangles). `build` stosuje obie permutacje DETERMINISTYCZNIE (rng=None
     w wywołaniu silnika ciachającego) zamiast losowego tasowania w środku."""
 
-    def __init__(self, remainder, specs, rectangles, use_trakts, circulation_geometry, net_area, shares):
+    def __init__(self, remainder, specs, rectangles, use_trakts, circulation_geometry, net_area, shares,
+                 spine_segments=None, footprint=None):
         self.remainder = remainder
         self.specs = specs
         self.rectangles = rectangles
@@ -480,6 +481,8 @@ class _UnitsGenerator:
         self.circulation_geometry = circulation_geometry
         self.net_area = net_area
         self.shares = shares
+        self.spine_segments = spine_segments
+        self.footprint = footprint
 
         self._canonical_queue: list[ApartmentSpec] = []
         for spec in specs:
@@ -523,6 +526,7 @@ class _UnitsGenerator:
             cells, leftover = slice_trakts(
                 self.remainder, self.circulation_geometry, self.specs, rng=None,
                 queue_override=permuted_queue, component_order=list(comp_order),
+                spine_segments=self.spine_segments, footprint=self.footprint,
             )
         else:
             cells, leftover = fit_program_to_rectangles(
@@ -547,9 +551,14 @@ def iterate_units(
     footprint: Polygon | None = None,
     circulation_geometry=None,
     strategy: str = "anneal",
+    spine_segments=None,
+    base_seed: int = 0,
 ) -> tuple[list[ApartmentCell], list[IterationMeta], int, int]:
     """Iteracyjny podział (spec §2): seeded przebiegi, zero-leftover merge,
-    scoring 7-wagowy, wygrywa najniższy score."""
+    scoring 7-wagowy, wygrywa najniższy score.
+
+    `spine_segments` (plan 2026-07-15 Task 5): kierunki cięcia traktów per
+    ramię L/U -- przekazywane do slice_trakts."""
     weights = weights or UnitWeights()
     if hasattr(remainder, "geoms"):
         net_area = sum(net_polygon(p).area for p in remainder.geoms)
@@ -574,7 +583,8 @@ def iterate_units(
     use_trakts = circulation_geometry is not None and not circulation_geometry.is_empty
     rectangles = [] if use_trakts else rectangle_decompose(remainder)
 
-    gen = _UnitsGenerator(remainder, specs, rectangles, use_trakts, circulation_geometry, net_area, shares)
+    gen = _UnitsGenerator(remainder, specs, rectangles, use_trakts, circulation_geometry, net_area, shares,
+                          spine_segments=spine_segments, footprint=footprint)
 
     def _evaluator(genome, cells):
         score, components = _score_iteration(cells, shares, weights, footprint, circulation_geometry)
@@ -602,7 +612,8 @@ def iterate_units(
             return objectives_from_components(components, weights), components, violations
 
         population = max(6, min(24, iterations // 4 * 2))
-        pop = run_nsga2(gen, _evaluator_multi, Budget(evaluations=iterations), population=population)
+        pop = run_nsga2(gen, _evaluator_multi, Budget(evaluations=iterations), population=population,
+                        rng_offset=base_seed)
         front_ids = {id(c) for c in pareto_front(pop)}
         ranked = dedupe_and_rank(pop, limit=iterations)
         ranked.sort(key=lambda c: (0 if c.hard_valid else 1, 0 if id(c) in front_ids else 1, c.score))
@@ -626,14 +637,14 @@ def iterate_units(
     n_seed = max(5, iterations // 3) if iterations >= 2 else iterations
     n_seed = min(n_seed, iterations)
     random_phase = [
-        evaluate_genome(gen, _evaluator, gen.random_genome(random.Random(seed)))
+        evaluate_genome(gen, _evaluator, gen.random_genome(random.Random(base_seed + seed)))
         for seed in range(n_seed)
     ]
     if strategy == "random":
         # czysty random search: cały budżet na losowanie (debug/porównania)
         n_seed = iterations
         random_phase += [
-            evaluate_genome(gen, _evaluator, gen.random_genome(random.Random(seed)))
+            evaluate_genome(gen, _evaluator, gen.random_genome(random.Random(base_seed + seed)))
             for seed in range(len(random_phase), iterations)
         ]
     sa_budget = iterations - n_seed
@@ -642,6 +653,7 @@ def iterate_units(
         starts = dedupe_and_rank(random_phase, limit=3)
         history += run_simulated_annealing(
             gen, _evaluator, Budget(evaluations=sa_budget), seed_candidates=starts, restarts=min(3, len(starts)) or 1,
+            rng_offset=base_seed,
         )
     ranked = dedupe_and_rank(history, limit=iterations)
     metas = [

@@ -126,3 +126,39 @@ def test_circulation_endpoint_net_geometry_is_actually_smaller():
     raw_area = shape(body["circulation_geometry"]).area
     net_area = shape(body["circulation_geometry_net"]).area
     assert net_area < raw_area
+
+
+def test_gallery_mode_endpoint_produces_single_loaded_corridor():
+    """Task 9: galeriowiec -> korytarz przy jednej z długich elewacji."""
+    from shapely.geometry import shape
+
+    body = {
+        "footprint": [[0, 0], [40, 0], [40, 12], [0, 12]],
+        "circulation": {"corridor_width_m": 1.5, "place_cage": True, "cage_size_m": 2.5,
+                        "corridor_mode": "gallery"},
+    }
+    r = client.post("/api/v1/layout/circulation", json=body)
+    assert r.status_code == 200
+    corridor = shape(r.json()["circulation_geometry"])
+    minx, miny, maxx, maxy = corridor.bounds
+    assert miny <= 1e-6 or maxy >= 12 - 1e-6, "galeriowiec: korytarz przy elewacji"
+
+
+def test_double_mode_endpoint_corridor_centred():
+    """Task 9: dwutrakt -> korytarz NIE dotyka długiej elewacji (środkuje)."""
+    from shapely.geometry import shape
+
+    body = {
+        "footprint": [[0, 0], [40, 0], [40, 12], [0, 12]],
+        "circulation": {"corridor_width_m": 1.5, "place_cage": True, "cage_size_m": 2.5,
+                        "corridor_mode": "double"},
+    }
+    r = client.post("/api/v1/layout/circulation", json=body)
+    assert r.status_code == 200
+    corridor = shape(r.json()["circulation_geometry"])
+    # korytarz (bez klatki) odsunięty od obu długich elewacji y=0, y=12
+    from shapely.ops import unary_union
+    cages = unary_union([shape(c) for c in r.json()["cage_geometries"]])
+    corridor_only = corridor.difference(cages)
+    cminx, cminy, cmaxx, cmaxy = corridor_only.bounds
+    assert cminy > 1e-6 and cmaxy < 12 - 1e-6, "dwutrakt: korytarz nie skleja się z elewacją"

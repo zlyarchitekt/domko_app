@@ -27,11 +27,13 @@ CANDIDATE_EDGE_STEP_M = 5.0
 
 @dataclass
 class CageWeights:
-    """5 wag scoringu lokalizacji klatek (spec §2, mapowanie z Finch)."""
+    """5 wag scoringu lokalizacji klatek. `light_waste` (user 2026-07-15)
+    zastąpił dawne `corners`: kara za marnowanie doświetlanej elewacji przez
+    klatkę zamiast nagrody za dowolny narożnik."""
 
     egress: float = 1.0
     count: float = 0.5
-    corners: float = 0.3
+    light_waste: float = 0.5
     ends: float = 0.3
     spread: float = 0.5
 
@@ -50,13 +52,52 @@ class CageIterationMeta:
 
 
 def _candidate_cages(
-    footprint: Polygon, zones: list[Zone], num_cages: int = 1
+    footprint: Polygon, zones: list[Zone], num_cages: int = 1,
+    spine_segments: list | None = None, corridor_half_m: float = 0.0,
 ) -> list[tuple[int, Polygon]]:
     """Pula kandydatów: (indeks_strefy, prostokąt klatki). Kotwice: narożniki
-    bbox strefy, środki krawędzi bbox; obie orientacje klatki; tylko
-    kandydaci w całości wewnątrz obrysu (spec §3.1)."""
+    bbox strefy, środki krawędzi bbox; obie orientacje klatki; oraz (plan
+    2026-07-15 Task 10) kotwice PRZY SPINE -- klatka dosunięta do boku
+    korytarza, żeby mogła stanąć wewnątrz budynku (nie tylko przy elewacji).
+    Tylko kandydaci w całości wewnątrz obrysu (spec §3.1)."""
     fp = footprint.buffer(1e-9)
     candidates: list[tuple[int, Polygon]] = []
+
+    def _add_cage(cage: Polygon) -> None:
+        if not fp.contains(cage):
+            return
+        for zi2, z2 in enumerate(zones):
+            if z2.polygon.buffer(1e-9).contains(cage):
+                candidates.append((zi2, cage))
+                return
+
+    # Kotwice przy spine: co CANDIDATE_EDGE_STEP_M wzdłuż osi, klatka dosunięta
+    # do KAŻDEGO boku korytarza (obie orientacje) -- klatka wewnętrzna przy
+    # korytarzu, nie tylko na krawędziach stref (przyczyna "klatki zawsze
+    # przy elewacji").
+    if spine_segments:
+        for (p1, p2) in spine_segments:
+            seg_len = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+            if seg_len < 1e-6:
+                continue
+            horizontal = abs(p2[1] - p1[1]) <= abs(p2[0] - p1[0])
+            axis = p1[1] if horizontal else p1[0]
+            s = 0.0
+            while s <= seg_len + 1e-9:
+                t = s / seg_len
+                sx = p1[0] + (p2[0] - p1[0]) * t
+                sy = p1[1] + (p2[1] - p1[1]) * t
+                for w, d in ((CAGE_WIDTH_M, CAGE_DEPTH_M), (CAGE_DEPTH_M, CAGE_WIDTH_M)):
+                    if horizontal:
+                        for sign in (1, -1):
+                            y0 = axis + corridor_half_m if sign > 0 else axis - corridor_half_m - d
+                            _add_cage(box(sx - w / 2, y0, sx + w / 2, y0 + d))
+                    else:
+                        for sign in (1, -1):
+                            x0 = axis + corridor_half_m if sign > 0 else axis - corridor_half_m - w
+                            _add_cage(box(x0, sy - d / 2, x0 + w, sy + d / 2))
+                s += CANDIDATE_EDGE_STEP_M
+
     for zi, zone in enumerate(zones):
         if not zone.polygon.is_valid or zone.polygon.area < 1e-6:
             continue
@@ -125,6 +166,56 @@ def assign_cages_to_zones(cages: list[Polygon], zones: list[Zone]) -> dict[int, 
     return result
 
 
+def _arc_positions(points, spine_segments):
+    """Pozycje punktów [0..1] wzdłuż łuku łamanej spine: rzut punktu na
+    najbliższy segment + skumulowana długość poprzednich segmentów (plan
+    2026-07-15 Task 6). Na L dwie klatki na końcach ramion są rozstawione
+    wzdłuż KORYTARZA, nie rzutowane na jedną oś bbox."""
+    from shapely.geometry import LineString, Point
+
+    lines = [LineString([p1, p2]) for p1, p2 in spine_segments]
+    lengths = [ln.length for ln in lines]
+    total = sum(lengths) or 1.0
+    prefix = [0.0]
+    for ln_len in lengths[:-1]:
+        prefix.append(prefix[-1] + ln_len)
+    out = []
+    for pt in points:
+        p = Point(pt)
+        i = min(range(len(lines)), key=lambda k: lines[k].distance(p))
+        out.append((prefix[i] + lines[i].project(p)) / total)
+    return out
+
+
+def _light_waste_for_cage(cage: Polygon, footprint: Polygon) -> float:
+    """Udział obwodu klatki sklejonego z elewacją NIE-północną (user
+    2026-07-15: klatka ma nie marnować doświetlanej elewacji; północ i
+    wnętrze/narożnik wewnętrzny są darmowe). Krawędź elewacji jest
+    'północna', gdy jej zewnętrzna normalna ma składową +y > |składowej x|
+    (konwencja solar.py: azymut 0 = N = +y)."""
+    from shapely.geometry import LineString
+
+    edge = footprint.exterior.buffer(0.01)
+    contact = cage.boundary.intersection(edge)
+    if contact.is_empty or contact.length <= 1e-9:
+        return 0.0
+    non_north = 0.0
+    coords = list(footprint.exterior.coords)
+    # CCW ring: zewnętrzna normalna krawędzi (dx,dy) to (dy,-dx)
+    if not footprint.exterior.is_ccw:
+        coords = coords[::-1]
+    for a, b in zip(coords[:-1], coords[1:]):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        nx, ny = dy, -dx
+        seg_contact = cage.boundary.intersection(LineString([a, b]).buffer(0.02))
+        if seg_contact.is_empty:
+            continue
+        is_north = ny > abs(nx)
+        if not is_north:
+            non_north += seg_contact.length
+    return min(1.0, non_north / max(contact.length, 1e-9))
+
+
 def _score_placement(
     result: CirculationResult, footprint: Polygon, num_cages: int, weights: CageWeights
 ) -> tuple[float, dict]:
@@ -137,22 +228,23 @@ def _score_placement(
     count = abs(k - num_cages) / num_cages if num_cages > 0 else 0.0
 
     minx, miny, maxx, maxy = footprint.bounds
-    diag_half = math.hypot(maxx - minx, maxy - miny) / 2.0 or 1.0
-    corner_pts = list(footprint.exterior.coords[:-1])
-    corners_devs = []
-    for c in cages:
-        cx, cy = c.centroid.x, c.centroid.y
-        d = min(math.hypot(cx - px, cy - py) for px, py in corner_pts)
-        corners_devs.append(min(1.0, d / diag_half))
-    corners = sum(corners_devs) / k if k else 1.0
+    # light_waste: kara za sklejenie klatki z doświetlaną (nie-północną)
+    # elewacją (user 2026-07-15); klatka wewnętrzna/przy północy = 0.
+    light_waste = sum(_light_waste_for_cage(c, footprint) for c in cages) / k if k else 1.0
 
-    horizontal = (maxx - minx) >= (maxy - miny)
-    axis_len = (maxx - minx) if horizontal else (maxy - miny)
-    axis_len = axis_len or 1.0
-    ts = sorted(
-        ((c.centroid.x - minx) / axis_len if horizontal else (c.centroid.y - miny) / axis_len)
-        for c in cages
-    )
+    # Pozycje klatek [0..1] wzdłuż komunikacji: wzdłuż ŁUKU spine (plan
+    # 2026-07-15 Task 6) gdy dostępny, inaczej stary rzut na dłuższą oś bbox.
+    spine = getattr(result, "spine_segments", None) or []
+    if spine:
+        ts = sorted(_arc_positions([(c.centroid.x, c.centroid.y) for c in cages], spine))
+    else:
+        horizontal = (maxx - minx) >= (maxy - miny)
+        axis_len = (maxx - minx) if horizontal else (maxy - miny)
+        axis_len = axis_len or 1.0
+        ts = sorted(
+            ((c.centroid.x - minx) / axis_len if horizontal else (c.centroid.y - miny) / axis_len)
+            for c in cages
+        )
     ends = sum(min(t, 1.0 - t) * 2.0 for t in ts) / k if k else 1.0
 
     if k <= 1:
@@ -161,8 +253,8 @@ def _score_placement(
         ideal = [(i + 0.5) / k for i in range(k)]
         spread = min(1.0, sum(abs(t - i) for t, i in zip(ts, ideal)) / k * 2.0)
 
-    components = {"egress": egress, "count": count, "corners": corners, "ends": ends, "spread": spread}
-    active = {"egress": weights.egress, "count": weights.count, "corners": weights.corners,
+    components = {"egress": egress, "count": count, "light_waste": light_waste, "ends": ends, "spread": spread}
+    active = {"egress": weights.egress, "count": weights.count, "light_waste": weights.light_waste,
               "ends": weights.ends, "spread": weights.spread}
     total_w = sum(active.values())
     if total_w <= 0:
@@ -206,6 +298,7 @@ class _CageGenerator:
         corridor_width_m: float,
         max_dist_single_m: float,
         max_dist_multi_m: float,
+        prefer_flush: bool = False,
     ) -> None:
         self.footprint = footprint
         self.zones = zones
@@ -214,6 +307,7 @@ class _CageGenerator:
         self.corridor_width_m = corridor_width_m
         self.max_dist_single_m = max_dist_single_m
         self.max_dist_multi_m = max_dist_multi_m
+        self.prefer_flush = prefer_flush
 
     def random_genome(self, rng: random.Random) -> tuple[int, ...]:
         n = len(self.candidates)
@@ -257,7 +351,44 @@ class _CageGenerator:
         return _assemble_with_cages(
             self.footprint, self.zones, local_cages, self.corridor_width_m,
             self.max_dist_single_m, self.max_dist_multi_m,
+            prefer_flush=self.prefer_flush,
         )
+
+
+def _run_cage_hybrid(generator, evaluator, iterations: int, strategy: str, base_seed: int = 0) -> list:
+    """Jeden przebieg hybrydy random+SA (plan 2026-07-14 Task 7), wydzielony
+    żeby minimal-k (Task 10) mógł go uruchomić per k. `base_seed` (user
+    2026-07-16): przesuwa wszystkie seedy -- inna baza = inna eksploracja,
+    ta sama = wynik odtwarzalny."""
+    from services.optimize import Budget, dedupe_and_rank, run_simulated_annealing
+
+    n_seed = max(5, iterations // 3) if iterations >= 2 else iterations
+    n_seed = min(n_seed, iterations)
+    random_phase = [
+        evaluate_genome(generator, evaluator, generator.random_genome(random.Random(base_seed + seed)))
+        for seed in range(n_seed)
+    ]
+    if strategy == "random":
+        n_seed = iterations
+        random_phase += [
+            evaluate_genome(generator, evaluator, generator.random_genome(random.Random(base_seed + seed)))
+            for seed in range(len(random_phase), iterations)
+        ]
+    sa_budget = iterations - n_seed
+    history = list(random_phase)
+    if sa_budget > 0:
+        starts = dedupe_and_rank([c for c in random_phase if c.payload is not None], limit=3)
+        history += run_simulated_annealing(
+            generator, evaluator, Budget(evaluations=sa_budget),
+            seed_candidates=starts, restarts=min(3, len(starts)) or 1,
+            rng_offset=base_seed,
+        )
+    return history
+
+
+def _red_share(candidate) -> float:
+    dots = candidate.payload.evacuation_dots
+    return (sum(1 for d in dots if d.status == "red") / len(dots)) if dots else 1.0
 
 
 def iterate_cage_placement(
@@ -269,51 +400,66 @@ def iterate_cage_placement(
     max_dist_single_m: float = 20.0,
     max_dist_multi_m: float = 40.0,
     strategy: str = "anneal",
+    corridor_mode: str = "double",
+    base_seed: int = 0,
 ) -> tuple[CirculationResult, list[CageIterationMeta], int]:
+    from services.circulation import NET_SHRINK_M
+    from services.corridor_spine import build_spine
+    from services.optimize import dedupe_and_rank
+
     zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
-    candidates = _candidate_cages(footprint, zones, num_cages)
+    prefer_flush = corridor_mode == "gallery"
+    # Wstępny spine (bez klatek) -> kotwice kandydatów przy korytarzu, żeby
+    # klatka mogła stanąć WEWNĄTRZ budynku (plan 2026-07-15 Task 10).
+    prelim = build_spine([z.polygon for z in zones], {}, corridor_width_m, prefer_flush=prefer_flush)
+    corridor_half = (corridor_width_m + 2 * NET_SHRINK_M) / 2.0
+    candidates = _candidate_cages(
+        footprint, zones, num_cages,
+        spine_segments=[(s.p1, s.p2) for s in prelim], corridor_half_m=corridor_half,
+    )
     if not candidates:
         raise ValueError("Obrys zbyt mały na klatkę schodową")
 
-    generator = _CageGenerator(
-        footprint, zones, candidates, num_cages,
-        corridor_width_m, max_dist_single_m, max_dist_multi_m,
-    )
-
-    def evaluator(genome: tuple[int, ...], payload: "CirculationResult | None") -> tuple[float, dict, list]:
-        if payload is None:
-            return float("inf"), {}, ["nie udało się umieścić klatek"]
-        score, components = _score_placement(payload, footprint, num_cages, weights)
-        return score, components, []
-
-    # Plan 2026-07-14 Etap 2 Task 7: hybryda random+SA w ramach budżetu
-    # `iterations` ewaluacji -- n_seed losowych genomów (eksploracja), potem
-    # symulowane wyżarzanie od top-3. Metas = unikalne kandydaty z całej
-    # historii, valid-first po score, max `iterations` wierszy; `seed` pola
-    # = indeks rankingu (stabilny identyfikator wiersza dla frontendu).
-    from services.optimize import Budget, dedupe_and_rank, run_simulated_annealing
-
-    n_seed = max(5, iterations // 3) if iterations >= 2 else iterations
-    n_seed = min(n_seed, iterations)
-    random_phase = [
-        evaluate_genome(generator, evaluator, generator.random_genome(random.Random(seed)))
-        for seed in range(n_seed)
-    ]
-    if strategy == "random":
-        n_seed = iterations
-        random_phase += [
-            evaluate_genome(generator, evaluator, generator.random_genome(random.Random(seed)))
-            for seed in range(len(random_phase), iterations)
-        ]
-    sa_budget = iterations - n_seed
-    history = list(random_phase)
-    if sa_budget > 0:
-        starts = dedupe_and_rank([c for c in random_phase if c.payload is not None], limit=3)
-        history += run_simulated_annealing(
-            generator, evaluator, Budget(evaluations=sa_budget),
-            seed_candidates=starts, restarts=min(3, len(starts)) or 1,
+    # Minimal-k (plan 2026-07-15 Task 10): suwak = MAKSIMUM klatek. Próbujemy
+    # k=1..num_cages; zwycięzca = najmniejsze k, którego najlepszy kandydat ma
+    # zero czerwonych dojść. Gdy żadne k nie dowozi zera -> globalnie najlepszy
+    # po (udział czerwonych, score). Metas = wszystkie kandydaci ze wszystkich k.
+    per_k = max(6, iterations // max(1, num_cages))
+    all_history: list = []
+    best_per_k: dict[int, object] = {}
+    for k in range(1, num_cages + 1):
+        gen_k = _CageGenerator(
+            footprint, zones, candidates, k,
+            corridor_width_m, max_dist_single_m, max_dist_multi_m, prefer_flush=prefer_flush,
         )
-    ranked = [c for c in dedupe_and_rank(history, limit=iterations) if c.payload is not None]
+
+        def eval_k(genome, payload, _k=k):
+            if payload is None:
+                return float("inf"), {}, ["nie udało się umieścić klatek"]
+            score, components = _score_placement(payload, footprint, _k, weights)
+            return score, components, []
+
+        hist = _run_cage_hybrid(gen_k, eval_k, per_k, strategy, base_seed=base_seed)
+        all_history += hist
+        valid = [c for c in hist if c.payload is not None]
+        if valid:
+            best_per_k[k] = min(valid, key=lambda c: c.score)
+
+    if not any(c.payload is not None for c in all_history):
+        raise ValueError("Obrys zbyt mały na klatkę schodową")
+
+    winner = None
+    for k in range(1, num_cages + 1):
+        if k in best_per_k and _red_share(best_per_k[k]) <= 1e-9:
+            winner = best_per_k[k]
+            break
+    if winner is None:
+        placed = [c for c in all_history if c.payload is not None]
+        winner = min(placed, key=lambda c: (_red_share(c), c.score))
+
+    ranked = [c for c in dedupe_and_rank(all_history, limit=iterations) if c.payload is not None]
+    if all(c.genome != winner.genome for c in ranked):
+        ranked = [winner] + ranked[: max(0, iterations - 1)]
     metas: list[CageIterationMeta] = [
         CageIterationMeta(
             seed=idx, score=c.score, cages_count=len(c.payload.cage_polygons),
@@ -321,7 +467,5 @@ def iterate_cage_placement(
         )
         for idx, c in enumerate(ranked)
     ]
-    if not metas:
-        raise ValueError("Obrys zbyt mały na klatkę schodową")
-    # ranking jest valid-first po score, więc wiersz 0 == pick_best
-    return ranked[0].payload, metas, 0
+    best_seed = next(idx for idx, c in enumerate(ranked) if c.genome == winner.genome)
+    return winner.payload, metas, best_seed

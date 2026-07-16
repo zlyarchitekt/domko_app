@@ -69,7 +69,9 @@ class IterationMetaResult(BaseModel):
 class CageWeightsInput(BaseModel):
     egress: float = Field(default=1.0, ge=0, le=1)
     count: float = Field(default=0.5, ge=0, le=1)
-    corners: float = Field(default=0.3, ge=0, le=1)
+    light_waste: float = Field(default=0.5, ge=0, le=1)
+    """Kara za marnowanie doświetlanej elewacji przez klatkę (user
+    2026-07-15, zastąpiło `corners`)."""
     ends: float = Field(default=0.3, ge=0, le=1)
     spread: float = Field(default=0.5, ge=0, le=1)
 
@@ -121,6 +123,13 @@ class CirculationSpec(BaseModel):
     """Strategia szukania silnika iteracyjnego (plan 2026-07-14 Etap 2):
     anneal = hybryda random+wyżarzanie (default), random = czysty random
     search (debug/porównania)."""
+    corridor_mode: str = Field(default="double", pattern="^(double|gallery)$")
+    """Topologia korytarza (plan 2026-07-15 §C): double = dwutrakt (korytarz
+    w środku), gallery = galeriowiec (korytarz przy elewacji, jednotrakt)."""
+    base_seed: int = Field(default=0, ge=0)
+    """Baza seedów silnika (user 2026-07-16): frontend losuje nową per klik
+    -> każde uruchomienie eksploruje inne warianty; ta sama baza = wynik
+    odtwarzalny. 0 = historyczne zachowanie."""
 
 
 class LayoutGenerateRequest(BaseModel):
@@ -131,6 +140,7 @@ class LayoutGenerateRequest(BaseModel):
     iterations: int = Field(default=10, ge=1, le=50)
     weights: UnitWeightsInput = Field(default_factory=UnitWeightsInput)
     strategy: str = Field(default="anneal", pattern="^(anneal|random|pareto)$")
+    base_seed: int = Field(default=0, ge=0)
 
 
 class ApartmentResult(BaseModel):
@@ -272,6 +282,8 @@ def generate_layout_endpoint(request: LayoutGenerateRequest):
         ),
         iterations=request.iterations,
         strategy=request.strategy,
+        corridor_mode=request.circulation.corridor_mode,
+        base_seed=request.base_seed,
         unit_weights=UnitWeights(**request.weights.model_dump()),
         program_shares=[
             ProgramShare(
@@ -543,6 +555,13 @@ class CirculationResponse(BaseModel):
     cage_iterations=0) -- spec 2026-07-04-cage-placement-iterations §4."""
     cage_best_seed: int = 0
     """Seed zwycięskiej iteracji (0 w trybie klasycznym)."""
+    spine_segments: list[list[list[float]]] = []
+    """Segmenty osi korytarza (plan 2026-07-15) [[x,y],[x,y]] -- front oddaje
+    je do /layout/units jako kierunki cięcia traktów per ramię L/U."""
+
+
+def _spine_to_json(result) -> list[list[list[float]]]:
+    return [[[p1[0], p1[1]], [p2[0], p2[1]]] for p1, p2 in getattr(result, "spine_segments", []) or []]
 
 
 @router.post("/circulation", response_model=CirculationResponse)
@@ -577,6 +596,8 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
                 weights=CageWeights(**circulation.cage_weights.model_dump()),
                 iterations=circulation.cage_iterations,
                 strategy=circulation.strategy,
+                corridor_mode=circulation.corridor_mode,
+                base_seed=circulation.base_seed,
                 max_dist_single_m=circulation.max_dist_single_m,
                 max_dist_multi_m=circulation.max_dist_multi_m,
             )
@@ -618,6 +639,7 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
                 manual_corridors=manual_corridors,
                 max_dist_single_m=circulation.max_dist_single_m,
                 max_dist_multi_m=circulation.max_dist_multi_m,
+                corridor_mode=circulation.corridor_mode,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
@@ -644,6 +666,7 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
             _serialize_cage_iteration(m, circulation.manual_corridors) for m in cage_iteration_metas
         ],
         cage_best_seed=cage_best_seed,
+        spine_segments=_spine_to_json(result),
     )
 
 
@@ -663,6 +686,10 @@ class UnitsRequest(BaseModel):
     iterations: int = Field(default=10, ge=1, le=50)
     weights: UnitWeightsInput = Field(default_factory=UnitWeightsInput)
     strategy: str = Field(default="anneal", pattern="^(anneal|random|pareto)$")
+    spine_segments: list[list[list[float]]] | None = None
+    """Segmenty osi korytarza z /layout/circulation (plan 2026-07-15 Task 5):
+    kierunki cięcia traktów per ramię L/U. None = zachowanie sprzed spine'u."""
+    base_seed: int = Field(default=0, ge=0)
 
 
 class UnitsResponse(BaseModel):
@@ -735,11 +762,16 @@ def subdivide_units_endpoint(request: UnitsRequest):
     if shares:
         weights = UnitWeights(**request.weights.model_dump())
         try:
+            spine = (
+                [((s[0][0], s[0][1]), (s[1][0], s[1][1])) for s in request.spine_segments]
+                if request.spine_segments else None
+            )
             cells, iteration_metas, best_seed, derived_total = iterate_units(
                 remainder, shares,
                 iterations=request.iterations, weights=weights,
                 footprint=footprint, circulation_geometry=circulation_geometry,
-                strategy=request.strategy,
+                strategy=request.strategy, spine_segments=spine,
+                base_seed=request.base_seed,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
@@ -921,6 +953,7 @@ class MoveCageRequest(BaseModel):
     corridor_width_m: float = Field(default=1.5, gt=0)
     max_dist_single_m: float = Field(default=CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M, gt=0)
     max_dist_multi_m: float = Field(default=CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M, gt=0)
+    corridor_mode: str = Field(default="double", pattern="^(double|gallery)$")
 
 
 @router.post("/circulation/move-cage", response_model=CirculationResponse)
@@ -967,6 +1000,7 @@ def move_cage_endpoint(request: MoveCageRequest):
     result = _assemble_with_cages(
         footprint, zones, local_cages, request.corridor_width_m,
         request.max_dist_single_m, request.max_dist_multi_m,
+        prefer_flush=(request.corridor_mode == "gallery"),
     )
 
     return CirculationResponse(
@@ -982,6 +1016,7 @@ def move_cage_endpoint(request: MoveCageRequest):
         remainder=json.loads(json.dumps(result.remainder.__geo_interface__)),
         centerline=_serialize_centerline(result.centerline),
         evacuation_dots=_serialize_dots(result.evacuation_dots),
+        spine_segments=_spine_to_json(result),
     )
 
 
@@ -1082,6 +1117,7 @@ def add_manual_element_endpoint(request: AddManualElementRequest):
         remainder=json.loads(json.dumps(result.remainder.__geo_interface__)),
         centerline=_serialize_centerline(result.centerline),
         evacuation_dots=_serialize_dots(result.evacuation_dots),
+        spine_segments=_spine_to_json(result),
     )
 
 

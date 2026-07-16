@@ -83,6 +83,7 @@ def run_simulated_annealing(
     budget: Budget,
     seed_candidates: "list[Candidate] | None" = None,
     restarts: int = 3,
+    rng_offset: int = 0,
 ) -> list[Candidate]:
     """SA z restartami: budżet dzielony po równo między restarty; każdy restart
     startuje z kolejnego najlepszego seed-kandydata (albo losowego genomu).
@@ -94,7 +95,9 @@ def run_simulated_annealing(
     seeds = list(seed_candidates or [])
     per_restart = max(1, budget.evaluations // max(1, restarts))
     for r in range(restarts):
-        rng = random.Random(10_000 + r)
+        # rng_offset (user 2026-07-16): baza per przebieg -- ta sama baza =
+        # identyczny wynik (odtwarzalność), inna baza = inna eksploracja.
+        rng = random.Random(10_000 + rng_offset + r)
         if r < len(seeds):
             current = seeds[r]
         else:
@@ -153,6 +156,7 @@ def run_nsga2(
     evaluator_multi: EvaluatorMulti,
     budget: Budget,
     population: int = 24,
+    rng_offset: int = 0,
 ) -> list[Candidate]:
     """Hand-rolled NSGA-II: fast non-dominated sort (przez powtórny pareto_front)
     + crowding distance + turniej binarny + mutacja jako jedyny operator wariacji
@@ -165,12 +169,12 @@ def run_nsga2(
                          hard_valid=not violations, hard_violations=list(violations),
                          objectives=tuple(objectives))
 
-    pop = [_eval(generator.random_genome(random.Random(i))) for i in range(population)]
+    pop = [_eval(generator.random_genome(random.Random(rng_offset + i))) for i in range(population)]
     evals = population
     gen_idx = 0
     while evals + population <= budget.evaluations:
         gen_idx += 1
-        rng_g = random.Random(1000 + gen_idx)
+        rng_g = random.Random(1000 + rng_offset + gen_idx)
 
         def better(a: Candidate, b: Candidate) -> Candidate:
             if _dominates(a, b):

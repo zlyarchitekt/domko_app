@@ -54,6 +54,17 @@ def test_zero_leftover_guarantee():
     assert best_seed in {m.seed for m in metas}
 
 
+def test_base_seed_reproducible_and_diversifying():
+    """base_seed (2026-07-16): ta sama baza -> identyczne metas,
+    inna baza -> inna eksploracja."""
+    remainder = _rect(0, 0, 30, 11)
+    a = iterate_units(remainder, SHARES, iterations=10, base_seed=7_777)
+    b = iterate_units(remainder, SHARES, iterations=10, base_seed=7_777)
+    assert [(m.seed, m.score) for m in a[1]] == [(m.seed, m.score) for m in b[1]]
+    c = iterate_units(remainder, SHARES, iterations=10, base_seed=123_456)
+    assert [m.score for m in a[1]] != [m.score for m in c[1]]
+
+
 def test_determinism_same_seed_same_result():
     remainder = _rect(0, 0, 24, 10)
     cells_a, metas_a, _, _ = iterate_units(remainder, SHARES, iterations=3)
@@ -605,3 +616,43 @@ def test_iterate_units_pareto_strategy():
             assert not seen_non_front, "front Pareto musi być przed resztą w rankingu"
     if any(m.hard_valid for m in metas_a):
         assert metas_a[best_a].hard_valid
+
+
+def test_l_footprint_units_all_touch_circulation_and_facade():
+    """e2e L: spine + trakt-per-segment -> istnieje iteracja hard-valid."""
+    from services.circulation import place_circulation
+
+    l_shape = Polygon([(0, 0), (30, 0), (30, 8), (8, 8), (8, 20), (0, 20)])
+    circ = place_circulation(
+        l_shape, corridor_width_m=1.5, stair_width_m=1.2,
+        place_cage=True, cage_size_m=2.5, cage_position="auto",
+    )
+    _cells, metas, best_seed, _ = iterate_units(
+        circ.remainder, SHARES, iterations=20,
+        footprint=l_shape, circulation_geometry=circ.circulation_geometry,
+        spine_segments=circ.spine_segments,
+    )
+    assert any(m.hard_valid for m in metas), [m.hard_violations for m in metas][:5]
+    assert next(m for m in metas if m.seed == best_seed).hard_valid
+
+
+def test_deep_leg_L_no_long_kiszki():
+    """Repro screena 2026-07-15: L z głęboką nogą -- prawa część nogi robiła
+    długie pionowe 'kiszki' (ratio 14+), bo remainder-L cięty jednym kierunkiem.
+    Po cięciu per strefa każde ramię tnie się prostopadle do SWOJEGO korytarza."""
+    from services.circulation import place_circulation
+    from services.unit_mix import _mrr_aspect_ratio
+
+    L = Polygon([(0, 12), (40, 12), (40, -20), (26, -20), (26, 0), (0, 0)])
+    circ = place_circulation(
+        L, corridor_width_m=1.5, stair_width_m=1.2,
+        place_cage=True, cage_size_m=2.5, cage_position="auto", num_cages=2,
+    )
+    cells, metas, best_seed, _ = iterate_units(
+        circ.remainder, SHARES, iterations=20,
+        footprint=L, circulation_geometry=circ.circulation_geometry,
+        spine_segments=circ.spine_segments,
+    )
+    winner = next(m for m in metas if m.seed == best_seed)
+    assert winner.hard_valid, winner.hard_violations
+    assert all(_mrr_aspect_ratio(c.polygon) <= 3.0 + 1e-6 for c in cells), "brak kiszek > 1:3"
