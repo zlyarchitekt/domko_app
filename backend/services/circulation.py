@@ -208,12 +208,24 @@ def _corridor_axis_offset(
     `_band_depth_ok` (~0 / [4,7] / >=10). `prefer_flush=True` (galeriowiec):
     korytarz przy krawędzi (jednotrakt), jedyny pas legalny. Inaczej
     (dwutrakt): oś możliwie blisko klatki, gdzie OBA pasy legalne -- korytarz
-    NIGDY nie skleja się z elewacją w dwutrakcie. Kandydat odpada, jeśli
-    korytarz przestałby dotykać klatki (przedział touch = bounds klatki +-
-    half). Brak kandydatów (strefa zbyt płytka) -> clamp do wnętrza strefy."""
+    NIGDY nie skleja się z elewacją w dwutrakcie, jeśli legalny dwutrakt
+    istnieje. Warunek styku z klatką (przedział touch = bounds klatki +-
+    half) jest wpleciony w KAŻDY etap szukania (fix 2026-07-16: wcześniej
+    filtr styku ubijał legalne kandydaty PO skanie i spadaliśmy do clampu,
+    który tworzył martwy pas 1.35 m przy klatce na krawędzi nogi L).
+    Kolejność: legalny dwutrakt w touch -> legalny flush w touch ->
+    najmniej-zły (minimalna suma odległości pasów od legalnych głębokości)
+    w touch -> legacy clamp."""
     center = (lo + hi) / 2.0
     anchor = (cage_bounds[0] + cage_bounds[1]) / 2.0 if cage_bounds is not None else center
     legacy = max(lo + half, min(hi - half, anchor))
+    if cage_bounds is not None:
+        touch_lo, touch_hi = cage_bounds[0] - half, cage_bounds[1] + half
+    else:
+        touch_lo, touch_hi = float("-inf"), float("inf")
+
+    def in_touch(mid: float) -> bool:
+        return touch_lo - 1e-9 <= mid <= touch_hi + 1e-9
 
     def bands(mid: float) -> tuple[float, float]:
         return (mid - half) - lo, hi - (mid + half)
@@ -222,7 +234,7 @@ def _corridor_axis_offset(
         out = []
         for flush in (lo + half, hi - half):
             b1, b2 = bands(flush)
-            if _band_depth_ok(b1) and _band_depth_ok(b2):
+            if in_touch(flush) and _band_depth_ok(b1) and _band_depth_ok(b2):
                 out.append(flush)
         return out
 
@@ -238,20 +250,42 @@ def _corridor_axis_offset(
         mid = lo + half
         while mid <= hi - half + 1e-9:
             b1, b2 = bands(mid)
-            if b1 > 1e-6 and b2 > 1e-6 and _band_depth_ok(b1) and _band_depth_ok(b2):
+            if (in_touch(mid) and b1 > 1e-6 and b2 > 1e-6
+                    and _band_depth_ok(b1) and _band_depth_ok(b2)):
                 if best is None or abs(mid - anchor) < abs(best - anchor):
                     best = mid
             mid += 0.1
         if best is not None:
             candidates.append(best)
     if not candidates:
-        # strefa za płytka na legalny dwutrakt -> flush z legalnym pojedynczym
-        # traktem (jednostronne) bije martwe pasy 7-10 z centrowania. Zgodne
-        # z regułą usera: dwutrakt środkuje GDY MOŻE, inaczej jednotrakt.
+        # legalny dwutrakt niemożliwy w zasięgu klatki -> flush z legalnym
+        # pojedynczym traktem bije martwe pasy 7-10 z centrowania.
         candidates = flush_candidates()
-    if cage_bounds is not None:
-        touch_lo, touch_hi = cage_bounds[0] - half, cage_bounds[1] + half
-        candidates = [c for c in candidates if touch_lo <= c <= touch_hi]
+    if not candidates:
+        # ostatnia deska przed legacy: pozycja w touch minimalizująca
+        # "martwość" pasów (suma odległości od najbliższej legalnej
+        # głębokości); przy remisie bliżej kotwicy klatki.
+        def badness(depth: float) -> float:
+            d = max(depth, 0.0)
+            if _band_depth_ok(d):
+                return 0.0
+            if d < MIN_TRAKT_DEPTH_M:
+                return min(d, MIN_TRAKT_DEPTH_M - d)
+            return min(d - MAX_ONE_SIDED_TRAKT_M, MIN_THROUGH_TRAKT_M - d)
+
+        best = None
+        best_bad = None
+        mid = lo + half
+        while mid <= hi - half + 1e-9:
+            if in_touch(mid):
+                b1, b2 = bands(mid)
+                bad = badness(b1) + badness(b2)
+                if (best_bad is None or bad < best_bad - 1e-9
+                        or (abs(bad - best_bad) <= 1e-9 and abs(mid - anchor) < abs(best - anchor))):
+                    best, best_bad = mid, bad
+            mid += 0.1
+        if best is not None:
+            candidates.append(best)
     if not candidates:
         return legacy
     return min(candidates, key=lambda c: abs(c - anchor))

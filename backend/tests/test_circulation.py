@@ -156,7 +156,10 @@ def test_corridor_centerline_horizontal_zone():
     seg = _corridor_centerline(zone, width=1.5)
     assert seg is not None
     (x1, y1), (x2, y2) = seg
-    assert abs(y1 - 2.0) < 1e-6 and abs(y2 - 2.0) < 1e-6  # centered on mid_y
+    # Strefa 4 m: legalny trakt niemożliwy. Fix 2026-07-16 (least-bad):
+    # flush zostawia JEDEN pas 2.3 m zamiast dwóch martwych 1.15 m z
+    # centrowania -- oś przy krawędzi (half=0.85).
+    assert abs(y1 - 0.85) < 1e-6 and abs(y2 - 0.85) < 1e-6
     assert {round(x1), round(x2)} == {0, 20}
 
 
@@ -167,7 +170,8 @@ def test_corridor_centerline_vertical_zone():
     seg = _corridor_centerline(zone, width=1.5)
     assert seg is not None
     (x1, y1), (x2, y2) = seg
-    assert abs(x1 - 2.0) < 1e-6 and abs(x2 - 2.0) < 1e-6  # centered on mid_x
+    # jw. -- least-bad flush zamiast centrowania w martwej strefie 4 m
+    assert abs(x1 - 0.85) < 1e-6 and abs(x2 - 0.85) < 1e-6
     assert {round(y1), round(y2)} == {0, 20}
 
 
@@ -561,6 +565,22 @@ def test_corridor_axis_offset_double_mode_never_flush():
     mid4 = _corridor_axis_offset(0.0, 12.0, 0.85, None)
     assert abs(mid4 - 6.0) <= 0.1 + 1e-9
     assert _band_depth_ok((mid4 - 0.85) - 0.0) and _band_depth_ok(12.0 - (mid4 + 0.85))
+
+
+def test_corridor_axis_offset_cage_at_edge_no_dead_band():
+    """Fix 2026-07-16: klatka przy krawędzi nogi L. Stary kod: skan znajdował
+    legalny dwutrakt POZA zasięgiem klatki, filtr styku go ubijał i clamp
+    robił martwy pas ~1.35 m. Nowy: styk wpleciony w każdy etap -> flush przy
+    klatce z legalnym pojedynczym traktem."""
+    from services.circulation import _band_depth_ok, _corridor_axis_offset
+
+    half = 0.9  # korytarz 1.5 brutto z NET_SHRINK
+    mid = _corridor_axis_offset(60.0, 74.0, half, (60.0, 64.2))
+    b1 = (mid - half) - 60.0
+    b2 = 74.0 - (mid + half)
+    assert _band_depth_ok(b1) and _band_depth_ok(b2)
+    # i wciąż dotyka klatki
+    assert 60.0 - half - 1e-6 <= mid <= 64.2 + half + 1e-6
 
 
 def test_corridor_axis_offset_prefer_flush():
