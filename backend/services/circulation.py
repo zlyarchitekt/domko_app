@@ -547,6 +547,9 @@ class CirculationResult:
     """Segmenty spine (plan 2026-07-15) -- źródło kierunków cięcia traktów.
     list[tuple[tuple[float,float], tuple[float,float]]]; puste w wynikach
     sprzed spine'u (reshape/manual, które budują geometrię inaczej)."""
+    zone_access_modes: list = field(default_factory=list)
+    """Per strefa (indeks = zones): "point" | "corridor" (plan 2026-07-16).
+    Puste w wynikach sprzed trybu klatkowego i w ścieżkach manual/reshape."""
 
 
 @dataclass
@@ -705,6 +708,35 @@ def place_circulation(
     Gdy kandydatów braknie, umieszczonych zostaje tyle, ile się zmieści --
     bez błędu (cichy cap, spec §3.1)."""
     zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
+
+    if corridor_mode == "point":
+        from services.point_access import best_anchor, build_point_core, core_polygon
+
+        cages: list[Polygon] = []
+        cores: list[Polygon] = []
+        modes: list[str] = []
+        for zone in zones:
+            a = best_anchor(zone.polygon)
+            if a is None:
+                raise ValueError(
+                    "Strefa za mała na trzon klatkowy -- zmień tryb korytarza"
+                )
+            cage, hall = build_point_core(zone.polygon, a)
+            cages.append(cage)
+            cores.append(core_polygon(cage, hall))
+            modes.append("point")
+        circulation = unary_union(cores)
+        remainder = footprint.difference(circulation)
+        return CirculationResult(
+            zones=zones,
+            circulation_geometry=circulation,
+            cage_polygons=cages,
+            remainder=remainder,
+            centerline=[],
+            evacuation_dots=[],
+            spine_segments=[],
+            zone_access_modes=modes,
+        )
 
     # rectangle_decompose() rozwiązuje każdy wklęsły wierzchołek OBRYSU na
     # rzecz dwóch sąsiadujących prostokątnych stref — żadna pojedyncza strefa

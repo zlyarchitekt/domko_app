@@ -634,3 +634,25 @@ def test_l_shape_corridor_is_connected_and_reaches_both_wings():
     assert len(result.spine_segments) >= 2
     assert result.evacuation_dots
     assert any(d.status != "red" for d in result.evacuation_dots)
+
+
+def test_place_circulation_point_mode_no_corridor():
+    """Tryb klatkowy (plan 2026-07-16): sam trzon, zero korytarza/spine."""
+    from services.circulation import place_circulation
+
+    footprint = Polygon([(0, 0), (23, 0), (23, 13.75), (0, 13.75)])
+    result = place_circulation(
+        footprint, corridor_width_m=1.5, stair_width_m=1.2, place_cage=True,
+        cage_size_m=2.6, cage_position="auto", num_cages=1,
+        corridor_mode="point",
+    )
+    assert result.centerline == []
+    assert result.spine_segments == []
+    assert len(result.cage_polygons) == 1
+    assert result.zone_access_modes == ["point"]
+    # trzon = klatka + hol: komunikacja większa niż sama klatka, ale mała
+    cage_area = result.cage_polygons[0].area
+    assert cage_area < result.circulation_geometry.area <= cage_area + 4.2 * 1.8 + 1e-6
+    # bilans powierzchni się domyka
+    assert abs(result.remainder.area + result.circulation_geometry.area
+               - footprint.area) < 1e-3
