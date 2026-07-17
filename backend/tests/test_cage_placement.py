@@ -627,3 +627,19 @@ def test_auto_mode_prefers_corridor_for_long_bar():
         corridor_mode="auto",
     )
     assert result.zone_access_modes == ["corridor"]
+
+
+def test_auto_mode_uses_real_program_when_given():
+    """Fix po review Task 6: pass-through prawdziwego programu do
+    auto-decyzji musi działać (wcześniej martwy parametr)."""
+    from services.unit_mix import ProgramShare
+
+    footprint = _rect(0, 0, 23, 13.75)
+    big_only = [ProgramShare(type="M4", percentage=100, area_min_m2=72, area_max_m2=90)]
+    r_default, _, _ = iterate_cage_placement(
+        footprint, 1.5, num_cages=1, weights=CageWeights(), iterations=8,
+        corridor_mode="auto")
+    r_big, _, _ = iterate_cage_placement(
+        footprint, 1.5, num_cages=1, weights=CageWeights(), iterations=8,
+        corridor_mode="auto", program_shares=big_only)
+    assert r_default.zone_access_modes and r_big.zone_access_modes

@@ -215,6 +215,7 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
             strategy=input.strategy,
             corridor_mode=input.corridor_mode,
             base_seed=input.base_seed,
+            program_shares=input.program_shares or None,
         )
         circulation = _merge_manual_elements(
             circulation, footprint, input.corridor_width_m,

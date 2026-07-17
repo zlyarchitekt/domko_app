@@ -51,7 +51,11 @@ def decide_access_modes(footprint, shares, corridor_width_m, num_cages,
     """Porównaj warianty korytarzowy i punktowy pełnym (budżetowanym)
     przebiegiem silnika mieszkań; zwróć wynik lepszego. MVP: decyzja
     całobudynkowa (wszystkie strefy ten sam tryb); per-strefa mieszanie --
-    następny krok po MVP (patrz plan, sekcja Deferred)."""
+    następny krok po MVP (patrz plan, sekcja Deferred).
+
+    Endpoint /circulation nie zna programu -> _probe_shares; /generate
+    przekazuje prawdziwy program przez iterate_cage_placement(program_shares)
+    (fix po review Task 6)."""
     from services.unit_mix import iterate_units
 
     shares = shares or _probe_shares()
@@ -91,9 +95,7 @@ def decide_access_modes(footprint, shares, corridor_width_m, num_cages,
     if not candidates:
         raise ValueError("Auto: żaden tryb komunikacji nie da się zbudować")
     candidates.sort(key=lambda c: c[0])
-    _rank, label, circ, metas, best = candidates[0]
-    if not circ.zone_access_modes:
-        circ.zone_access_modes = [label] * len(circ.zones)
+    _rank, _label, circ, metas, best = candidates[0]
     return circ, metas, best
 
 
@@ -507,6 +509,7 @@ def iterate_cage_placement(
     strategy: str = "anneal",
     corridor_mode: str = "double",
     base_seed: int = 0,
+    program_shares: list | None = None,
 ) -> tuple[CirculationResult, list[CageIterationMeta], int]:
     from services.circulation import NET_SHRINK_M
     from services.corridor_spine import build_spine
@@ -514,7 +517,7 @@ def iterate_cage_placement(
 
     if corridor_mode == "auto":
         return decide_access_modes(
-            footprint, None, corridor_width_m, num_cages, weights,
+            footprint, program_shares, corridor_width_m, num_cages, weights,
             iterations, strategy=strategy, base_seed=base_seed,
         )
 
@@ -526,6 +529,10 @@ def iterate_cage_placement(
         # strefa przy auto). Strefy z rectangle_decompose bezpośrednio --
         # zones_probe z briefu przez place_circulation był zbędny (kontroler
         # decyzja 5). gap liczony na strefie [0] -- MVP jednostrefowy.
+        # UWAGA: num_cages ignorowany -- 1 trzon per strefa (MVP). Sekcyjny
+        # klatkowiec (num_cages trzonów wzdłuż budynku, pary core+sekcja) =
+        # następny etap; dziś w auto długie budynki wygrywa korytarz m.in.
+        # przez tę degenerację (review Task 6).
         zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
         anchors = anchor_candidates(zones[0].polygon)
         metas: list[CageIterationMeta] = []

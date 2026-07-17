@@ -1137,6 +1137,10 @@ Dopisz wpis do `.superpowers/sdd/progress.md` (data, zakres, wynik suity).
 - Parter z wiatrołapem/wózkownią (referencje §9).
 - Drag trzonu na canvasie (move-cage dla trybu punktowego).
 - Kropki ewakuacyjne w strefach punktowych (dziś: brak kropek = OK).
+- Sekcyjny klatkowiec wielotrzonowy: num_cages trzonów wzdłuż długiej strefy
+  (pary core+sekcja w typed_components); dziś num_cages ignorowany w point,
+  porównanie auto na długich budynkach faworyzuje korytarz artefaktem
+  1-trzonu (review Task 6).
 
 ## Self-Review (wykonane przy pisaniu)
 
