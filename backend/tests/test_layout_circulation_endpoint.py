@@ -5,6 +5,20 @@ from main import app
 client = TestClient(app)
 
 
+def _base_payload():
+    """Payload bazowy dla testów trybu klatkowego (plan 2026-07-16 Task 7),
+    skopiowany z test_cage_placement.test_circulation_endpoint_iterative_mode
+    (kontroler decyzja 5 -- ten plik nie miał wcześniej takiego helpera)."""
+    return {
+        "footprint": [[0, 0], [40, 0], [40, 12], [0, 12]],
+        "circulation": {
+            "corridor_width_m": 1.5, "stair_width_m": 1.2, "place_cage": True,
+            "cage_size_m": 2.5, "cage_position": "auto", "num_cages": 1,
+        },
+        "apartments": [],
+    }
+
+
 def test_circulation_endpoint_returns_geometry_and_remainder():
     response = client.post(
         "/api/v1/layout/circulation",
@@ -162,3 +176,24 @@ def test_double_mode_endpoint_corridor_centred():
     corridor_only = corridor.difference(cages)
     cminx, cminy, cmaxx, cmaxy = corridor_only.bounds
     assert cminy > 1e-6 and cmaxy < 12 - 1e-6, "dwutrakt: korytarz nie skleja się z elewacją"
+
+
+def test_circulation_endpoint_point_mode():
+    payload = _base_payload()
+    payload["circulation"]["corridor_mode"] = "point"
+    payload["footprint"] = [[0, 0], [23, 0], [23, 13.75], [0, 13.75]]
+    payload["circulation"]["num_cages"] = 1
+    resp = client.post("/api/v1/layout/circulation", json=payload)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["zone_access_modes"] == ["point"]
+    assert data["centerline"] == []
+    assert data["cage_iterations"], "metas kotwic muszą być na liście iteracji"
+
+
+def test_circulation_endpoint_auto_mode_returns_modes():
+    payload = _base_payload()
+    payload["circulation"]["corridor_mode"] = "auto"
+    resp = client.post("/api/v1/layout/circulation", json=payload)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["zone_access_modes"] != []

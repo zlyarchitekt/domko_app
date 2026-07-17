@@ -123,9 +123,11 @@ class CirculationSpec(BaseModel):
     """Strategia szukania silnika iteracyjnego (plan 2026-07-14 Etap 2):
     anneal = hybryda random+wyżarzanie (default), random = czysty random
     search (debug/porównania)."""
-    corridor_mode: str = Field(default="double", pattern="^(double|gallery)$")
-    """Topologia korytarza (plan 2026-07-15 §C): double = dwutrakt (korytarz
-    w środku), gallery = galeriowiec (korytarz przy elewacji, jednotrakt)."""
+    corridor_mode: str = Field(default="double", pattern="^(double|gallery|point|auto)$")
+    """Topologia korytarza (plan 2026-07-15 §C, rozszerzone plan 2026-07-16):
+    double = dwutrakt (korytarz w środku), gallery = galeriowiec (korytarz
+    przy elewacji, jednotrakt), point = klatkowiec (trzon cage+hol, bez
+    korytarza), auto = porównanie double vs point kosztem silnika mieszkań."""
     base_seed: int = Field(default=0, ge=0)
     """Baza seedów silnika (user 2026-07-16): frontend losuje nową per klik
     -> każde uruchomienie eksploruje inne warianty; ta sama baza = wynik
@@ -558,6 +560,10 @@ class CirculationResponse(BaseModel):
     spine_segments: list[list[list[float]]] = []
     """Segmenty osi korytarza (plan 2026-07-15) [[x,y],[x,y]] -- front oddaje
     je do /layout/units jako kierunki cięcia traktów per ramię L/U."""
+    zone_access_modes: list[str] = []
+    """Per strefa (indeks = zones): "point" | "corridor" (plan 2026-07-16
+    klatkowiec). Puste w wynikach sprzed trybu klatkowego (manual/reshape/
+    move-cage) -- front spada wtedy na domyślne zachowanie korytarzowe."""
 
 
 def _spine_to_json(result) -> list[list[list[float]]]:
@@ -584,7 +590,16 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
 
     cage_iteration_metas: list = []
     cage_best_seed = 0
-    if circulation.cage_iterations > 0 and circulation.place_cage:
+    # point/auto (plan 2026-07-16 klatkowiec) muszą przejść przez
+    # iterate_cage_placement nawet z cage_iterations=0 -- to ta funkcja
+    # dispatchuje na enumerację kotwic ("point") / porównanie wariantów
+    # ("auto"), i to jej metas niosą kandydatów do listy iteracji na
+    # froncie (klasyczny place_circulation nie zna tych trybów poza
+    # samym "point", i nie produkuje cage_iterations).
+    use_iterative_cages = circulation.place_cage and (
+        circulation.cage_iterations > 0 or circulation.corridor_mode in ("point", "auto")
+    )
+    if use_iterative_cages:
         from services.cage_placement import CageWeights, iterate_cage_placement
         from services.circulation import _merge_manual_elements
 
@@ -594,7 +609,7 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
                 corridor_width_m=circulation.corridor_width_m,
                 num_cages=circulation.num_cages,
                 weights=CageWeights(**circulation.cage_weights.model_dump()),
-                iterations=circulation.cage_iterations,
+                iterations=circulation.cage_iterations or 10,
                 strategy=circulation.strategy,
                 corridor_mode=circulation.corridor_mode,
                 base_seed=circulation.base_seed,
@@ -667,6 +682,7 @@ def place_circulation_endpoint(request: LayoutGenerateRequest):
         ],
         cage_best_seed=cage_best_seed,
         spine_segments=_spine_to_json(result),
+        zone_access_modes=list(getattr(result, "zone_access_modes", None) or []),
     )
 
 
@@ -690,6 +706,11 @@ class UnitsRequest(BaseModel):
     """Segmenty osi korytarza z /layout/circulation (plan 2026-07-15 Task 5):
     kierunki cięcia traktów per ramię L/U. None = zachowanie sprzed spine'u."""
     base_seed: int = Field(default=0, ge=0)
+    point_cores: list[dict] | None = None
+    """Poligony trzonów (cage+hol) GeoJSON z /layout/circulation, gdy
+    zone_access_modes zawiera "point" (plan 2026-07-16 klatkowiec) --
+    przelotka do iterate_units(point_cores=...), tak jak circulation_geometry
+    powyżej. None = zachowanie sprzed trybu klatkowego (klasyczne strefy)."""
 
 
 class UnitsResponse(BaseModel):
@@ -740,6 +761,13 @@ def subdivide_units_endpoint(request: UnitsRequest):
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Invalid circulation_geometry: {exc}")
 
+    point_cores = None
+    if request.point_cores is not None:
+        try:
+            point_cores = [_shape(g) for g in request.point_cores]
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid point_cores geometry: {exc}")
+
     # Same gate as generate_layout_endpoint's `program_shares` (dual-surface):
     # only opt into the %-structure iterative engine when at least one
     # apartment actually carries a percentage -- otherwise fall back to the
@@ -771,7 +799,7 @@ def subdivide_units_endpoint(request: UnitsRequest):
                 iterations=request.iterations, weights=weights,
                 footprint=footprint, circulation_geometry=circulation_geometry,
                 strategy=request.strategy, spine_segments=spine,
-                base_seed=request.base_seed,
+                base_seed=request.base_seed, point_cores=point_cores,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
@@ -953,7 +981,11 @@ class MoveCageRequest(BaseModel):
     corridor_width_m: float = Field(default=1.5, gt=0)
     max_dist_single_m: float = Field(default=CORRIDOR_CENTERLINE_MAX_DISTANCE_SINGLE_LOADED_M, gt=0)
     max_dist_multi_m: float = Field(default=CORRIDOR_CENTERLINE_MAX_DISTANCE_DOUBLE_LOADED_M, gt=0)
-    corridor_mode: str = Field(default="double", pattern="^(double|gallery)$")
+    corridor_mode: str = Field(default="double", pattern="^(double|gallery|point|auto)$")
+    """Walidacja rozszerzona jak CirculationSpec (plan 2026-07-16) -- ale
+    point/auto NIE są tu obsłużone funkcjonalnie w MVP (patrz
+    move_cage_endpoint docstring): przepuszczone tylko żeby request z
+    aktualnym corridor_mode z frontu nie dostawał 422."""
 
 
 @router.post("/circulation/move-cage", response_model=CirculationResponse)
@@ -997,11 +1029,26 @@ def move_cage_endpoint(request: MoveCageRequest):
             detail="Klatka nie mieści się w całości w żadnej strefie (obrys wklęsły dzieli ją na dwie części)",
         )
 
-    result = _assemble_with_cages(
-        footprint, zones, local_cages, request.corridor_width_m,
-        request.max_dist_single_m, request.max_dist_multi_m,
-        prefer_flush=(request.corridor_mode == "gallery"),
-    )
+    try:
+        result = _assemble_with_cages(
+            footprint, zones, local_cages, request.corridor_width_m,
+            request.max_dist_single_m, request.max_dist_multi_m,
+            prefer_flush=(request.corridor_mode == "gallery"),
+        )
+    except Exception:
+        # Drag trzonu w trybie klatkowym nie jest wspierany w MVP (plan
+        # 2026-07-16 klatkowiec, kontroler Task 7 decyzja 4) --
+        # _assemble_with_cages nie zna corridor_mode="point"/"auto" (tylko
+        # prefer_flush z "gallery"), więc dla double/gallery to zachowanie
+        # bez zmian; łapiemy tu wyłącznie na wypadek, gdyby klatka
+        # przesunięta z trybu punktowego (inny rozmiar/pozycja niż zwykła
+        # klatka schodowa) wywaliła geometrię korytarzową.
+        if request.corridor_mode == "point":
+            raise HTTPException(
+                status_code=400,
+                detail="Przesuwanie trzonu w trybie klatkowym: następny etap",
+            )
+        raise
 
     return CirculationResponse(
         circulation_geometry=(

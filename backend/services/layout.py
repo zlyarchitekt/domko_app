@@ -260,6 +260,17 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
         from services.unit_mix import UnitWeights, iterate_units
         from services.wall_geometry import net_polygon as _np
 
+        # Klatkowiec (plan 2026-07-16 Task 7): gdy circulation wyszła
+        # punktowa (corridor_mode="point" albo "auto" wybrało point),
+        # silnik mieszkań musi ciąć wokół trzonu (point_zone_components),
+        # nie wzdłuż spine'u korytarza -- inaczej traktuje trzon jak zwykłą
+        # klatkę schodową i próbuje budować korytarz, który nie istnieje.
+        point_cores = (
+            [circulation.circulation_geometry]
+            if "point" in (getattr(circulation, "zone_access_modes", None) or [])
+            else None
+        )
+
         apartments, iteration_metas, best_seed, derived_total_units = iterate_units(
             circulation.remainder, input.program_shares,
             iterations=input.iterations,
@@ -269,6 +280,7 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
             strategy=input.strategy,
             spine_segments=getattr(circulation, "spine_segments", None) or None,
             base_seed=input.base_seed,
+            point_cores=point_cores,
         )
         leftover = None
         rem = circulation.remainder
