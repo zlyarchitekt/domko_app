@@ -590,3 +590,19 @@ def test_candidate_pool_contains_spine_adjacent_anchors():
     candidates = _candidate_cages(footprint, zones, num_cages=2, spine_segments=spine, corridor_half_m=0.85)
     interior = [c for _zi, c in candidates if c.exterior.distance(footprint.exterior) > 0.5]
     assert interior, "brak kandydatów wewnętrznych przy spine"
+
+
+def test_iterate_cage_placement_point_mode_enumerates_anchors():
+    footprint = _rect(0, 0, 23, 13.75)
+    result, metas, best = iterate_cage_placement(
+        footprint, 1.5, num_cages=1, weights=CageWeights(), iterations=10,
+        corridor_mode="point",
+    )
+    assert result.zone_access_modes == ["point"]
+    assert 1 <= len(metas) <= 5           # co najwyżej 5 kotwic
+    assert metas[0].seed == best
+    assert result.centerline == []
+    scores = [m.score for m in metas]
+    assert scores == sorted(scores)
+    # kontroler: winner na 23x13.75 = center (gap=0), nie remis z north (light_waste=0)
+    assert metas[0].components.get("coverage_gap", 0) <= 1e-6

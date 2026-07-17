@@ -391,6 +391,39 @@ def _red_share(candidate) -> float:
     return (sum(1 for d in dots if d.status == "red") / len(dots)) if dots else 1.0
 
 
+def _place_point_variant(footprint: Polygon, corridor_width_m: float, anchor: str) -> "CirculationResult | None":
+    """CirculationResult trybu punktowego z WYMUSZONĄ kotwicą anchor w KAŻDEJ
+    strefie (zamiast najlepszej z anchor_candidates per strefa). Brak
+    fallbacku: gdy anchor nie mieści się w którejś strefie, wywołujący ma
+    pominąć ten wariant (kontroler Task 5, decyzja 4)."""
+    from services.point_access import build_point_core, core_polygon
+
+    zones = [Zone(name=f"P{i}", polygon=z) for i, z in enumerate(rectangle_decompose(footprint))]
+    cages, cores = [], []
+    for z in zones:
+        built = build_point_core(z.polygon, anchor)
+        if built is None:
+            return None
+        cage, hall = built
+        cages.append(cage)
+        cores.append(core_polygon(cage, hall))
+    circulation = unary_union(cores)
+    return CirculationResult(
+        zones=zones, circulation_geometry=circulation, cage_polygons=cages,
+        remainder=footprint.difference(circulation), centerline=[],
+        evacuation_dots=[], spine_segments=[],
+        zone_access_modes=["point"] * len(zones),
+    )
+
+
+def _meta_from_result(result: CirculationResult, score: float, components: dict | None = None) -> CageIterationMeta:
+    return CageIterationMeta(
+        seed=0, score=score, cages_count=len(result.cage_polygons),
+        components=components if components is not None else {"light_waste": round(score, 4)},
+        result=result,
+    )
+
+
 def iterate_cage_placement(
     footprint: Polygon,
     corridor_width_m: float,
@@ -406,6 +439,40 @@ def iterate_cage_placement(
     from services.circulation import NET_SHRINK_M
     from services.corridor_spine import build_spine
     from services.optimize import dedupe_and_rank
+
+    if corridor_mode == "point":
+        from services.point_access import anchor_candidates, anchor_coverage_gap
+
+        # Deterministyczna enumeracja kotwic -- kotwica per wariant, jedna
+        # kotwica we wszystkich strefach (Task 6 rozszerzy o kombinacje per
+        # strefa przy auto). Strefy z rectangle_decompose bezpośrednio --
+        # zones_probe z briefu przez place_circulation był zbędny (kontroler
+        # decyzja 5). gap liczony na strefie [0] -- MVP jednostrefowy.
+        zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
+        anchors = anchor_candidates(zones[0].polygon)
+        metas: list[CageIterationMeta] = []
+        results: list[CirculationResult] = []
+        for a in anchors:
+            variant = _place_point_variant(footprint, corridor_width_m, a)
+            if variant is None:
+                continue
+            gap = anchor_coverage_gap(zones[0].polygon, a)
+            share = sum(
+                _light_waste_for_cage(c, footprint) for c in variant.cage_polygons
+            ) / max(1, len(variant.cage_polygons))
+            score = 10.0 * gap + share
+            results.append(variant)
+            metas.append(_meta_from_result(
+                variant, score=score,
+                components={"coverage_gap": round(gap, 4), "light_waste": round(share, 4)},
+            ))
+        if not metas:
+            raise ValueError("Strefa za mała na trzon klatkowy")
+        order = sorted(range(len(metas)), key=lambda i: metas[i].score)
+        metas = [metas[i] for i in order]
+        for idx, m in enumerate(metas):
+            m.seed = idx
+        return results[order[0]], metas, 0
 
     zones = [Zone(name=f"Z{i}", polygon=p) for i, p in enumerate(rectangle_decompose(footprint))]
     prefer_flush = corridor_mode == "gallery"
