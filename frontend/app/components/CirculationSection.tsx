@@ -13,10 +13,11 @@ const TYPOLOGY_LABELS: Record<string, string> = {
   szeregowiec: "Szeregowiec",
 };
 
-// Uczciwe opisy — co preset FAKTYCZNIE ustawia (plan 2026-07-15 Task 11).
+// Uczciwe opisy — co preset FAKTYCZNIE ustawia (plan 2026-07-15 Task 11,
+// punktowiec zaktualizowany na tryb "point" w planie 2026-07-16 Task 8).
 const TYPOLOGY_HINTS: Record<string, string> = {
   klatkowiec_wzdluzny: "Dwutrakt (korytarz w środku), klatki co ~25 m, równomierny rozstaw.",
-  punktowiec: "Dwutrakt, dokładnie 1 klatka centralna.",
+  punktowiec: "Sama klatka + hol, mieszkania wchodzą bezpośrednio (1-6 na poziom).",
   galeriowiec: "Korytarz przy elewacji (jednotrakt), klatki co ~25 m.",
   klatkowiec_narozny: "Dwutrakt, klatki co ~25 m, silnie unikają doświetlanej elewacji.",
   szeregowiec: "Korytarz przy elewacji, klatki co ~25 m, równomierny rozstaw.",
@@ -77,16 +78,20 @@ export default function CirculationSection() {
 
       <label
         className="flex items-center justify-between text-xs text-zinc-400"
-        title="Dwutrakt: korytarz w środku, mieszkania po obu stronach. Galeriowiec: korytarz przy elewacji, mieszkania jednostronnie doświetlane."
+        title="Auto: silnik sam wybiera klatki vs korytarz. Dwutrakt: korytarz w środku, mieszkania po obu stronach. Galeriowiec: korytarz przy elewacji, mieszkania jednostronnie doświetlane. Klatkowy: bez korytarza, mieszkania wchodzą wprost z klatki/holu."
       >
         Tryb korytarza
         <select
           value={state.circulation.corridor_mode ?? "double"}
-          onChange={(e) => setCirculation({ corridor_mode: e.target.value as "double" | "gallery" })}
+          onChange={(e) =>
+            setCirculation({ corridor_mode: e.target.value as "auto" | "double" | "gallery" | "point" })
+          }
           className="rounded-lg border border-zinc-700/50 bg-zinc-800/70 px-2 py-1 text-zinc-100 focus:border-accent-500/60 focus:outline-none light:border-zinc-300 light:bg-white light:text-zinc-900"
         >
-          <option value="double">Dwutrakt (środek)</option>
-          <option value="gallery">Galeriowiec (elewacja)</option>
+          <option value="auto">Auto (klatki vs korytarz)</option>
+          <option value="double">Dwutrakt (korytarz w środku)</option>
+          <option value="gallery">Galeriowiec (korytarz przy elewacji)</option>
+          <option value="point">Klatkowy (bez korytarza)</option>
         </select>
       </label>
 

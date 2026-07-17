@@ -213,9 +213,12 @@ export interface CirculationSpecInput {
   cage_weights: CageWeightsInput;
   /** Strategia szukania (plan 2026-07-14 Etap 2): anneal (default) | random. */
   strategy?: "anneal" | "random" | "pareto";
-  /** Topologia korytarza (plan 2026-07-15 §C): double (dwutrakt, korytarz
-   * w środku) | gallery (galeriowiec, korytarz przy elewacji). */
-  corridor_mode?: "double" | "gallery";
+  /** Topologia korytarza (plan 2026-07-15 §C, rozszerzone 2026-07-16 Task 7):
+   * auto (silnik wybiera klatki vs korytarz) | double (dwutrakt, korytarz
+   * w środku) | gallery (galeriowiec, korytarz przy elewacji) | point
+   * (klatkowiec punktowy, bez korytarza -- mieszkania wchodzą wprost z
+   * klatki/holu). */
+  corridor_mode?: "auto" | "double" | "gallery" | "point";
   /** Baza seedów silnika (2026-07-16): losowana per klik -> każde
    * uruchomienie eksploruje inne warianty. */
   base_seed?: number;
@@ -312,6 +315,10 @@ export interface CirculationResponse {
   /** Segmenty osi korytarza (plan 2026-07-15) [[x,y],[x,y]] -- oddawane do
    * /layout/units jako kierunki cięcia traktów per ramię L/U. */
   spine_segments?: number[][][];
+  /** Tryb dostępu per strefa komunikacji (plan 2026-07-16 Task 7): np.
+   * ["point"] gdy corridor_mode="point" -- steruje przekazaniem point_cores
+   * do /layout/units zamiast zwykłego remainder-cut. */
+  zone_access_modes?: string[];
 }
 
 export function placeCirculation(
@@ -399,7 +406,8 @@ export function subdivideUnits(
   weights?: UnitWeightsInput,
   strategy?: "anneal" | "random" | "pareto",
   spineSegments?: number[][][],
-  baseSeed?: number
+  baseSeed?: number,
+  pointCores?: GeoJsonPolygon[]
 ): Promise<UnitsResponse> {
   // footprint/circulation_geometry are optional on the backend (older calls
   // still work without them) but required for it to compute wall_bands --
@@ -415,6 +423,7 @@ export function subdivideUnits(
     strategy,
     spine_segments: spineSegments,
     base_seed: baseSeed,
+    point_cores: pointCores,
   });
 }
 

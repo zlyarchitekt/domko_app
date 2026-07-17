@@ -132,7 +132,7 @@ const initialCirculation: api.CirculationSpecInput = {
  * korytarza jak dotąd. num_cages liczony z długości budynku (1 klatka na
  * każde rozpoczęte 25 m dłuższego boku bbox obrysu, min 1). */
 const TYPOLOGY_CONFIG: Record<string, {
-  corridor_mode: "double" | "gallery";
+  corridor_mode: "auto" | "double" | "gallery" | "point";
   cagesPer25m: boolean;
   cage_weights: api.CageWeightsInput;
 }> = {
@@ -140,8 +140,10 @@ const TYPOLOGY_CONFIG: Record<string, {
     corridor_mode: "double", cagesPer25m: true,
     cage_weights: { egress: 1.0, count: 0.8, light_waste: 0.8, ends: 0.2, spread: 1.0 },
   },
+  // Punktowiec = klatkowiec punktowy: 1 klatka, mieszkania wchodzą wprost
+  // z klatki/holu, bez korytarza (plan 2026-07-16 Task 7/8).
   punktowiec: {
-    corridor_mode: "double", cagesPer25m: false,
+    corridor_mode: "point", cagesPer25m: false,
     cage_weights: { egress: 1.0, count: 0.8, light_waste: 0.8, ends: 0.0, spread: 0.0 },
   },
   galeriowiec: {
@@ -1073,6 +1075,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         area_max_m2: row.area_max_m2,
         min_facade_m: row.min_facade_m,
       }));
+      // Klatkowiec punktowy (plan 2026-07-16 Task 7/8): backend zwraca
+      // zone_access_modes=["point"] gdy corridor_mode="point" -- w tym trybie
+      // nie ma korytarza, więc /layout/units musi dostać krąg(i) klatki+holu
+      // jako point_cores zamiast liczyć zwykły remainder-cut.
+      const pointCores =
+        state.circulationResult.zone_access_modes?.includes("point") &&
+        state.circulationResult.circulation_geometry
+          ? [state.circulationResult.circulation_geometry]
+          : undefined;
       const unitsRes = await api.subdivideUnits(
         state.circulationResult.remainder,
         unitsReq,
@@ -1082,7 +1093,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         state.unitWeights,
         state.circulation.strategy,
         state.circulationResult.spine_segments,
-        freshBaseSeed()
+        freshBaseSeed(),
+        pointCores
       );
       const layoutResult: api.LayoutGenerateResponse = {
         footprint_area_m2: state.footprint ? polygonAreaFromPoints(state.footprint) : 0,
