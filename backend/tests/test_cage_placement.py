@@ -630,16 +630,20 @@ def test_auto_mode_prefers_corridor_for_long_bar():
 
 
 def test_auto_mode_uses_real_program_when_given():
-    """Fix po review Task 6: pass-through prawdziwego programu do
-    auto-decyzji musi działać (wcześniej martwy parametr)."""
+    """Fix po review Task 6: prawdziwy program musi WPŁYWAĆ na auto-decyzję
+    (wcześniej parametr martwy -- placeholder _probe_shares zawsze).
+    Kombinacja z re-review: 60x12 z placeholderem -> corridor, z programem
+    samych M4 -> point. Regresja do no-op wywala różnicę."""
     from services.unit_mix import ProgramShare
 
-    footprint = _rect(0, 0, 23, 13.75)
+    footprint = _rect(0, 0, 60, 12)
     big_only = [ProgramShare(type="M4", percentage=100, area_min_m2=72, area_max_m2=90)]
     r_default, _, _ = iterate_cage_placement(
-        footprint, 1.5, num_cages=1, weights=CageWeights(), iterations=8,
+        footprint, 1.5, num_cages=2, weights=CageWeights(), iterations=8,
         corridor_mode="auto")
     r_big, _, _ = iterate_cage_placement(
-        footprint, 1.5, num_cages=1, weights=CageWeights(), iterations=8,
+        footprint, 1.5, num_cages=2, weights=CageWeights(), iterations=8,
         corridor_mode="auto", program_shares=big_only)
-    assert r_default.zone_access_modes and r_big.zone_access_modes
+    assert r_default.zone_access_modes[0] == "corridor"
+    assert r_big.zone_access_modes[0] == "point"
+    assert r_default.zone_access_modes != r_big.zone_access_modes
