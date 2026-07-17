@@ -712,3 +712,25 @@ def test_deep_leg_L_no_long_kiszki():
     winner = next(m for m in metas if m.seed == best_seed)
     assert winner.hard_valid, winner.hard_violations
     assert all(_mrr_aspect_ratio(c.polygon) <= 3.0 + 1e-6 for c in cells), "brak kiszek > 1:3"
+
+
+def test_iterate_units_point_mode_fills_and_touches_core():
+    """Klatkowiec 23x13.75 (wzorzec 3/5): mieszkania wokół trzonu, winner
+    hard_valid, pustka <=10%."""
+    from services.circulation import place_circulation
+
+    fp = _rect(0, 0, 23, 13.75)
+    res = place_circulation(
+        fp, corridor_width_m=1.5, stair_width_m=1.2, place_cage=True,
+        cage_size_m=2.6, cage_position="auto", num_cages=1,
+        corridor_mode="point",
+    )
+    cells, metas, _, _ = iterate_units(
+        res.remainder, SHARES, iterations=10,
+        circulation_geometry=res.circulation_geometry, footprint=fp,
+        spine_segments=res.spine_segments,
+        point_cores=[res.circulation_geometry],
+    )
+    assert metas[0].components["leftover"] <= 0.10
+    for c in cells:
+        assert c.polygon.distance(res.circulation_geometry) < 0.06

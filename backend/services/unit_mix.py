@@ -497,7 +497,7 @@ class _UnitsGenerator:
     w wywołaniu silnika ciachającego) zamiast losowego tasowania w środku."""
 
     def __init__(self, remainder, specs, rectangles, use_trakts, circulation_geometry, net_area, shares,
-                 spine_segments=None, footprint=None):
+                 spine_segments=None, footprint=None, point_cores=None):
         self.remainder = remainder
         self.specs = specs
         self.rectangles = rectangles
@@ -507,6 +507,7 @@ class _UnitsGenerator:
         self.shares = shares
         self.spine_segments = spine_segments
         self.footprint = footprint
+        self.point_cores = point_cores
 
         self._canonical_queue: list[ApartmentSpec] = []
         for spec in specs:
@@ -518,7 +519,7 @@ class _UnitsGenerator:
             # _polygons(remainder) rozjeżdżało się z typed per-strefa i
             # component_order wycinał komponenty (pusta noga L).
             from services.trakt_division import typed_components
-            self._n_comp = len(typed_components(remainder, spine_segments, footprint))
+            self._n_comp = len(typed_components(remainder, spine_segments, footprint, point_cores))
         else:
             self._n_comp = len(rectangles)
 
@@ -554,6 +555,7 @@ class _UnitsGenerator:
                 self.remainder, self.circulation_geometry, self.specs, rng=None,
                 queue_override=permuted_queue, component_order=list(comp_order),
                 spine_segments=self.spine_segments, footprint=self.footprint,
+                point_cores=self.point_cores,
             )
         else:
             cells, leftover = fit_program_to_rectangles(
@@ -580,12 +582,17 @@ def iterate_units(
     strategy: str = "anneal",
     spine_segments=None,
     base_seed: int = 0,
+    point_cores=None,
 ) -> tuple[list[ApartmentCell], list[IterationMeta], int, int]:
     """Iteracyjny podział (spec §2): seeded przebiegi, zero-leftover merge,
     scoring 7-wagowy, wygrywa najniższy score.
 
     `spine_segments` (plan 2026-07-15 Task 5): kierunki cięcia traktów per
-    ramię L/U -- przekazywane do slice_trakts."""
+    ramię L/U -- przekazywane do slice_trakts.
+
+    `point_cores` (plan 2026-07-16, Task 4): tryb klatkowy -- poligony
+    trzonów (cage+hol), przekazywane do `_UnitsGenerator`/`slice_trakts`;
+    ma pierwszeństwo nad `spine_segments` (patrz `typed_components`)."""
     weights = weights or UnitWeights()
     if hasattr(remainder, "geoms"):
         net_area = sum(net_polygon(p).area for p in remainder.geoms)
@@ -611,7 +618,7 @@ def iterate_units(
     rectangles = [] if use_trakts else rectangle_decompose(remainder)
 
     gen = _UnitsGenerator(remainder, specs, rectangles, use_trakts, circulation_geometry, net_area, shares,
-                          spine_segments=spine_segments, footprint=footprint)
+                          spine_segments=spine_segments, footprint=footprint, point_cores=point_cores)
 
     remainder_area = remainder.area if remainder is not None else 0.0
 

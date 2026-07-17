@@ -68,7 +68,7 @@ def _clip(component: Polygon, horizontal: bool, lo: float, hi: float):
     return component.intersection(clip)
 
 
-def typed_components(remainder, spine_segments=None, footprint=None) -> list:
+def typed_components(remainder, spine_segments=None, footprint=None, point_cores=None) -> list:
     """Komponenty do cięcia jako (poligon, kierunek_cięcia|None).
 
     Kierunek pochodzi z segmentu spine dominującego w STREFIE, do której
@@ -83,12 +83,29 @@ def typed_components(remainder, spine_segments=None, footprint=None) -> list:
     komponenty po _polygons(remainder) (np. 2), a slice_trakts budował typed
     per strefa (np. 4) -- component_order z guardem `i < len(typed)` wycinał
     resztę komponentów i cała noga L lądowała w leftover. Obie strony muszą
-    liczyć komponenty TĄ SAMĄ funkcją."""
+    liczyć komponenty TĄ SAMĄ funkcją.
+
+    Tryb klatkowy (plan 2026-07-16): `point_cores` = poligony trzonów;
+    komponenty wokół trzonu z kierunkami liczy point_zone_components --
+    strefy punktowe NIE przechodzą przez logikę spine. MVP (Task 4): JEDNA
+    strefa punktowa na footprint prostokątny -- strefa = bbox(remainder+core),
+    komponenty z point_zone_components(zone_rect, core).
+    # Task 6+: multi-strefa -- pary (core, zone)."""
 
     def _seg_horizontal(s) -> bool:
         return abs(s[1][1] - s[0][1]) <= abs(s[1][0] - s[0][0])
 
     typed: list[tuple[Polygon, "bool | None"]] = []
+    if point_cores:
+        from shapely.geometry import box
+
+        from services.point_access import point_zone_components
+
+        cores = point_cores if isinstance(point_cores, list) else [point_cores]
+        for core in cores:
+            zone_rect = box(*unary_union([remainder, core]).bounds)
+            typed.extend(point_zone_components(zone_rect, core))
+        return typed
     if footprint is not None and spine_segments:
         from services.bsp import rectangle_decompose
         for zone in rectangle_decompose(footprint):
@@ -117,6 +134,7 @@ def slice_trakts(
     component_order: list[int] | None = None,
     spine_segments: list | None = None,
     footprint=None,
+    point_cores=None,
 ):
     """(cells, leftover) -- kontrakt zwrotu jak fit_program_to_rectangles.
 
@@ -132,7 +150,12 @@ def slice_trakts(
     (`queue_override`, dokładna lista -- nie ekspandujemy `specs` ponownie)
     i/lub kolejność indeksów komponentów remainder (`component_order`) --
     stosowane deterministycznie ZAMIAST losowego `rng.shuffle`, dokładnie
-    tak jak przy `rng=None` (brak tasowania), tylko z jawnym porządkiem."""
+    tak jak przy `rng=None` (brak tasowania), tylko z jawnym porządkiem.
+
+    `point_cores` (plan 2026-07-16, Task 4): tryb klatkowy ma pierwszeństwo
+    nad `spine_segments` -- gdy podane, `typed_components` liczy komponenty
+    z `point_zone_components` i gałąź spine w ogóle nie jest brana pod
+    uwagę (patrz `typed_components`)."""
     from services.layout import ApartmentCell  # deferred: cykl layout->unit_mix (Zadanie 3 spina moduły)
 
     if queue_override is not None:
@@ -141,7 +164,7 @@ def slice_trakts(
         queue = []
         for spec in specs:
             queue.extend([spec] * spec.target_count)
-    typed = typed_components(remainder, spine_segments, footprint)
+    typed = typed_components(remainder, spine_segments, footprint, point_cores)
 
     if component_order is not None:
         typed = [typed[i] for i in component_order if i < len(typed)]
