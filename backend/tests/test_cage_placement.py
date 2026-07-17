@@ -672,3 +672,38 @@ def test_auto_mode_uses_real_program_when_given():
     assert r_default.zone_access_modes[0] == "corridor"
     assert r_big.zone_access_modes[0] == "point"
     assert r_default.zone_access_modes != r_big.zone_access_modes
+
+
+def test_auto_mode_L_footprint_decides_and_is_consistent():
+    """Task 9 (golden): L 74x12 + noga 14x30 -- MVP wybiera JEDEN tryb dla
+    całego budynku; pilnujemy spójności (modes wypełnione, tyle ile stref)
+    i tego, że wynik da się pociąć bez pustki >10%."""
+    from services.unit_mix import ProgramShare, iterate_units
+
+    footprint = _rect(0, 0, 74, 12).union(_rect(60, -30, 74, 0))
+    result, metas, _ = iterate_cage_placement(
+        footprint, 1.5, num_cages=3, weights=CageWeights(), iterations=8,
+        corridor_mode="auto",
+    )
+    assert len(result.zone_access_modes) == len(result.zones)
+    assert set(result.zone_access_modes) <= {"point", "corridor"}
+    # Pełny 4-typowy program (jak default aplikacji): dwutypowy M2/M3 z
+    # wczesnego szkicu planu jest geometrycznie za ciasny dla głębokiej
+    # nogi (M2 niewykonalne w trakcie >11 m) i test mierzyłby program,
+    # nie silnik.
+    shares = [
+        ProgramShare(type="M1", percentage=10, area_min_m2=25, area_max_m2=32),
+        ProgramShare(type="M2", percentage=40, area_min_m2=38, area_max_m2=48),
+        ProgramShare(type="M3", percentage=40, area_min_m2=58, area_max_m2=70),
+        ProgramShare(type="M4", percentage=10, area_min_m2=72, area_max_m2=90),
+    ]
+    point_cores = (
+        [result.circulation_geometry]
+        if "point" in result.zone_access_modes else None
+    )
+    _c, umetas, _s, _t = iterate_units(
+        result.remainder, shares, iterations=8, footprint=footprint,
+        circulation_geometry=result.circulation_geometry,
+        spine_segments=result.spine_segments, point_cores=point_cores,
+    )
+    assert umetas[0].components["leftover"] <= 0.10
