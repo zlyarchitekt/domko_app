@@ -24,6 +24,78 @@ from services.circulation import (
 
 CANDIDATE_EDGE_STEP_M = 5.0
 
+COMM_SHARE_WEIGHT = 2.0
+"""Waga udziału komunikacji w composite auto-decyzji (plan 2026-07-16).
+Referencje (docs/references/typologia-klatkowa.md §1): klatkowiec 9-13%
+powierzchni vs korytarzowiec więcej. To rachunek, nie reguła: gruby trakt
+albo długie skrzydło i tak wygra korytarzem przez jakość mieszkań."""
+
+_DEFAULT_PROBE_SHARES = None  # leniwe -- ProgramShare importowany w funkcji
+
+
+def _probe_shares():
+    global _DEFAULT_PROBE_SHARES
+    if _DEFAULT_PROBE_SHARES is None:
+        from services.unit_mix import ProgramShare
+        _DEFAULT_PROBE_SHARES = [
+            ProgramShare(type="M1", percentage=10, area_min_m2=25, area_max_m2=32),
+            ProgramShare(type="M2", percentage=40, area_min_m2=38, area_max_m2=48),
+            ProgramShare(type="M3", percentage=40, area_min_m2=58, area_max_m2=70),
+            ProgramShare(type="M4", percentage=10, area_min_m2=72, area_max_m2=90),
+        ]
+    return _DEFAULT_PROBE_SHARES
+
+
+def decide_access_modes(footprint, shares, corridor_width_m, num_cages,
+                        weights, iterations, strategy="anneal", base_seed=0):
+    """Porównaj warianty korytarzowy i punktowy pełnym (budżetowanym)
+    przebiegiem silnika mieszkań; zwróć wynik lepszego. MVP: decyzja
+    całobudynkowa (wszystkie strefy ten sam tryb); per-strefa mieszanie --
+    następny krok po MVP (patrz plan, sekcja Deferred)."""
+    from services.unit_mix import iterate_units
+
+    shares = shares or _probe_shares()
+    probe_budget = max(6, iterations // 2)
+    candidates = []
+    for mode in ("double", "point"):
+        try:
+            if mode == "point":
+                # gałąź "point" jest deterministyczną enumeracją kotwic --
+                # strategy/base_seed nie mają tam żadnego znaczenia (kontroler
+                # Task 6 decyzja 5), więc ich nie przekazujemy.
+                circ, metas, best = iterate_cage_placement(
+                    footprint, corridor_width_m, num_cages, weights,
+                    iterations=iterations, corridor_mode=mode,
+                )
+            else:
+                circ, metas, best = iterate_cage_placement(
+                    footprint, corridor_width_m, num_cages, weights,
+                    iterations=iterations, strategy=strategy,
+                    corridor_mode=mode, base_seed=base_seed,
+                )
+        except ValueError:
+            continue  # np. strefa za mała na trzon
+        point_cores = [circ.circulation_geometry] if mode == "point" else None
+        _cells, umetas, _s, _t = iterate_units(
+            circ.remainder, shares, iterations=probe_budget,
+            footprint=footprint, circulation_geometry=circ.circulation_geometry,
+            strategy=strategy, spine_segments=circ.spine_segments,
+            base_seed=base_seed, point_cores=point_cores,
+        )
+        comm_share = circ.circulation_geometry.area / footprint.area
+        composite = umetas[0].score + COMM_SHARE_WEIGHT * comm_share
+        # tryb łamiący zakazy twarde przegrywa z czystym niezależnie od score
+        rank = (0 if umetas[0].hard_valid else 1, composite)
+        label = "corridor" if mode == "double" else "point"
+        candidates.append((rank, label, circ, metas, best))
+    if not candidates:
+        raise ValueError("Auto: żaden tryb komunikacji nie da się zbudować")
+    candidates.sort(key=lambda c: c[0])
+    _rank, label, circ, metas, best = candidates[0]
+    if not circ.zone_access_modes:
+        circ.zone_access_modes = [label] * len(circ.zones)
+    return circ, metas, best
+
 
 @dataclass
 class CageWeights:
@@ -440,6 +512,12 @@ def iterate_cage_placement(
     from services.corridor_spine import build_spine
     from services.optimize import dedupe_and_rank
 
+    if corridor_mode == "auto":
+        return decide_access_modes(
+            footprint, None, corridor_width_m, num_cages, weights,
+            iterations, strategy=strategy, base_seed=base_seed,
+        )
+
     if corridor_mode == "point":
         from services.point_access import anchor_candidates, anchor_coverage_gap
 
@@ -535,4 +613,5 @@ def iterate_cage_placement(
         for idx, c in enumerate(ranked)
     ]
     best_seed = next(idx for idx, c in enumerate(ranked) if c.genome == winner.genome)
+    winner.payload.zone_access_modes = ["corridor"] * len(winner.payload.zones)
     return winner.payload, metas, best_seed

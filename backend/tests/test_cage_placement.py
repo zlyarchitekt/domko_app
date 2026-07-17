@@ -606,3 +606,24 @@ def test_iterate_cage_placement_point_mode_enumerates_anchors():
     assert scores == sorted(scores)
     # kontroler: winner na 23x13.75 = center (gap=0), nie remis z north (light_waste=0)
     assert metas[0].components.get("coverage_gap", 0) <= 1e-6
+
+
+def test_auto_mode_prefers_point_for_compact_deep_footprint():
+    """23x13.75 (wzorzec 3): klatkowiec ma wygrać z korytarzem -- komunikacja
+    ~30 m2 vs korytarz przez cały budynek."""
+    footprint = _rect(0, 0, 23, 13.75)
+    result, metas, _ = iterate_cage_placement(
+        footprint, 1.5, num_cages=1, weights=CageWeights(), iterations=8,
+        corridor_mode="auto",
+    )
+    assert result.zone_access_modes == ["point"]
+
+
+def test_auto_mode_prefers_corridor_for_long_bar():
+    """60x12 (trakt 12, budynek długi): korytarz środkiem -- wzorzec 4."""
+    footprint = _rect(0, 0, 60, 12)
+    result, metas, _ = iterate_cage_placement(
+        footprint, 1.5, num_cages=2, weights=CageWeights(), iterations=8,
+        corridor_mode="auto",
+    )
+    assert result.zone_access_modes == ["corridor"]
