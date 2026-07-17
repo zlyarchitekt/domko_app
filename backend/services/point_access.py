@@ -8,6 +8,11 @@ from __future__ import annotations
 from shapely.geometry import MultiPolygon, Polygon
 
 from services.circulation import CAGE_DEPTH_M, CAGE_WIDTH_M
+# Import na poziomie modułu bezpieczny: trakt_division nie importuje
+# point_access (zweryfikowano, brak cyklu) -- fix finding 1 (review Task 2):
+# lokalna kopia `_parts` nie łapiła GeometryCollection z cięć na granicy,
+# przez co pas mógł cicho zniknąć zamiast trafić do leftover.
+from services.trakt_division import _polygons
 
 HALL_DEPTH_M = 1.8
 """Głębokość holu wejściowego doklejonego do klatki od strony wnętrza
@@ -83,16 +88,6 @@ def anchor_candidates(zone: Polygon) -> list[str]:
     return [a for _, _, a in scored]
 
 
-def _parts(geom) -> list[Polygon]:
-    if geom is None or geom.is_empty:
-        return []
-    if isinstance(geom, Polygon):
-        return [geom]
-    if isinstance(geom, MultiPolygon):
-        return [g for g in geom.geoms if isinstance(g, Polygon) and g.area > 1e-6]
-    return []
-
-
 def point_zone_components(zone: Polygon, core: Polygon) -> list[tuple[Polygon, bool]]:
     """Remainder strefy pocięty na pas zachodni / środkowy (nad+pod trzonem)
     / wschodni wzdłuż krawędzi trzonu (core.minx, core.maxx); kierunek cięcia
@@ -122,10 +117,72 @@ def point_zone_components(zone: Polygon, core: Polygon) -> list[tuple[Polygon, b
     ):
         if rect is None:
             continue
-        for poly in _parts(remainder.intersection(rect)):
+        for poly in _polygons(remainder.intersection(rect)):
             if poly.area > 1.0:
                 out.append((poly, horiz))
     return out
+
+
+def anchor_coverage_gap(zone: Polygon, anchor: str) -> float:
+    """Udział powierzchni remainder strefy w komponentach BEZ REALNEGO
+    styku z trzonem (0.0 = każdy pas da mieszkania przy trzonie; 1.0 =
+    nic). Tani, deterministyczny probe geometryczny -- bez cięcia mieszkań.
+
+    Fix finding 2 (review Task 2): kotwice krawędziowe (north/south/east/
+    west) dają pasy boczne (`point_zone_components`, pas zachodni/wschodni)
+    na PEŁNĄ wysokość strefy (`zone.bounds` miny/maxy), NIEZALEŻNIE od
+    faktycznego zasięgu trzonu w osi Y -- gdy trzon nie jest wyśrodkowany
+    w Y (north/south: dosunięty do krawędzi), pas ma nadmiarowy fragment
+    "sierotę" po jednej stronie bez odpowiednika po drugiej -- ta sierota
+    nie ma szans dotknąć trzonu po realnym pocięciu na mieszkania, mimo że
+    CAŁY pas jako bryła geometrycznie "dotyka" trzonu (dzieli z nim
+    krawędź gdzieś w środku swojej wysokości).
+
+    UWAGA WAŻNA (zweryfikowane empirycznie przy implementacji): naiwny
+    probe "czy CAŁY komponent z point_zone_components dotyka trzonu"
+    (odległość poligon-poligon) jest MATEMATYCZNIE ZAWSZE 0 dla KAŻDEJ
+    kotwicy -- `point_zone_components` buduje krawędzie pasów wprost z
+    `core.bounds`, więc każdy pas z definicji dzieli fragment granicy z
+    trzonem, niezależnie od tego, jak bardzo trzon jest przesunięty w
+    stronę jednej krawędzi. Taki probe nie odróżnia więc north/south od
+    center (obie dają 0.0) -- zamiast tego liczymy wprost NIEZRÓWNOWAŻENIE
+    zasięgu trzonu w osi Y względem pełnej wysokości strefy: różnica
+    marginesu przed trzonem i za trzonem, pomnożona przez łączną szerokość
+    pasów bocznych (west+east). Center/east/west zawsze centrują trzon w Y
+    (`build_point_core`), więc margines jest symetryczny -> 0. North/south
+    dosuwają trzon do krawędzi -> cały margines ląduje po jednej stronie
+    -> sierota = pełny margines.
+
+    Komponent "dotykający" trzonu nie gwarantuje, że KAŻDA komórka po
+    docelowym cięciu tego komponentu również dotknie -- ale ten probe jest
+    wystarczającym tanim sygnałem routingu dla Tasków 3/5, bez uruchamiania
+    pełnego `slice_point_zone`."""
+    core = build_point_core(zone, anchor)
+    if core is None:
+        return 1.0
+    cage, hall = core
+    core_poly = core_polygon(cage, hall)
+    comps = point_zone_components(zone, core_poly)
+    total = sum(poly.area for poly, _ in comps)
+    if total <= 1e-9:
+        return 1.0
+    minx, miny, maxx, maxy = zone.bounds
+    cminx, cminy, cmaxx, cmaxy = core_poly.bounds
+    margin_before, margin_after = cminy - miny, maxy - cmaxy
+    orphan_y = abs(margin_before - margin_after)
+    side_band_width = max(0.0, cminx - minx) + max(0.0, maxx - cmaxx)
+    gap = orphan_y * side_band_width
+    return min(1.0, gap / total)
+
+
+def best_anchor(zone: Polygon) -> "str | None":
+    """Kotwica dla trybu klatkowego: najpierw minimalna luka pokrycia
+    (`anchor_coverage_gap`), remis rozstrzyga kolejność `anchor_candidates`
+    (czyli light_waste). None gdy żadna kotwica nie mieści trzonu."""
+    cands = anchor_candidates(zone)
+    if not cands:
+        return None
+    return min(cands, key=lambda a: (round(anchor_coverage_gap(zone, a), 6), cands.index(a)))
 
 
 def slice_point_zone(zone, core, specs, rng, queue_override=None, component_order=None):

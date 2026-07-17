@@ -9,6 +9,8 @@ from services.layout import ApartmentSpec
 from services.point_access import (
     HALL_DEPTH_M,
     anchor_candidates,
+    anchor_coverage_gap,
+    best_anchor,
     build_point_core,
     core_polygon,
     point_zone_components,
@@ -85,3 +87,15 @@ def test_slice_point_zone_units_touch_core_and_facade():
     # pustka co najwyżej marginalna
     left_area = 0.0 if leftover is None or leftover.is_empty else leftover.area
     assert left_area / (zone.area - core.area) < 0.10
+
+
+def test_anchor_coverage_gap_center_beats_edges():
+    zone = _rect(0, 0, 23, 13.75)
+    gaps = {a: anchor_coverage_gap(zone, a) for a in ("center", "north", "west")}
+    assert gaps["center"] <= 1e-6
+    assert gaps["north"] > gaps["center"] or gaps["west"] > gaps["center"]
+
+
+def test_best_anchor_picks_center_on_deep_compact_zone():
+    assert best_anchor(_rect(0, 0, 23, 13.75)) == "center"
+    assert best_anchor(_rect(0, 0, 5, 5)) is None
