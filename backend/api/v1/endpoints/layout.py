@@ -999,6 +999,18 @@ def move_cage_endpoint(request: MoveCageRequest):
     from services.cage_placement import assign_cages_to_zones
     from services.circulation import Zone, _assemble_with_cages
 
+    # Fix po review Task 7: drag trzonu w trybie klatkowym nie jest
+    # wspierany w MVP (plan 2026-07-16 klatkowiec, kontroler Task 7 decyzja
+    # 4) -- ale _assemble_with_cages nie zna corridor_mode="point" i nie
+    # rzuca dla zwykłych prostokątnych klatek, więc łapanie tego przez
+    # `except Exception` niżej było martwym kodem: zwracało ciche 200 z
+    # błędną geometrią double zamiast punktowej. Jawny guard na starcie.
+    if request.corridor_mode == "point":
+        raise HTTPException(
+            status_code=400,
+            detail="Przesuwanie trzonu w trybie klatkowym: następny etap",
+        )
+
     try:
         footprint = _points_to_polygon(request.footprint)
     except ValueError as exc:
@@ -1029,26 +1041,11 @@ def move_cage_endpoint(request: MoveCageRequest):
             detail="Klatka nie mieści się w całości w żadnej strefie (obrys wklęsły dzieli ją na dwie części)",
         )
 
-    try:
-        result = _assemble_with_cages(
-            footprint, zones, local_cages, request.corridor_width_m,
-            request.max_dist_single_m, request.max_dist_multi_m,
-            prefer_flush=(request.corridor_mode == "gallery"),
-        )
-    except Exception:
-        # Drag trzonu w trybie klatkowym nie jest wspierany w MVP (plan
-        # 2026-07-16 klatkowiec, kontroler Task 7 decyzja 4) --
-        # _assemble_with_cages nie zna corridor_mode="point"/"auto" (tylko
-        # prefer_flush z "gallery"), więc dla double/gallery to zachowanie
-        # bez zmian; łapiemy tu wyłącznie na wypadek, gdyby klatka
-        # przesunięta z trybu punktowego (inny rozmiar/pozycja niż zwykła
-        # klatka schodowa) wywaliła geometrię korytarzową.
-        if request.corridor_mode == "point":
-            raise HTTPException(
-                status_code=400,
-                detail="Przesuwanie trzonu w trybie klatkowym: następny etap",
-            )
-        raise
+    result = _assemble_with_cages(
+        footprint, zones, local_cages, request.corridor_width_m,
+        request.max_dist_single_m, request.max_dist_multi_m,
+        prefer_flush=(request.corridor_mode == "gallery"),
+    )
 
     return CirculationResponse(
         circulation_geometry=(

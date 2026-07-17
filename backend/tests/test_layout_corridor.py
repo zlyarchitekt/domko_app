@@ -38,3 +38,30 @@ def test_generate_layout_respects_num_cages():
     )
     result = generate_layout(input)
     assert len(result.cage_polygons) == 2
+
+
+def test_generate_auto_mode_without_cage_iterations_takes_iterative_path():
+    """Fix po review Task 7: /generate z corridor_mode=auto i cage_iterations=0
+    NIE może cicho spaść do klasycznego double -- gate musi kierować do
+    iterate_cage_placement (metas niepuste + modes wypełnione), spójnie z
+    gate'em w endpoints/layout.py (/circulation ma już
+    `or corridor_mode in ("point","auto")`)."""
+    from services.unit_mix import ProgramShare
+
+    fp = Polygon([(0, 0), (23, 0), (23, 13.75), (0, 13.75)])
+    input = LayoutInput(
+        footprint=fp,
+        corridor_mode="auto",
+        cage_iterations=0,
+        place_cage=True,
+        iterations=6,
+        program_shares=[
+            ProgramShare(type="M1", percentage=10, area_min_m2=25, area_max_m2=32),
+            ProgramShare(type="M2", percentage=40, area_min_m2=38, area_max_m2=48),
+            ProgramShare(type="M3", percentage=40, area_min_m2=58, area_max_m2=70),
+            ProgramShare(type="M4", percentage=10, area_min_m2=72, area_max_m2=90),
+        ],
+    )
+    result = generate_layout(input)
+    assert result.cage_iteration_metas, "gate powinien pójść przez iterate_cage_placement"
+    assert result.circulation_geometry is not None

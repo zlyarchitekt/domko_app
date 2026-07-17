@@ -200,7 +200,14 @@ def generate_layout(input: LayoutInput) -> LayoutResult:
 
     cage_iteration_metas: list = []
     cage_best_seed = 0
-    if input.cage_iterations > 0 and input.place_cage:
+    # point/auto (plan 2026-07-16 klatkowiec) muszą przejść przez
+    # iterate_cage_placement nawet z cage_iterations=0 -- to ta funkcja
+    # dispatchuje na enumerację kotwic ("point") / porównanie wariantów
+    # ("auto"). Klasyczny place_circulation nie zna tych trybów (traktuje
+    # je jak "double"), więc bez tego warunku /layout/generate cicho spada
+    # na złą geometrię. Dual-surface gotcha: mirror gate'a z
+    # endpoints/layout.py's /circulation (use_iterative_cages).
+    if (input.cage_iterations > 0 or input.corridor_mode in ("point", "auto")) and input.place_cage:
         from services.cage_placement import CageWeights, iterate_cage_placement
 
         weights = input.cage_weights if input.cage_weights is not None else CageWeights()

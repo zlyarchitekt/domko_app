@@ -405,6 +405,31 @@ def test_move_cage_endpoint_recomputes_zone_corridor():
     assert len(body["centerline"]) >= 1
 
 
+def test_move_cage_endpoint_point_mode_returns_400():
+    """Fix po review Task 7: drag trzonu w trybie klatkowym musi dać jawne
+    400 na starcie handlera, nie martwy `except Exception` (zwykłe
+    prostokątne klatki nie rzucają w _assemble_with_cages, więc bez tego
+    fixa request z corridor_mode='point' cicho leciał 200 z błędną
+    geometrią double zamiast punktową)."""
+    from fastapi.testclient import TestClient
+    from main import app
+
+    client = TestClient(app)
+    footprint = [[0, 0], [40, 0], [40, 12], [0, 12]]
+    cage = box(2, 2, 6.2, 7.7)
+    payload = {
+        "footprint": footprint,
+        "cage_geometries": [json.loads(_shape_to_json(cage))],
+        "corridor_width_m": 1.5,
+        "max_dist_single_m": 20.0,
+        "max_dist_multi_m": 40.0,
+        "corridor_mode": "point",
+    }
+    res = client.post("/api/v1/layout/circulation/move-cage", json=payload)
+    assert res.status_code == 400
+    assert "następny etap" in res.json()["detail"]
+
+
 def test_move_cage_endpoint_rejects_cage_outside_footprint():
     from fastapi.testclient import TestClient
     from main import app
